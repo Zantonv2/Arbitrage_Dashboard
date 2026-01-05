@@ -31,7 +31,7 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
 
 ### Phase 1: MVP Tasks [MVP]
 
-- [ ] 1. Project Setup and Core Types
+- [x] 1. Project Setup and Core Types
   - Initialize Rust workspace with axum for HTTP server
   - Set up Svelte 5 + Vite 7 + Tailwind 4 project structure
   - Configure SQLite with sqlx
@@ -40,22 +40,22 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
   - Define core structs: Symbol, OrderBookLevel, OrderBook, Signal, Order, ExecutionInstruction
   - _Requirements: 6.1, 6.2_
 
-- [ ] A. HTTP Server Setup
-  - [ ] A.1 Implement basic axum server with route macros
-  - [ ] A.2 Add static file serving for Svelte build output
-  - [ ] A.3 Implement CORS for local development
-  - [ ] A.4 Add graceful shutdown handling
+- [x] A. HTTP Server Setup
+  - [x] A.1 Implement basic axum server with route macros
+  - [x] A.2 Add static file serving for Svelte build output
+  - [x] A.3 Implement CORS for local development
+  - [x] A.4 Add graceful shutdown handling
   - _Requirements: 13.1_
 
-- [ ] B. WebSocket Server
-  - [ ] B.1 Implement WebSocket upgrade handler
-  - [ ] B.2 Create broadcast channel for signal updates
-  - [ ] B.3 Handle client connections/disconnections
-  - [ ] B.4 Implement heartbeat for WebSocket clients
+- [x] B. WebSocket Server
+  - [x] B.1 Implement WebSocket upgrade handler
+  - [x] B.2 Create broadcast channel for signal updates
+  - [x] B.3 Handle client connections/disconnections
+  - [x] B.4 Implement heartbeat for WebSocket clients
   - _Requirements: 9.1_
 
-- [ ] 2. Normalizer Module
-  - [ ] 2.1 Implement symbol mapping with configurable TOML file
+- [x] 2. Normalizer Module
+  - [x] 2.1 Implement symbol mapping with configurable TOML file
     - Load mappings from config file
     - Map exchange symbols to canonical base/quote format
     - Handle unknown symbols by returning None
@@ -64,7 +64,7 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
     - **Property 5: Symbol Mapping Correctness**
     - **Property 6: Unknown Symbol Handling**
     - **Validates: Requirements 2.1, 2.3**
-  - [ ] 2.3 Implement precision handling
+  - [x] 2.3 Implement precision handling
     - Track precision per symbol per exchange
     - Use minimum precision across exchanges
     - Format quantities and prices to correct decimals
@@ -72,11 +72,11 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
   - [ ] 2.4 Write property test for precision
     - **Property 7: Precision Minimum Selection**
     - **Validates: Requirements 2.4**
-  - [ ] 2.5 Implement fee schedule lookup
+  - [x] 2.5 Implement fee schedule lookup
     - Store maker/taker fees per exchange
     - Support fee tier configuration
     - _Requirements: 2.2, 2.8_
-  - [ ] 2.6 Implement order book normalization
+  - [x] 2.6 Implement order book normalization
     - Convert raw order book to canonical format
     - Normalize timestamps to UTC milliseconds
     - Validate bid < ask invariant
@@ -86,7 +86,7 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
     - **Property 9: Timestamp UTC Normalization**
     - **Property 10: Invalid Order Book Rejection**
     - **Validates: Requirements 1.2, 2.9, 2.10**
-  - [ ] 2.8 Implement stablecoin equivalence groups
+  - [x] 2.8 Implement stablecoin equivalence groups
     - Configure equivalent stablecoins (USDT, USDC, BUSD)
     - Treat equivalents as same quote currency
     - _Requirements: 2.7_
@@ -97,41 +97,41 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
 - [ ] 3. Checkpoint - Normalizer Complete
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. Arbitrage Engine
-  - [ ] 4.1 Implement order book cache with DashMap
+- [x] 4. Arbitrage Engine
+  - [x] 4.1 Implement order book cache with DashMap
     - Store order books keyed by (exchange, symbol)
     - Support concurrent read/write access
     - Track last update timestamp per book
     - _Requirements: 3.1_
-  - [ ] 4.2 Implement order book merge for partial updates
+  - [x] 4.2 Implement order book merge for partial updates
     - Merge partial updates into existing snapshot
     - Maintain sorted order after merge
     - _Requirements: 1.6_
-  - [ ] 4.3 Write property test for order book merge
+  - [x] 4.3 Write property test for order book merge
     - **Property 2: Order Book Merge Consistency**
     - **Validates: Requirements 1.6**
-  - [ ] 4.4 Implement gross profit calculation
+  - [x] 4.4 Implement gross profit calculation
     - Calculate (best_bid_sell - best_ask_buy) / best_ask_buy
     - Handle edge cases (empty books, zero prices)
     - _Requirements: 3.2_
-  - [ ] 4.5 Write property test for gross profit
+  - [x] 4.5 Write property test for gross profit
     - **Property 11: Gross Profit Calculation**
     - **Validates: Requirements 3.2**
-  - [ ] 4.6 Implement net profit calculation
+  - [x] 4.6 Implement net profit calculation
     - Subtract maker/taker fees from gross profit
     - Use normalizer fee schedules
     - _Requirements: 3.3_
-  - [ ] 4.7 Write property test for net profit
+  - [x] 4.7 Write property test for net profit
     - **Property 12: Net Profit Calculation**
     - **Validates: Requirements 3.3**
-  - [ ] 4.8 Implement profit threshold filtering
+  - [x] 4.8 Implement profit threshold filtering
     - Only emit signals above configurable threshold
     - Default threshold: 0.1%
     - _Requirements: 3.4_
-  - [ ] 4.9 Write property test for threshold filtering
+  - [x] 4.9 Write property test for threshold filtering
     - **Property 13: Profit Threshold Filtering**
     - **Validates: Requirements 3.4**
-  - [ ] 4.10 Implement signal deduplication
+  - [x] 4.10 Implement signal deduplication
     - Track recent signals by opportunity key
     - Suppress duplicates within time window
     - Re-emit on significant profit change
@@ -139,14 +139,14 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
   - [ ] 4.11 Write property test for deduplication
     - **Property 14: Signal Deduplication**
     - **Validates: Requirements 3.7, 3.11**
-  - [ ] 4.12 Implement stale order book exclusion
+  - [x] 4.12 Implement stale order book exclusion
     - Check timestamp against max age threshold
     - Exclude stale books from computation
     - _Requirements: 3.9_
   - [ ] 4.13 Write property test for stale exclusion
     - **Property 15: Stale Order Book Exclusion**
     - **Validates: Requirements 3.9**
-  - [ ] 4.14 Wire up signal broadcast channel
+  - [x] 4.14 Wire up signal broadcast channel
     - Use tokio broadcast for signal distribution
     - Publish to WebSocket clients
     - _Requirements: 3.1, B.2_
@@ -276,6 +276,39 @@ Simulation engine, analytics dashboard, API key encryption, full configuration U
 
 - [ ] 10. Checkpoint - Execution Preparer Complete
   - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 10.1 Advanced Confidence Scoring Algorithm
+  - [ ] 10.1.1 Implement Bayesian confidence updating
+    - Use prior beliefs updated with new market evidence
+    - Continuously adapt confidence based on historical outcomes
+    - Track success rates per market pattern
+    - _Requirements: 4.9_
+  - [ ] 10.1.2 Implement market regime detection
+    - Detect Normal, Stressed, Illiquid, Trending, NewsEvent regimes
+    - Adjust confidence scoring based on current regime
+    - Use volatility clustering and volume patterns for detection
+    - _Requirements: 4.3, 4.6_
+  - [ ] 10.1.3 Implement ensemble confidence model
+    - Combine multiple scoring approaches (statistical, heuristic, ML-ready)
+    - Weight models based on recent performance
+    - Include gradient boosting and linear baseline models
+    - _Requirements: 4.1, 4.10_
+  - [ ] 10.1.4 Implement real-time risk adjustment
+    - Dynamic position sizing based on volatility regime
+    - Correlation-based risk adjustment across positions
+    - Drawdown-based confidence reduction
+    - _Requirements: 5.2, 5.3, 5.5_
+  - [ ] 10.1.5 Implement execution feasibility scoring
+    - Predict actual fill prices vs theoretical prices
+    - Model market impact for different trade sizes
+    - Account for exchange latency and reliability
+    - _Requirements: 5.8, 5.9_
+  - [ ] 10.1.6 Write property tests for advanced confidence
+    - **Property 42: Bayesian Confidence Bounds**
+    - **Property 43: Regime Detection Consistency**
+    - **Property 44: Ensemble Model Weighting**
+    - **Property 45: Risk Adjustment Accuracy**
+    - **Validates: Requirements 4.1, 4.3, 4.6, 4.9, 4.10**
 
 - [ ] 11. Storage Service
   - [ ] 11.1 Create SQLite schema and migrations
@@ -577,6 +610,11 @@ The following features are planned but deferred to future iterations. All design
   - Higher capital requirements analysis
 
 ### Advanced Confidence Scoring
+- **Bayesian confidence updating** - Learn from historical outcomes to improve predictions
+- **Market regime detection** - Adapt scoring based on Normal/Stressed/Illiquid/Trending/NewsEvent states
+- **Ensemble model approach** - Combine multiple scoring methods with performance-based weighting
+- **Real-time risk adjustment** - Dynamic position sizing and correlation-based risk management
+- **Execution feasibility modeling** - Predict actual vs theoretical execution prices and market impact
 - ML-based learning from historical outcomes (Req 4.9)
 - Weighted factor composition with configurable weights
 - Volatility tracking over rolling windows
