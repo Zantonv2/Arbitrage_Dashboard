@@ -1,0 +1,364 @@
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
+
+/// Supported cryptocurrency exchanges
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ExchangeId {
+    ByBit,
+    BingX,
+    Hyperliquid,
+    Binance,
+    Coinbase,
+    Kraken,
+}
+
+impl std::fmt::Display for ExchangeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExchangeId::ByBit => write!(f, "bybit"),
+            ExchangeId::BingX => write!(f, "bingx"),
+            ExchangeId::Hyperliquid => write!(f, "hyperliquid"),
+            ExchangeId::Binance => write!(f, "binance"),
+            ExchangeId::Coinbase => write!(f, "coinbase"),
+            ExchangeId::Kraken => write!(f, "kraken"),
+        }
+    }
+}
+
+/// Order side (buy or sell)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Side {
+    Buy,
+    Sell,
+}
+
+/// Order type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrderType {
+    Market,
+    Limit,
+    StopLimit,
+}
+
+/// Time in force for orders
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeInForce {
+    /// Good Till Cancelled
+    GTC,
+    /// Immediate Or Cancel
+    IOC,
+    /// Fill Or Kill
+    FOK,
+    /// Good Till Date
+    GTD,
+}
+
+/// Trading symbol with base and quote currencies
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Symbol {
+    pub base: String,
+    pub quote: String,
+}
+
+impl Symbol {
+    pub fn new(base: impl Into<String>, quote: impl Into<String>) -> Self {
+        Self {
+            base: base.into(),
+            quote: quote.into(),
+        }
+    }
+    
+    pub fn from_pair(pair: &str) -> Option<Self> {
+        let parts: Vec<&str> = pair.split('/').collect();
+        if parts.len() == 2 {
+            Some(Self::new(parts[0], parts[1]))
+        } else {
+            None
+        }
+    }
+    
+    pub fn to_pair(&self) -> String {
+        format!("{}/{}", self.base, self.quote)
+    }
+}
+
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.base, self.quote)
+    }
+}
+
+/// Single price/quantity level in an order book
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderBookLevel {
+    pub price: Decimal,
+    pub quantity: Decimal,
+}
+
+impl OrderBookLevel {
+    pub fn new(price: Decimal, quantity: Decimal) -> Self {
+        Self { price, quantity }
+    }
+}
+
+/// Order book snapshot with bids and asks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderBook {
+    pub exchange: ExchangeId,
+    pub symbol: Symbol,
+    pub bids: Vec<OrderBookLevel>,
+    pub asks: Vec<OrderBookLevel>,
+    pub timestamp: DateTime<Utc>,
+    pub sequence: Option<u64>,
+}
+
+impl OrderBook {
+    pub fn new(
+        exchange: ExchangeId,
+        symbol: Symbol,
+        bids: Vec<OrderBookLevel>,
+        asks: Vec<OrderBookLevel>,
+    ) -> Self {
+        Self {
+            exchange,
+            symbol,
+            bids,
+            asks,
+            timestamp: Utc::now(),
+            sequence: None,
+        }
+    }
+    
+    pub fn best_bid(&self) -> Option<&OrderBookLevel> {
+        self.bids.first()
+    }
+    
+    pub fn best_ask(&self) -> Option<&OrderBookLevel> {
+        self.asks.first()
+    }
+    
+    pub fn spread(&self) -> Option<Decimal> {
+        match (self.best_ask(), self.best_bid()) {
+            (Some(ask), Some(bid)) => Some(ask.price - bid.price),
+            _ => None,
+        }
+    }
+    
+    pub fn mid_price(&self) -> Option<Decimal> {
+        match (self.best_ask(), self.best_bid()) {
+            (Some(ask), Some(bid)) => Some((ask.price + bid.price) / Decimal::from(2)),
+            _ => None,
+        }
+    }
+    
+    pub fn is_valid(&self) -> bool {
+        // Check that bids are sorted descending and asks ascending
+        let bids_sorted = self.bids.windows(2).all(|w| w[0].price >= w[1].price);
+        let asks_sorted = self.asks.windows(2).all(|w| w[0].price <= w[1].price);
+        
+        // Check that best bid < best ask
+        let spread_valid = match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => bid.price < ask.price,
+            _ => true, // Empty books are considered valid
+        };
+        
+        bids_sorted && asks_sorted && spread_valid
+    }
+}
+
+/// Arbitrage signal representing a trading opportunity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Signal {
+    pub id: Uuid,
+    pub symbol: Symbol,
+    pub buy_exchange: ExchangeId,
+    pub sell_exchange: ExchangeId,
+    pub buy_price: Decimal,
+    pub sell_price: Decimal,
+    pub gross_profit_percent: Decimal,
+    pub net_profit_percent: Decimal,
+    pub net_profit_absolute: Decimal,
+    pub confidence: Decimal,
+    pub recommended_size: Decimal,
+    pub max_size: Decimal,
+    pub expected_slippage: Decimal,
+    pub estimated_execution_time_ms: u64,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+impl Signal {
+    pub fn new(
+        symbol: Symbol,
+        buy_exchange: ExchangeId,
+        sell_exchange: ExchangeId,
+        buy_price: Decimal,
+        sell_price: Decimal,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4(),
+            symbol,
+            buy_exchange,
+            sell_exchange,
+            buy_price,
+            sell_price,
+            gross_profit_percent: Decimal::ZERO,
+            net_profit_percent: Decimal::ZERO,
+            net_profit_absolute: Decimal::ZERO,
+            confidence: Decimal::ZERO,
+            recommended_size: Decimal::ZERO,
+            max_size: Decimal::ZERO,
+            expected_slippage: Decimal::ZERO,
+            estimated_execution_time_ms: 0,
+            created_at: now,
+            expires_at: now + chrono::Duration::minutes(5), // Default 5 min expiry
+            metadata: HashMap::new(),
+        }
+    }
+    
+    pub fn is_expired(&self) -> bool {
+        Utc::now() > self.expires_at
+    }
+    
+    pub fn age_seconds(&self) -> i64 {
+        (Utc::now() - self.created_at).num_seconds()
+    }
+}
+
+/// Order instruction for execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Order {
+    pub id: Uuid,
+    pub client_order_id: String,
+    pub exchange: ExchangeId,
+    pub symbol: Symbol,
+    pub side: Side,
+    pub order_type: OrderType,
+    pub quantity: Decimal,
+    pub price: Option<Decimal>,
+    pub time_in_force: TimeInForce,
+    pub expected_fee: Decimal,
+    pub created_at: DateTime<Utc>,
+}
+
+impl Order {
+    pub fn new(
+        exchange: ExchangeId,
+        symbol: Symbol,
+        side: Side,
+        order_type: OrderType,
+        quantity: Decimal,
+        price: Option<Decimal>,
+    ) -> Self {
+        let id = Uuid::new_v4();
+        Self {
+            id,
+            client_order_id: format!("arb_{}", id.simple()),
+            exchange,
+            symbol,
+            side,
+            order_type,
+            quantity,
+            price,
+            time_in_force: TimeInForce::IOC,
+            expected_fee: Decimal::ZERO,
+            created_at: Utc::now(),
+        }
+    }
+}
+
+/// Execution instruction containing buy and sell orders
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionInstruction {
+    pub id: Uuid,
+    pub signal_id: Uuid,
+    pub buy_order: Order,
+    pub sell_order: Order,
+    pub expected_profit: Decimal,
+    pub worst_case_profit: Decimal,
+    pub total_fees: Decimal,
+    pub slippage_buffer: Decimal,
+    pub created_at: DateTime<Utc>,
+    pub validation_errors: Vec<String>,
+}
+
+impl ExecutionInstruction {
+    pub fn new(signal_id: Uuid, buy_order: Order, sell_order: Order) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            signal_id,
+            buy_order,
+            sell_order,
+            expected_profit: Decimal::ZERO,
+            worst_case_profit: Decimal::ZERO,
+            total_fees: Decimal::ZERO,
+            slippage_buffer: Decimal::ZERO,
+            created_at: Utc::now(),
+            validation_errors: Vec::new(),
+        }
+    }
+    
+    pub fn is_valid(&self) -> bool {
+        self.validation_errors.is_empty()
+    }
+}
+
+/// Exchange fee schedule
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeSchedule {
+    pub exchange: ExchangeId,
+    pub maker_fee: Decimal,
+    pub taker_fee: Decimal,
+    pub tier: Option<String>,
+}
+
+impl FeeSchedule {
+    pub fn new(exchange: ExchangeId, maker_fee: Decimal, taker_fee: Decimal) -> Self {
+        Self {
+            exchange,
+            maker_fee,
+            taker_fee,
+            tier: None,
+        }
+    }
+}
+
+/// Exchange connection status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ConnectionStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    Reconnecting,
+    Error(String),
+}
+
+/// Exchange connection info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeStatus {
+    pub exchange: ExchangeId,
+    pub status: ConnectionStatus,
+    pub last_heartbeat: Option<DateTime<Utc>>,
+    pub uptime_percent: Decimal,
+    pub error_count: u64,
+    pub subscribed_symbols: Vec<Symbol>,
+}
+
+impl ExchangeStatus {
+    pub fn new(exchange: ExchangeId) -> Self {
+        Self {
+            exchange,
+            status: ConnectionStatus::Disconnected,
+            last_heartbeat: None,
+            uptime_percent: Decimal::ZERO,
+            error_count: 0,
+            subscribed_symbols: Vec::new(),
+        }
+    }
+}
+

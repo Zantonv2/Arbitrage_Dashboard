@@ -1,0 +1,35 @@
+[package]
+name = "exchange-connectors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Exchange API connectors for cryptocurrency exchanges"
+
+[dependencies]
+# Local dependencies
+arbitrage-core = { path = "../arbitrage-core" }
+
+# Workspace dependencies
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+url = { workspace = true }
+futures-util = { workspace = true }
+futures = { workspace = true }
+rust_decimal = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio-test = "0.4"

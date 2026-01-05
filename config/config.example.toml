@@ -1,0 +1,88 @@
+# Arbitrage Dashboard Configuration
+# Copy this file to config.toml and customize for your setup
+
+[server]
+host = "127.0.0.1"
+port = 3000
+cors_origins = ["http://localhost:5173", "http://localhost:3000"]
+static_files_path = "frontend/dist"
+
+[trading]
+min_profit_threshold_percent = "0.1"  # Minimum 0.1% profit to emit signal
+min_confidence_threshold = "0.3"      # Minimum confidence score (0.0-1.0)
+max_signal_age_seconds = 300          # 5 minutes
+signal_deduplication_window_ms = 5000 # 5 seconds
+stale_orderbook_threshold_ms = 10000  # 10 seconds
+slippage_buffer_percent = "0.05"      # 0.05% slippage buffer
+default_time_in_force = "IOC"         # Immediate or Cancel
+
+[risk]
+max_position_size_usd = "10000"       # Maximum position size in USD
+max_slippage_percent = "0.2"          # Maximum allowed slippage
+conservative_size_multiplier = "0.8"  # Use 80% of calculated max size
+min_order_size_usd = "10"             # Minimum order size
+max_order_size_usd = "50000"          # Maximum order size
+max_concurrent_signals = 100          # Maximum signals to track
+
+[notifications]
+enabled = true
+min_profit_for_notification = "0.5"   # Minimum profit % for notifications
+min_confidence_for_notification = "0.7" # Minimum confidence for notifications
+desktop_notifications = true
+sound_enabled = false
+
+[storage]
+database_url = "sqlite:data/arbitrage.db"
+retention_days = 90                   # Keep data for 90 days
+max_signals_in_memory = 10000         # Maximum signals in memory cache
+cleanup_interval_hours = 24          # Run cleanup every 24 hours
+
+[logging]
+level = "info"                        # debug, info, warn, error
+file_enabled = true
+file_path = "logs/arbitrage.log"
+max_file_size_mb = 100
+max_files = 10
+json_format = false
+
+# Exchange configurations
+[exchanges.bybit]
+enabled = true
+testnet = true                        # Use testnet for development
+symbols = [
+    { base = "BTC", quote = "USDT" },
+    { base = "ETH", quote = "USDT" },
+    { base = "SOL", quote = "USDT" },
+]
+rate_limit_per_second = 10
+reconnect_delay_ms = 1000
+max_reconnect_attempts = 10
+heartbeat_interval_ms = 30000
+# api_key = "your_api_key_here"       # Uncomment and add your API key
+# api_secret = "your_api_secret_here" # Uncomment and add your API secret
+
+[exchanges.bingx]
+enabled = false                       # Disabled by default (Phase 2)
+testnet = true
+symbols = [
+    { base = "BTC", quote = "USDT" },
+    { base = "ETH", quote = "USDT" },
+]
+rate_limit_per_second = 10
+reconnect_delay_ms = 1000
+max_reconnect_attempts = 10
+heartbeat_interval_ms = 30000
+# api_key = "your_api_key_here"
+# api_secret = "your_api_secret_here"
+
+[exchanges.hyperliquid]
+enabled = false                       # Disabled by default (Phase 2)
+testnet = true
+symbols = [
+    { base = "BTC", quote = "USDT" },
+    { base = "ETH", quote = "USDT" },
+]
+rate_limit_per_second = 10
+reconnect_delay_ms = 1000
+max_reconnect_attempts = 10
+heartbeat_interval_ms = 30000

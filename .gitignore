@@ -1,0 +1,51 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Database
+data/
+*.db
+*.sqlite
+
+# Configuration (contains sensitive data)
+config/config.toml
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.svelte-kit/
+frontend/build/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+tmp/
+temp/
+
+# Build artifacts
+dist/
+build/

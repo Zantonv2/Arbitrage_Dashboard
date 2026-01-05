@@ -159,9 +159,9 @@ net_profit = gross_profit - buy_taker_fee - sell_taker_fee
 
 ### Confidence Scorer
 
-Evaluates signal quality using multiple weighted factors.
+Evaluates signal quality using multiple weighted factors and advanced algorithms.
 
-**Scoring Factors**:
+**Basic Scoring Factors**:
 
 | Factor | Weight | Calculation |
 |--------|--------|-------------|
@@ -171,7 +171,39 @@ Evaluates signal quality using multiple weighted factors.
 | Spread Stability | 0.15 | Consistency of spread over time |
 | Freshness | 0.10 | Inverse of order book age |
 
-**Output**: Score between 0.0 and 1.0, with breakdown available for UI display.
+**Advanced Confidence Algorithms**:
+
+**Bayesian Confidence Updating**:
+- Maintains prior beliefs about signal success rates for different market patterns
+- Updates confidence based on historical outcomes using Bayes' theorem
+- Tracks success rates per symbol, exchange pair, and profit range
+- Formula: `confidence = (prior * likelihood) / evidence_normalization`
+
+**Market Regime Detection**:
+- Detects current market state: Normal, Stressed, Illiquid, Trending, NewsEvent
+- Adjusts confidence scoring based on regime-specific success patterns
+- Uses volatility clustering, volume patterns, and correlation analysis
+- Regime-specific confidence multipliers applied to base scores
+
+**Ensemble Model Approach**:
+- Combines multiple scoring methods: statistical, heuristic, and ML-ready models
+- Weights models based on recent performance using exponential decay
+- Includes gradient boosting, linear regression, and neural network components
+- Final confidence = weighted average of all model predictions
+
+**Real-Time Risk Adjustment**:
+- Dynamic position sizing based on current volatility regime
+- Correlation-based risk reduction across multiple positions
+- Drawdown-based confidence reduction after consecutive losses
+- Portfolio heat adjustment to prevent over-concentration
+
+**Execution Feasibility Scoring**:
+- Predicts actual fill prices vs theoretical signal prices
+- Models market impact for different trade sizes using square-root law
+- Accounts for exchange-specific latency and reliability metrics
+- Incorporates order flow toxicity and adverse selection indicators
+
+**Output**: Score between 0.0 and 1.0, with detailed factor breakdown and regime information available for UI display.
 
 **Suppression**: Signals with confidence below threshold (default 0.3) are not emitted.
 
@@ -457,6 +489,30 @@ Comprehensive event logging for traceability.
 *For any* signal with confidence score < configured_threshold, the signal SHALL NOT be emitted to subscribers.
 
 **Validates: Requirements 4.5**
+
+### Property 42: Bayesian Confidence Bounds
+
+*For any* Bayesian confidence update, the posterior confidence SHALL be bounded by [0.0, 1.0] and SHALL incorporate both prior beliefs and new evidence according to Bayes' theorem.
+
+**Validates: Requirements 4.9**
+
+### Property 43: Regime Detection Consistency
+
+*For any* market regime detection, the detected regime SHALL be consistent with the underlying market indicators (volatility, volume, correlation) and regime transitions SHALL be smooth without rapid oscillation.
+
+**Validates: Requirements 4.3, 4.6**
+
+### Property 44: Ensemble Model Weighting
+
+*For any* ensemble confidence prediction, the sum of all model weights SHALL equal 1.0, and individual model weights SHALL be non-negative and based on recent performance metrics.
+
+**Validates: Requirements 4.1, 4.10**
+
+### Property 45: Risk Adjustment Accuracy
+
+*For any* risk-adjusted confidence score, the adjustment SHALL correctly account for portfolio correlation, volatility regime, and drawdown state, with higher risk leading to lower confidence scores.
+
+**Validates: Requirements 5.2, 5.3, 5.5**
 
 ### Property 19: Size Slippage Tolerance
 
