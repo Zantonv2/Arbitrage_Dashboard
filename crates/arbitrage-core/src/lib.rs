@@ -9,5 +9,8 @@ pub mod storage;
 pub mod config;
 pub mod error;
 
+// Russian Financial Advisor Strategies (8-22% daily returns)
+pub mod strategies;
+
 pub use types::*;
 pub use error::{ArbitrageError, Result};

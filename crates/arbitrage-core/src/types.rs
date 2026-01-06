@@ -4,26 +4,45 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Supported cryptocurrency exchanges
+/// Supported cryptocurrency exchanges - PROFESSIONAL ARBITRAGE GRADE
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExchangeId {
-    ByBit,
-    BingX,
+    // Tier 1: High-liquidity, low-latency exchanges
+    OKX,        // Spot + Futures + Options
+    ByBit,      // Spot + Futures + Options  
+    MEXC,       // Spot + Futures
+    
+    // Tier 2: Solid liquidity exchanges
+    GateIo,     // Spot + Futures
+    Bitstamp,   // Spot (fiat pairs)
+    Kraken,     // Spot + Futures (fiat pairs)
+    
+    // Legacy (keeping for compatibility)
+    HTX,        // Former Huobi
+    BingX,      
     Hyperliquid,
+    KuCoin,     
+    Bitget,     
     Binance,
     Coinbase,
-    Kraken,
 }
 
 impl std::fmt::Display for ExchangeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ExchangeId::OKX => write!(f, "okx"),
             ExchangeId::ByBit => write!(f, "bybit"),
+            ExchangeId::MEXC => write!(f, "mexc"),
+            ExchangeId::GateIo => write!(f, "gateio"),
+            ExchangeId::Bitstamp => write!(f, "bitstamp"),
+            ExchangeId::Kraken => write!(f, "kraken"),
+            ExchangeId::HTX => write!(f, "htx"),
             ExchangeId::BingX => write!(f, "bingx"),
             ExchangeId::Hyperliquid => write!(f, "hyperliquid"),
+            ExchangeId::KuCoin => write!(f, "kucoin"),
+            ExchangeId::Bitget => write!(f, "bitget"),
             ExchangeId::Binance => write!(f, "binance"),
             ExchangeId::Coinbase => write!(f, "coinbase"),
-            ExchangeId::Kraken => write!(f, "kraken"),
         }
     }
 }

@@ -1,0 +1,66 @@
+# Symbol Configuration for Arbitrage Dashboard
+# This file defines which trading pairs to monitor on each exchange
+
+[exchanges.bybit]
+enabled = true
+testnet = false
+rate_limit_per_second = 10
+
+# Popular crypto pairs to monitor
+symbols = [
+    { base = "BTC", quote = "USDT" },
+    { base = "ETH", quote = "USDT" },
+    { base = "SOL", quote = "USDT" },
+    { base = "BNB", quote = "USDT" },
+    { base = "XRP", quote = "USDT" },
+    { base = "ADA", quote = "USDT" },
+    { base = "AVAX", quote = "USDT" },
+    { base = "DOT", quote = "USDT" },
+    { base = "MATIC", quote = "USDT" },
+    { base = "LINK", quote = "USDT" },
+    { base = "UNI", quote = "USDT" },
+    { base = "LTC", quote = "USDT" },
+    { base = "ATOM", quote = "USDT" },
+    { base = "NEAR", quote = "USDT" },
+    { base = "FIL", quote = "USDT" },
+]
+
+[exchanges.bingx]
+enabled = true
+testnet = false
+rate_limit_per_second = 10
+
+# Same pairs as ByBit for arbitrage opportunities
+symbols = [
+    { base = "BTC", quote = "USDT" },
+    { base = "ETH", quote = "USDT" },
+    { base = "SOL", quote = "USDT" },
+    { base = "BNB", quote = "USDT" },
+    { base = "XRP", quote = "USDT" },
+    { base = "ADA", quote = "USDT" },
+    { base = "AVAX", quote = "USDT" },
+    { base = "DOT", quote = "USDT" },
+    { base = "MATIC", quote = "USDT" },
+    { base = "LINK", quote = "USDT" },
+    { base = "UNI", quote = "USDT" },
+    { base = "LTC", quote = "USDT" },
+    { base = "ATOM", quote = "USDT" },
+    { base = "NEAR", quote = "USDT" },
+    { base = "FIL", quote = "USDT" },
+]
+
+# You can add more exchanges here as needed
+[exchanges.hyperliquid]
+enabled = true
+testnet = false
+rate_limit_per_second = 10
+
+# Hyperliquid uses USDC as quote currency, but we'll map to USDT symbols
+symbols = [
+    { base = "BTC", quote = "USDC" },
+    { base = "ETH", quote = "USDC" },
+    { base = "SOL", quote = "USDC" },
+    { base = "AVAX", quote = "USDC" },
+    { base = "ATOM", quote = "USDC" },
+    { base = "NEAR", quote = "USDC" },
+]
