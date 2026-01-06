@@ -33,3 +33,4 @@ async-trait = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tokio-test = "0.4"
+tracing-subscriber = { workspace = true }

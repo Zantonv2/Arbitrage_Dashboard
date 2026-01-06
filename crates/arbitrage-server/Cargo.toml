@@ -10,9 +10,11 @@ description = "HTTP/WebSocket server for the arbitrage dashboard"
 [dependencies]
 # Local dependencies
 arbitrage-core = { path = "../arbitrage-core" }
+exchange-connectors = { path = "../exchange-connectors" }
 
 # Workspace dependencies
 tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }  # Added for WebSocket debugging
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
@@ -36,6 +38,7 @@ csv = { workspace = true }
 notify = { workspace = true }
 clap = { workspace = true }
 rust_decimal = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
