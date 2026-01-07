@@ -1,5 +1,6 @@
 use crate::{
     normalizer::Normalizer,
+    confidence_scorer::ConfidenceScorer,
     types::{ExchangeId, OrderBook, Signal, Symbol},
     ArbitrageError, Result,
 };
@@ -35,6 +36,8 @@ pub struct ArbitrageEngine {
     signal_sender: broadcast::Sender<Signal>,
     /// Normalizer for symbol/fee handling
     normalizer: Arc<Normalizer>,
+    /// Confidence scorer for signal validation
+    confidence_scorer: Arc<ConfidenceScorer>,
     /// Configuration
     min_profit_threshold: Decimal,
     stale_threshold_ms: u64,
@@ -45,6 +48,7 @@ pub struct ArbitrageEngine {
 impl ArbitrageEngine {
     pub fn new(
         normalizer: Arc<Normalizer>,
+        confidence_scorer: Arc<ConfidenceScorer>,
         min_profit_threshold: Decimal,
         stale_threshold_ms: u64,
         dedup_window_ms: u64,
@@ -56,10 +60,11 @@ impl ArbitrageEngine {
             signal_cache: Arc::new(DashMap::new()),
             signal_sender,
             normalizer,
+            confidence_scorer,
             min_profit_threshold,
             stale_threshold_ms,
             dedup_window_ms,
-            profit_change_threshold: Decimal::from_str_exact("0.05").unwrap(), // 5% change threshold
+            profit_change_threshold: Decimal::new(5, 2), // 5% = 0.05
         };
 
         (engine, signal_receiver)
@@ -144,7 +149,7 @@ impl ArbitrageEngine {
         Ok(())
     }
 
-    /// Compute a single arbitrage signal between two order books
+    /// Compute a single arbitrage signal between two order books using ConfidenceScorer
     async fn compute_signal(&self, buy_book: &OrderBook, sell_book: &OrderBook) -> Result<Option<Signal>> {
         // Get best prices
         let best_ask = buy_book.best_ask().ok_or_else(|| {
@@ -158,40 +163,49 @@ impl ArbitrageEngine {
         let buy_price = best_ask.price;
         let sell_price = best_bid.price;
 
-        // Calculate gross profit percentage
+        // Early exit if no arbitrage opportunity
         if buy_price >= sell_price {
-            return Ok(None); // No arbitrage opportunity
-        }
-
-        let gross_profit_percent = ((sell_price - buy_price) / buy_price) * Decimal::from(100);
-
-        // Calculate net profit after fees
-        let buy_fee_schedule = self.normalizer.get_fee_schedule(buy_book.exchange);
-        let sell_fee_schedule = self.normalizer.get_fee_schedule(sell_book.exchange);
-
-        let buy_fee = buy_fee_schedule
-            .map(|fs| fs.taker_fee)
-            .unwrap_or(Decimal::ZERO);
-        let sell_fee = sell_fee_schedule
-            .map(|fs| fs.taker_fee)
-            .unwrap_or(Decimal::ZERO);
-
-        let total_fee_percent = (buy_fee + sell_fee) * Decimal::from(100);
-        let net_profit_percent = gross_profit_percent - total_fee_percent;
-
-        // Check if profit meets threshold
-        if net_profit_percent < self.min_profit_threshold {
             return Ok(None);
         }
 
-        // Calculate absolute profit for a base quantity (1 unit)
-        let base_quantity = Decimal::ONE;
-        let gross_profit_absolute = (sell_price - buy_price) * base_quantity;
-        let fee_absolute = (buy_price * buy_fee + sell_price * sell_fee) * base_quantity;
-        let net_profit_absolute = gross_profit_absolute - fee_absolute;
+        // Use ConfidenceScorer for fee-aware profit calculation
+        let net_spread_bps = self.confidence_scorer.calculate_net_spread_bps(
+            buy_price,
+            sell_price,
+            buy_book.exchange,
+            sell_book.exchange,
+        )?;
 
-        // Create signal
-        let mut signal = Signal::new(
+        // Convert BPS to percentage for comparison with threshold
+        let net_profit_percent = Decimal::from(net_spread_bps) / Decimal::from(100);
+
+        // Check if profit meets minimum threshold
+        if net_profit_percent < self.min_profit_threshold {
+            debug!(
+                "Signal below threshold: {:.4}% < {:.4}% for {}-{} vs {}-{}",
+                net_profit_percent,
+                self.min_profit_threshold,
+                buy_book.exchange,
+                buy_book.symbol,
+                sell_book.exchange,
+                sell_book.symbol
+            );
+            return Ok(None);
+        }
+
+        // Check data freshness using ConfidenceScorer
+        if !self.confidence_scorer.is_data_fresh(buy_book.timestamp) ||
+           !self.confidence_scorer.is_data_fresh(sell_book.timestamp) {
+            debug!(
+                "Stale data detected for {}-{} arbitrage opportunity",
+                buy_book.exchange,
+                sell_book.exchange
+            );
+            return Ok(None);
+        }
+
+        // Create signal with proper profit calculation
+        let signal = Signal::new(
             buy_book.symbol.clone(),
             buy_book.exchange,
             sell_book.exchange,
@@ -199,21 +213,14 @@ impl ArbitrageEngine {
             sell_price,
         );
 
-        signal.gross_profit_percent = gross_profit_percent;
-        signal.net_profit_percent = net_profit_percent;
-        signal.net_profit_absolute = net_profit_absolute;
-
-        // Estimate execution time (placeholder - would be based on exchange latencies)
-        signal.estimated_execution_time_ms = 500; // 500ms default
-
         debug!(
-            "Computed signal: {} buy {} @ {} sell {} @ {} profit {:.2}%",
+            "Arbitrage opportunity detected: Buy {} at {} for {}, Sell at {} for {} (Net: {:.4}%)",
             signal.symbol,
-            signal.buy_exchange,
-            signal.buy_price,
-            signal.sell_exchange,
-            signal.sell_price,
-            signal.net_profit_percent
+            buy_book.exchange,
+            buy_price,
+            sell_book.exchange,
+            sell_price,
+            net_profit_percent
         );
 
         Ok(Some(signal))
@@ -274,12 +281,40 @@ impl ArbitrageEngine {
         self.signal_sender.subscribe()
     }
 
-    /// Get current cache statistics
+    /// Get current cache statistics with enhanced metrics
     pub fn get_stats(&self) -> ArbitrageEngineStats {
+        let now = Utc::now();
+        let stale_threshold = Duration::milliseconds(self.stale_threshold_ms as i64);
+        
+        // Count stale order books
+        let mut stale_books_count = 0;
+        let mut fresh_books_count = 0;
+        
+        for entry in self.order_books.iter() {
+            let (_, order_book) = entry.pair();
+            if now - order_book.timestamp > stale_threshold {
+                stale_books_count += 1;
+            } else {
+                fresh_books_count += 1;
+            }
+        }
+        
+        // Count active symbols
+        let mut active_symbols = std::collections::HashSet::new();
+        for entry in self.order_books.iter() {
+            let ((_, symbol), _) = entry.pair();
+            active_symbols.insert(symbol.clone());
+        }
+        
         ArbitrageEngineStats {
             order_books_count: self.order_books.len(),
             cached_signals_count: self.signal_cache.len(),
             min_profit_threshold: self.min_profit_threshold,
+            stale_books_count,
+            fresh_books_count,
+            active_symbols_count: active_symbols.len(),
+            dedup_window_ms: self.dedup_window_ms,
+            stale_threshold_ms: self.stale_threshold_ms,
         }
     }
 }
@@ -289,4 +324,9 @@ pub struct ArbitrageEngineStats {
     pub order_books_count: usize,
     pub cached_signals_count: usize,
     pub min_profit_threshold: Decimal,
+    pub stale_books_count: usize,
+    pub fresh_books_count: usize,
+    pub active_symbols_count: usize,
+    pub dedup_window_ms: u64,
+    pub stale_threshold_ms: u64,
 }

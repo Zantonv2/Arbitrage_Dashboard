@@ -51,16 +51,16 @@ impl ArbitrageServer {
 
         // Initialize components
         let normalizer = Arc::new(Normalizer::new());
+        let confidence_scorer = Arc::new(ConfidenceScorer::default());
         
         let (arbitrage_engine, _signal_receiver) = ArbitrageEngine::new(
             normalizer.clone(),
+            confidence_scorer.clone(),
             config.trading.min_profit_threshold_percent,
             config.trading.stale_orderbook_threshold_ms,
             config.trading.signal_deduplication_window_ms,
         );
         let arbitrage_engine = Arc::new(arbitrage_engine);
-
-        let confidence_scorer = Arc::new(ConfidenceScorer::default());
         let size_calculator = Arc::new(SizeCalculator::default());
         let execution_preparer = Arc::new(ExecutionPreparer::default());
 

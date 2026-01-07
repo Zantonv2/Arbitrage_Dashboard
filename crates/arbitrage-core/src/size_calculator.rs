@@ -12,16 +12,25 @@ pub struct SizeConfig {
     pub min_order_size_usd: Decimal,
     pub max_order_size_usd: Decimal,
     pub max_position_size_usd: Decimal,
+    pub slippage_tiers: Vec<Decimal>, // Configurable slippage levels
+    pub fee_aware_sizing: bool,       // Account for fees in size calculation
 }
 
 impl Default for SizeConfig {
     fn default() -> Self {
         Self {
-            max_slippage_percent: Decimal::from_str_exact("0.1").unwrap(), // 0.1%
-            conservative_multiplier: Decimal::from_str_exact("0.8").unwrap(), // 80%
+            max_slippage_percent: Decimal::new(1, 3), // 0.001 = 0.1%
+            conservative_multiplier: Decimal::new(8, 1), // 0.8 = 80%
             min_order_size_usd: Decimal::from(10),
             max_order_size_usd: Decimal::from(50000),
             max_position_size_usd: Decimal::from(10000),
+            slippage_tiers: vec![
+                Decimal::new(5, 4),  // 0.0005 = 0.05%
+                Decimal::new(1, 3),  // 0.001 = 0.1%
+                Decimal::new(2, 3),  // 0.002 = 0.2%
+                Decimal::new(5, 3),  // 0.005 = 0.5%
+            ],
+            fee_aware_sizing: true,
         }
     }
 }
@@ -54,6 +63,9 @@ pub enum LimitingFactor {
     UserPositionLimit,
     SlippageTolerance,
     InsufficientDepth,
+    InventoryLimit,
+    FeeImpact,
+    RateLimit,
 }
 
 /// Calculator for optimal trade sizes
@@ -66,63 +78,64 @@ impl SizeCalculator {
         Self { config }
     }
 
-    /// Calculate recommended size for a signal
+    /// Calculate recommended size for a signal with real signal prices
     pub fn calculate_size(
         &self,
         signal: &Signal,
         buy_order_book: &OrderBook,
         sell_order_book: &OrderBook,
     ) -> Result<SizeRecommendation> {
-        // Calculate size tiers for different slippage levels
-        let slippage_levels = vec![
-            Decimal::from_str_exact("0.05").unwrap(), // 0.05%
-            Decimal::from_str_exact("0.1").unwrap(),  // 0.1%
-            Decimal::from_str_exact("0.2").unwrap(),  // 0.2%
-        ];
-
+        // Use configurable slippage tiers instead of hardcoded values
         let mut size_tiers = Vec::new();
         let mut max_size = Decimal::ZERO;
-        let mut limiting_factor = LimitingFactor::InsufficientDepth;
+        let limiting_factor: LimitingFactor;
 
-        for slippage in slippage_levels {
-            if let Ok(tier) = self.calculate_size_for_slippage(
+        for slippage in &self.config.slippage_tiers {
+            match self.calculate_size_for_slippage(
                 signal,
                 buy_order_book,
                 sell_order_book,
-                slippage,
+                *slippage,
             ) {
-                if tier.max_size > max_size {
-                    max_size = tier.max_size;
+                Ok(tier) => {
+                    if tier.max_size > max_size {
+                        max_size = tier.max_size;
+                    }
+                    size_tiers.push(tier);
                 }
-                size_tiers.push(tier);
+                Err(_) => {
+                    // Return zero-size tier instead of breaking the flow
+                    size_tiers.push(SizeTier {
+                        slippage_percent: *slippage,
+                        max_size: Decimal::ZERO,
+                        expected_fill_price_buy: signal.buy_price,
+                        expected_fill_price_sell: signal.sell_price,
+                    });
+                }
             }
         }
 
-        if size_tiers.is_empty() {
-            return Ok(SizeRecommendation {
-                recommended_size: Decimal::ZERO,
-                max_size: Decimal::ZERO,
-                expected_slippage: Decimal::ZERO,
-                size_tiers: Vec::new(),
-                limiting_factor: LimitingFactor::InsufficientDepth,
-            });
-        }
+        // Use the most conservative tier (lowest slippage) as recommended
+        let recommended_size = if let Some(first_tier) = size_tiers.first() {
+            if first_tier.max_size > Decimal::ZERO {
+                first_tier.max_size * self.config.conservative_multiplier
+            } else {
+                Decimal::ZERO
+            }
+        } else {
+            Decimal::ZERO
+        };
 
-        // Use the first tier (lowest slippage) as recommended
-        let recommended_tier = &size_tiers[0];
-        let recommended_size = recommended_tier.max_size * self.config.conservative_multiplier;
-
-        // Determine limiting factor
+        // Determine limiting factor using real signal prices
         limiting_factor = self.determine_limiting_factor(
             recommended_size,
-            buy_order_book,
-            sell_order_book,
+            signal.buy_price.max(signal.sell_price), // Use higher price for USD calculation
         );
 
         Ok(SizeRecommendation {
             recommended_size,
             max_size,
-            expected_slippage: recommended_tier.slippage_percent,
+            expected_slippage: self.config.slippage_tiers.first().copied().unwrap_or(Decimal::ZERO),
             size_tiers,
             limiting_factor,
         })
@@ -219,11 +232,10 @@ impl SizeCalculator {
     fn determine_limiting_factor(
         &self,
         size: Decimal,
-        _buy_order_book: &OrderBook,
-        _sell_order_book: &OrderBook,
+        price: Decimal, // Use actual price instead of hardcoded value
     ) -> LimitingFactor {
         // Check against configured limits
-        let size_usd = size * Decimal::from(50000); // Approximate USD value
+        let size_usd = size * price;
 
         if size_usd < self.config.min_order_size_usd {
             LimitingFactor::ExchangeMinimum
@@ -263,6 +275,31 @@ impl SizeCalculator {
         Ok(())
     }
 
+    /// Calculate target quantity for VWAP analysis based on USD amount
+    pub fn calculate_vwap_quantity(
+        &self,
+        symbol: &Symbol,
+        mid_price: Decimal,
+        target_usd: Decimal,
+    ) -> Result<Decimal> {
+        if mid_price.is_zero() {
+            return Err(ArbitrageError::Calculation("Zero mid price for VWAP quantity calculation".to_string()));
+        }
+        
+        let base_quantity = target_usd.checked_div(mid_price)
+            .ok_or_else(|| ArbitrageError::Calculation("Division by zero in VWAP quantity calculation".to_string()))?;
+            
+        // Apply minimum order size constraints
+        let min_quantity = self.get_min_order_quantity(symbol);
+        Ok(base_quantity.max(min_quantity))
+    }
+    
+    /// Get minimum order quantity for a symbol (simplified)
+    fn get_min_order_quantity(&self, _symbol: &Symbol) -> Decimal {
+        // In real implementation, this would come from exchange specs
+        Decimal::new(1, 4) // 0.0001 as default minimum
+    }
+    
     /// Get current configuration
     pub fn get_config(&self) -> &SizeConfig {
         &self.config

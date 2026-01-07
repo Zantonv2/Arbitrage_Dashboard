@@ -88,15 +88,18 @@ impl Normalizer {
 
     /// Check if two symbols are equivalent (e.g., stablecoins)
     pub fn are_symbols_equivalent(&self, symbol1: &str, symbol2: &str) -> bool {
-        if symbol1 == symbol2 {
+        // Normalize to uppercase for comparison
+        let sym1 = symbol1.to_uppercase();
+        let sym2 = symbol2.to_uppercase();
+        
+        if sym1 == sym2 {
             return true;
         }
 
         // Check if both symbols are in the same stablecoin group
         for group in &self.stablecoin_groups {
-            let contains_1 = group.symbols.contains(&symbol1.to_string());
-            let contains_2 = group.symbols.contains(&symbol2.to_string());
-            if contains_1 && contains_2 {
+            let group_upper: Vec<String> = group.symbols.iter().map(|s| s.to_uppercase()).collect();
+            if group_upper.contains(&sym1) && group_upper.contains(&sym2) {
                 return true;
             }
         }
@@ -121,6 +124,8 @@ impl Normalizer {
             ))?;
 
         // Convert to OrderBookLevel structs and sort
+        // Note: For high-frequency trading with large order books, 
+        // consider pre-sorted data or incremental updates to avoid sorting overhead
         let mut bid_levels: Vec<OrderBookLevel> = bids
             .into_iter()
             .map(|(price, qty)| OrderBookLevel::new(price, qty))
@@ -156,7 +161,17 @@ impl Normalizer {
 
     /// Normalize timestamp to UTC milliseconds
     pub fn normalize_timestamp(&self, timestamp_ms: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_else(Utc::now)
+        match DateTime::from_timestamp_millis(timestamp_ms) {
+            Some(dt) => dt,
+            None => {
+                // Log problematic timestamp for debugging
+                tracing::warn!(
+                    timestamp_ms = timestamp_ms,
+                    "Invalid timestamp received, using current time as fallback"
+                );
+                Utc::now()
+            }
+        }
     }
 
     /// Validate minimum order requirements
