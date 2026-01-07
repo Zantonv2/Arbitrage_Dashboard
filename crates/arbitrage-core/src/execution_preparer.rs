@@ -1,23 +1,27 @@
 use crate::{
     types::{ExecutionInstruction, Order, OrderType, Signal, Side, TimeInForce},
+    confidence_scorer::FeeSchedule,
     Result,
 };
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 /// Configuration for execution preparation
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
-    pub slippage_buffer_percent: Decimal,
+    pub slippage_buffer_percent: Decimal, // e.g., 0.05 = 0.05% slippage buffer
     pub default_time_in_force: TimeInForce,
     pub order_type: OrderType,
+    pub enable_force_execute: bool, // Allow negative worst-case profit if strategy requires
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
-            slippage_buffer_percent: Decimal::from_str_exact("0.05").unwrap(), // 0.05%
+            slippage_buffer_percent: Decimal::new(5, 4), // 0.0005 = 0.05% slippage buffer
             default_time_in_force: TimeInForce::IOC,
             order_type: OrderType::Limit,
+            enable_force_execute: false, // Conservative default
         }
     }
 }
@@ -25,11 +29,27 @@ impl Default for ExecutionConfig {
 /// Prepares execution instructions from signals
 pub struct ExecutionPreparer {
     config: ExecutionConfig,
+    fee_schedules: HashMap<crate::types::ExchangeId, FeeSchedule>, // Real fee data
 }
 
 impl ExecutionPreparer {
     pub fn new(config: ExecutionConfig) -> Self {
-        Self { config }
+        Self { 
+            config,
+            fee_schedules: HashMap::new(),
+        }
+    }
+    
+    /// Update fee schedule for an exchange
+    pub fn update_fee_schedule(&mut self, exchange: crate::types::ExchangeId, schedule: FeeSchedule) {
+        self.fee_schedules.insert(exchange, schedule);
+    }
+    
+    /// Get fee rate for a specific exchange
+    fn get_fee_rate(&self, exchange: crate::types::ExchangeId, is_maker: bool) -> Decimal {
+        self.fee_schedules.get(&exchange)
+            .map(|f| f.get_fee_rate(is_maker))
+            .unwrap_or_else(|| Decimal::new(1, 3)) // Default 0.1% if no fee schedule
     }
 
     /// Prepare execution instruction from signal
@@ -94,10 +114,12 @@ impl ExecutionPreparer {
         let worst_sell_revenue = instruction.sell_order.price.unwrap_or(signal.sell_price) * quantity;
         instruction.worst_case_profit = worst_sell_revenue - worst_buy_cost;
 
-        // Calculate total fees (placeholder - would use actual fee schedules)
-        let estimated_fee_rate = Decimal::from_str_exact("0.001").unwrap(); // 0.1%
-        instruction.buy_order.expected_fee = expected_buy_cost * estimated_fee_rate;
-        instruction.sell_order.expected_fee = expected_sell_revenue * estimated_fee_rate;
+        // Calculate fees using real fee schedules (assume taker for conservative estimate)
+        let buy_fee_rate = self.get_fee_rate(signal.buy_exchange, false);
+        let sell_fee_rate = self.get_fee_rate(signal.sell_exchange, false);
+        
+        instruction.buy_order.expected_fee = expected_buy_cost * buy_fee_rate;
+        instruction.sell_order.expected_fee = expected_sell_revenue * sell_fee_rate;
         instruction.total_fees = instruction.buy_order.expected_fee + instruction.sell_order.expected_fee;
 
         // Adjust profits for fees
@@ -141,10 +163,17 @@ impl ExecutionPreparer {
             instruction.validation_errors.push("Buy and sell symbols must match".to_string());
         }
 
-        // Check that worst case is still profitable
-        if instruction.worst_case_profit <= Decimal::ZERO {
+        // Check that worst case is still profitable (unless force execute is enabled)
+        if instruction.worst_case_profit <= Decimal::ZERO && !self.config.enable_force_execute {
             instruction.validation_errors.push(
-                format!("Worst case profit {} is not positive", instruction.worst_case_profit)
+                format!("Worst case profit {} is not positive (use force_execute to override)", instruction.worst_case_profit)
+            );
+        } else if instruction.worst_case_profit <= Decimal::ZERO && self.config.enable_force_execute {
+            // Log warning but allow execution
+            tracing::warn!(
+                signal_id = %instruction.signal_id,
+                worst_case_profit = %instruction.worst_case_profit,
+                "Force executing instruction with negative worst-case profit"
             );
         }
 

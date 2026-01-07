@@ -1,36 +1,31 @@
 /// Professional arbitrage strategies for institutional-grade trading
 /// 
-/// This module implements 10 proven arbitrage strategies that work in real markets:
-/// 1. CEX ↔ CEX Price Arbitrage
-/// 2. Spot ↔ Perpetual (Futures) Arbitrage  
-/// 3. Funding Rate Arbitrage (Roll Yield)
-/// 4. Funding + Spot Hedged Strategy
-/// 5. Pre-Positioned Capital Cross-Exchange Arbitrage
-/// 6. Limit Order Spread Capture
-/// 7. Temporal (Latency) Arbitrage
-/// 8. Stablecoin Peg Arbitrage
-/// 9. Convergence Arbitrage
-/// 10. New Listing Cross-Exchange Arbitrage
+/// Phase 1: Core Engine Completion (CURRENT FOCUS)
+/// - Complete Size Calculator, Execution Preparer, Confidence Scorer, Storage
+/// - Add comprehensive property tests
+/// 
+/// Phase 2: Strategy Implementation (AFTER Phase 1)
+/// - Implement all 10 strategy modules according to priority
+/// - Integrate with completed core engine
 
-pub mod cex_arbitrage;
-pub mod spot_futures_arbitrage;
-pub mod funding_rate_arbitrage;
-pub mod hedged_funding;
-pub mod cross_exchange;
-pub mod spread_capture;
-pub mod latency_arbitrage;
-pub mod stablecoin_peg;
-pub mod convergence;
-pub mod new_listing;
+// Core strategy framework
+pub mod base;
 
-// Re-export all strategy types
-pub use cex_arbitrage::*;
-pub use spot_futures_arbitrage::*;
-pub use funding_rate_arbitrage::*;
-pub use hedged_funding::*;
-pub use cross_exchange::*;
-pub use spread_capture::*;
-pub use latency_arbitrage::*;
-pub use stablecoin_peg::*;
-pub use convergence::*;
-pub use new_listing::*;
+// Strategy implementations will be added in Phase 2
+// TODO: Implement after core engine completion:
+// pub mod cex_arbitrage;           // Tier 1 - Highest ROI
+// pub mod funding_rate_arbitrage;  // Tier 1 - Passive income
+// pub mod stablecoin_arbitrage;    // Tier 1 - Predictable
+// pub mod spot_perp_arbitrage;     // Tier 2 - Medium complexity
+// pub mod cross_exchange_arbitrage;// Tier 2 - Balance management
+// pub mod new_listing_arbitrage;   // Tier 2 - Event-driven
+// pub mod latency_arbitrage;       // Tier 3 - Ultra-low latency
+// pub mod spread_capture;          // Tier 3 - Market making
+// pub mod convergence_arbitrage;   // Tier 3 - Statistical modeling
+// pub mod hedged_funding;          // Tier 3 - Complex position management
+
+// Strategy registry - TODO: implement after strategies are ready
+// pub mod registry;
+
+// Re-export core types
+pub use base::*;

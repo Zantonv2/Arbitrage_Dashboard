@@ -1,11 +1,10 @@
 use arbitrage_core::{
     config::SymbolMapping,
     normalizer::Normalizer,
-    types::{ExchangeId, OrderBookLevel, Symbol},
+    types::{ExchangeId, Symbol},
 };
 use proptest::prelude::*;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
 
 // Property 5: Symbol Mapping Correctness
 // For any valid symbol mapping, the normalizer should correctly map exchange symbols to canonical format
@@ -80,7 +79,7 @@ proptest! {
         bids in prop::collection::vec((1u32..100000, 1u32..1000), 1..10),
         asks in prop::collection::vec((100001u32..200000, 1u32..1000), 1..10)
     ) {
-        let normalizer = Normalizer::new();
+        let _normalizer = Normalizer::new();
         
         // Convert to (Decimal, Decimal) tuples
         let bid_levels: Vec<(Decimal, Decimal)> = bids.into_iter()
@@ -156,7 +155,7 @@ proptest! {
         bid_price in 50000u32..60000,
         ask_price in 40000u32..50000 // ask < bid (invalid)
     ) {
-        let normalizer = Normalizer::new();
+        let _normalizer = Normalizer::new();
         
         // Create a symbol mapping
         let symbol = Symbol::new("BTC", "USDT");

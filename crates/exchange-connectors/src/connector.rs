@@ -1,82 +1,230 @@
-use arbitrage_core::types::{ExchangeId, OrderBook, Symbol, ConnectionStatus};
+use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, ConnectionStatus}, Result};
 use async_trait::async_trait;
-use thiserror::Error;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::sync::broadcast;
+use thiserror::Error;
+
+use crate::events::ConnectionEvent;
 
 #[derive(Error, Debug)]
 pub enum ConnectorError {
-    #[error("Connection error: {0}")]
-    Connection(String),
-    
-    #[error("Authentication error: {0}")]
-    Authentication(String),
-    
-    #[error("Rate limit error: {0}")]
-    RateLimit(String),
-    
-    #[error("Parse error: {0}")]
-    Parse(String),
-    
-    #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    #[error("Connection failed: {0}")]
+    ConnectionFailed(String),
     
     #[error("WebSocket error: {0}")]
-    WebSocket(String),
+    WebSocketError(String),
     
-    #[error("Generic error: {0}")]
-    Generic(#[from] anyhow::Error),
+    #[error("HTTP request failed: {0}")]
+    HttpError(String),
+    
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
+    
+    #[error("Authentication failed: {0}")]
+    AuthenticationFailed(String),
+    
+    #[error("Invalid symbol: {0}")]
+    InvalidSymbol(String),
+    
+    #[error("Parsing error: {0}")]
+    ParsingError(String),
+    
+    #[error("Exchange API error: {code} - {message}")]
+    ExchangeApiError { code: i32, message: String },
+    
+    #[error("Timeout: {0}")]
+    Timeout(String),
 }
 
-/// Events emitted by exchange connectors
-#[derive(Debug, Clone)]
-pub enum ConnectionEvent {
-    Connected(ExchangeId),
-    Disconnected(ExchangeId),
-    Reconnecting(ExchangeId),
-    Error(ExchangeId, String),
-    OrderBookUpdate(OrderBook),
-    RateLimit(ExchangeId, u64), // seconds until reset
+impl From<ConnectorError> for arbitrage_core::ArbitrageError {
+    fn from(err: ConnectorError) -> Self {
+        arbitrage_core::ArbitrageError::ExchangeConnection(err.to_string())
+    }
 }
 
 /// Configuration for exchange connector
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectorConfig {
-    pub exchange: ExchangeId,
+    /// Exchange identifier
+    pub exchange_id: ExchangeId,
+    
+    /// WebSocket URL
+    pub ws_url: String,
+    
+    /// REST API base URL
+    pub rest_url: String,
+    
+    /// API credentials (optional for public data)
     pub api_key: Option<String>,
     pub api_secret: Option<String>,
     pub passphrase: Option<String>,
-    pub testnet: bool,
-    pub symbols: Vec<Symbol>,
+    
+    /// Rate limiting configuration
     pub rate_limit_per_second: u32,
-    pub reconnect_delay_ms: u64,
+    pub rate_limit_burst: u32,
+    
+    /// Connection settings
+    pub reconnect_interval_ms: u64,
     pub max_reconnect_attempts: u32,
     pub heartbeat_interval_ms: u64,
+    
+    /// Data settings
+    pub order_book_depth: u32,
+    pub enable_trades: bool,
+    pub enable_tickers: bool,
+    pub enable_funding_rates: bool,
 }
 
-/// Trait for exchange connectors
+impl Default for ConnectorConfig {
+    fn default() -> Self {
+        Self {
+            exchange_id: ExchangeId::OKX,
+            ws_url: String::new(),
+            rest_url: String::new(),
+            api_key: None,
+            api_secret: None,
+            passphrase: None,
+            rate_limit_per_second: 10,
+            rate_limit_burst: 20,
+            reconnect_interval_ms: 5000,
+            max_reconnect_attempts: 10,
+            heartbeat_interval_ms: 30000,
+            order_book_depth: 20,
+            enable_trades: true,
+            enable_tickers: true,
+            enable_funding_rates: false,
+        }
+    }
+}
+
+/// Unified interface for all exchange connectors
 #[async_trait]
 pub trait ExchangeConnector: Send + Sync {
-    /// Get exchange ID
+    /// Get exchange identifier
     fn exchange_id(&self) -> ExchangeId;
-
-    /// Connect to exchange
-    async fn connect(&mut self) -> Result<(), ConnectorError>;
-
-    /// Disconnect from exchange
-    async fn disconnect(&mut self) -> Result<(), ConnectorError>;
-
-    /// Subscribe to symbols
-    async fn subscribe(&mut self, symbols: Vec<Symbol>) -> Result<(), ConnectorError>;
-
-    /// Unsubscribe from symbols
-    async fn unsubscribe(&mut self, symbols: Vec<Symbol>) -> Result<(), ConnectorError>;
-
+    
     /// Get current connection status
     fn status(&self) -> ConnectionStatus;
-
-    /// Get event receiver
+    
+    /// Get event receiver for this connector
     fn event_receiver(&self) -> broadcast::Receiver<ConnectionEvent>;
+    
+    // === REST API Methods ===
+    
+    /// Fetch current order book for a symbol
+    async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook>;
+    
+    /// Fetch all available trading symbols
+    async fn fetch_symbols(&self) -> Result<Vec<Symbol>>;
+    
+    /// Fetch ticker data for symbols
+    async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>>;
+    
+    /// Fetch funding rates (for perpetual contracts)
+    async fn fetch_funding_rates(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>>;
+    
+    // === WebSocket Methods ===
+    
+    /// Connect to WebSocket streams
+    async fn connect(&mut self) -> Result<()>;
+    
+    /// Disconnect from WebSocket streams
+    async fn disconnect(&mut self) -> Result<()>;
+    
+    /// Subscribe to symbols for real-time data
+    async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()>;
+    
+    /// Unsubscribe from symbols
+    async fn unsubscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()>;
+    
+    /// Subscribe to ticker updates
+    async fn subscribe_tickers(&mut self, symbols: &[Symbol]) -> Result<()>;
+    
+    /// Subscribe to order book updates
+    async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()>;
+    
+    /// Subscribe to trade updates
+    async fn subscribe_trades(&mut self, symbols: &[Symbol]) -> Result<()>;
+    
+    /// Subscribe to funding rate updates (for perpetual contracts)
+    async fn subscribe_funding_rates(&mut self, symbols: &[Symbol]) -> Result<()>;
+    
+    // === Health & Monitoring ===
+    
+    /// Check if connector is healthy
+    async fn health_check(&self) -> Result<HealthStatus>;
+    
+    /// Get connector statistics
+    fn get_stats(&self) -> ConnectorStats;
+    
+    /// Force reconnection
+    async fn force_reconnect(&mut self) -> Result<()>;
+}
 
-    /// Get subscribed symbols
-    fn subscribed_symbols(&self) -> Vec<Symbol>;
+/// Ticker data from exchange
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickerData {
+    pub symbol: Symbol,
+    pub exchange: ExchangeId,
+    pub last_price: rust_decimal::Decimal,
+    pub bid_price: rust_decimal::Decimal,
+    pub ask_price: rust_decimal::Decimal,
+    pub volume_24h: rust_decimal::Decimal,
+    pub price_change_24h: rust_decimal::Decimal,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Funding rate data for perpetual contracts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingRate {
+    pub symbol: Symbol,
+    pub exchange: ExchangeId,
+    pub funding_rate: rust_decimal::Decimal,
+    pub predicted_rate: Option<rust_decimal::Decimal>,
+    pub funding_time: chrono::DateTime<chrono::Utc>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Health status of connector
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthStatus {
+    pub is_connected: bool,
+    pub last_message_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub websocket_status: ConnectionStatus,
+    pub rest_api_status: ConnectionStatus,
+    pub error_count: u64,
+    pub reconnect_count: u32,
+}
+
+/// Connector performance statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorStats {
+    pub exchange: ExchangeId,
+    pub uptime_seconds: u64,
+    pub messages_received: u64,
+    pub messages_sent: u64,
+    pub errors_count: u64,
+    pub reconnections: u32,
+    pub avg_latency_ms: f64,
+    pub subscribed_symbols: usize,
+    pub rate_limit_hits: u64,
+    pub last_update: chrono::DateTime<chrono::Utc>,
+}
+
+impl Default for ConnectorStats {
+    fn default() -> Self {
+        Self {
+            exchange: ExchangeId::OKX,
+            uptime_seconds: 0,
+            messages_received: 0,
+            messages_sent: 0,
+            errors_count: 0,
+            reconnections: 0,
+            avg_latency_ms: 0.0,
+            subscribed_symbols: 0,
+            rate_limit_hits: 0,
+            last_update: chrono::Utc::now(),
+        }
+    }
 }

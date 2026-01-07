@@ -7,6 +7,9 @@ pub enum ArbitrageError {
     #[error("Exchange error: {0}")]
     Exchange(String),
     
+    #[error("Exchange connection error: {0}")]
+    ExchangeConnection(String),
+    
     #[error("Normalization error: {0}")]
     Normalization(String),
     
@@ -18,6 +21,9 @@ pub enum ArbitrageError {
     
     #[error("Configuration error: {0}")]
     Config(String),
+    
+    #[error("Configuration error: {0}")]
+    Configuration(String),
     
     #[error("Validation error: {0}")]
     Validation(String),

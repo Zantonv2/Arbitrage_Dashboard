@@ -8,8 +8,10 @@ pub mod simulation;
 pub mod storage;
 pub mod config;
 pub mod error;
+pub mod symbol_discovery;
+pub mod symbol_manager;
 
-// Russian Financial Advisor Strategies (8-22% daily returns)
+// Strategies folder (Potential 8-22% profit)
 pub mod strategies;
 
 pub use types::*;

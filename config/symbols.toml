@@ -1,12 +1,35 @@
 # Symbol Configuration for Arbitrage Dashboard
 # This file defines which trading pairs to monitor on each exchange
 
+[symbol_management]
+# Core symbols that are always monitored (Tier 1)
+core_symbols = [
+    { base = "BTC", quote = "USDT" },
+    { base = "ETH", quote = "USDT" },
+    { base = "SOL", quote = "USDT" },
+    { base = "BNB", quote = "USDT" },
+    { base = "XRP", quote = "USDT" },
+]
+
+# Dynamic discovery settings (Tier 2)
+enable_discovery = true
+discovery_refresh_interval = 3600  # 1 hour
+max_discovered_symbols = 20
+
+# Discovery criteria
+[symbol_management.discovery_criteria]
+min_volume_usd = 1_000_000      # $1M daily volume minimum
+max_spread_bps = 50             # 0.5% max spread
+min_exchanges = 2               # Must be on at least 2 exchanges
+allowed_quotes = ["USDT", "USDC", "BUSD"]
+max_symbols = 25                # Total limit including core symbols
+
 [exchanges.bybit]
 enabled = true
 testnet = false
 rate_limit_per_second = 10
 
-# Popular crypto pairs to monitor
+# These will be supplemented by discovered symbols
 symbols = [
     { base = "BTC", quote = "USDT" },
     { base = "ETH", quote = "USDT" },

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -186,6 +187,113 @@ impl OrderBook {
         
         bids_sorted && asks_sorted && spread_valid
     }
+    
+    /// Calculate VWAP for buying a given quantity
+    pub fn vwap_buy(&self, target_quantity: Decimal) -> Option<VwapResult> {
+        if target_quantity <= Decimal::ZERO || self.asks.is_empty() {
+            return None;
+        }
+        
+        let mut remaining_qty = target_quantity;
+        let mut total_cost = Decimal::ZERO;
+        let mut filled_qty = Decimal::ZERO;
+        
+        for level in &self.asks {
+            if remaining_qty <= Decimal::ZERO {
+                break;
+            }
+            
+            let qty_from_level = remaining_qty.min(level.quantity);
+            total_cost += qty_from_level * level.price;
+            filled_qty += qty_from_level;
+            remaining_qty -= qty_from_level;
+        }
+        
+        if filled_qty > Decimal::ZERO {
+            let vwap = total_cost / filled_qty;
+            Some(VwapResult {
+                vwap_price: vwap,
+                filled_quantity: filled_qty,
+                total_cost,
+                is_fully_filled: remaining_qty <= Decimal::ZERO,
+                slippage_bps: self.calculate_slippage_bps(self.best_ask()?.price, vwap),
+            })
+        } else {
+            None
+        }
+    }
+    
+    /// Calculate VWAP for selling a given quantity
+    pub fn vwap_sell(&self, target_quantity: Decimal) -> Option<VwapResult> {
+        if target_quantity <= Decimal::ZERO || self.bids.is_empty() {
+            return None;
+        }
+        
+        let mut remaining_qty = target_quantity;
+        let mut total_revenue = Decimal::ZERO;
+        let mut filled_qty = Decimal::ZERO;
+        
+        for level in &self.bids {
+            if remaining_qty <= Decimal::ZERO {
+                break;
+            }
+            
+            let qty_from_level = remaining_qty.min(level.quantity);
+            total_revenue += qty_from_level * level.price;
+            filled_qty += qty_from_level;
+            remaining_qty -= qty_from_level;
+        }
+        
+        if filled_qty > Decimal::ZERO {
+            let vwap = total_revenue / filled_qty;
+            Some(VwapResult {
+                vwap_price: vwap,
+                filled_quantity: filled_qty,
+                total_cost: total_revenue,
+                is_fully_filled: remaining_qty <= Decimal::ZERO,
+                slippage_bps: self.calculate_slippage_bps(self.best_bid()?.price, vwap),
+            })
+        } else {
+            None
+        }
+    }
+    
+    /// Calculate available liquidity up to a price level
+    pub fn liquidity_at_price(&self, price: Decimal, is_buy: bool) -> Decimal {
+        if is_buy {
+            self.asks.iter()
+                .take_while(|level| level.price <= price)
+                .map(|level| level.quantity)
+                .sum()
+        } else {
+            self.bids.iter()
+                .take_while(|level| level.price >= price)
+                .map(|level| level.quantity)
+                .sum()
+        }
+    }
+    
+    /// Calculate slippage in basis points
+    fn calculate_slippage_bps(&self, best_price: Decimal, vwap_price: Decimal) -> i32 {
+        if best_price.is_zero() {
+            return 0;
+        }
+        
+        let slippage_ratio = (vwap_price - best_price).abs() / best_price;
+        (slippage_ratio * Decimal::from(10000))
+            .to_i32()
+            .unwrap_or(0)
+    }
+}
+
+/// VWAP calculation result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VwapResult {
+    pub vwap_price: Decimal,
+    pub filled_quantity: Decimal,
+    pub total_cost: Decimal,
+    pub is_fully_filled: bool,
+    pub slippage_bps: i32,
 }
 
 /// Arbitrage signal representing a trading opportunity

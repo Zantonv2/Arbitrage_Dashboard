@@ -1,8 +1,10 @@
 use crate::{
-    types::{ExchangeId, OrderBook, Signal},
-    Result,
+    types::{ExchangeId, OrderBook, VwapResult},
+    ArbitrageError, Result,
 };
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 /// Factors contributing to confidence score
@@ -24,17 +26,25 @@ pub struct ConfidenceConfig {
     pub spread_stability_weight: Decimal,
     pub freshness_weight: Decimal,
     pub min_confidence_threshold: Decimal,
+    pub max_latency_ms: u64,
+    pub target_vwap_usd: Decimal, // Target VWAP amount for depth normalization
+    pub depth_cap: Decimal,       // Maximum depth score cap
+    pub volatility_cap: Decimal,  // Maximum volatility score cap
 }
 
 impl Default for ConfidenceConfig {
     fn default() -> Self {
         Self {
-            depth_weight: Decimal::from_str_exact("0.3").unwrap(),
-            volatility_weight: Decimal::from_str_exact("0.2").unwrap(),
-            reliability_weight: Decimal::from_str_exact("0.2").unwrap(),
-            spread_stability_weight: Decimal::from_str_exact("0.15").unwrap(),
-            freshness_weight: Decimal::from_str_exact("0.15").unwrap(),
-            min_confidence_threshold: Decimal::from_str_exact("0.3").unwrap(),
+            depth_weight: Decimal::new(3, 1), // 0.3
+            volatility_weight: Decimal::new(2, 1), // 0.2
+            reliability_weight: Decimal::new(2, 1), // 0.2
+            spread_stability_weight: Decimal::new(15, 2), // 0.15
+            freshness_weight: Decimal::new(15, 2), // 0.15
+            min_confidence_threshold: Decimal::new(3, 1), // 0.3
+            max_latency_ms: 500, // 500ms max latency
+            target_vwap_usd: Decimal::from(10000), // $10k target for depth normalization
+            depth_cap: Decimal::from(100),
+            volatility_cap: Decimal::from(100),
         }
     }
 }
@@ -45,66 +55,42 @@ pub struct ExchangeReliability {
     pub uptime_percent: Decimal,
     pub error_rate: Decimal,
     pub avg_latency_ms: u64,
-    pub last_updated: chrono::DateTime<chrono::Utc>,
+    pub last_updated: DateTime<Utc>,
 }
 
-impl Default for ExchangeReliability {
-    fn default() -> Self {
-        Self {
-            uptime_percent: Decimal::from(95), // Default 95% uptime
-            error_rate: Decimal::from_str_exact("0.01").unwrap(), // 1% error rate
-            avg_latency_ms: 100,
-            last_updated: chrono::Utc::now(),
-        }
-    }
-}
-
-/// Volatility tracking for symbols
+/// Fee schedule for profit calculations
 #[derive(Debug, Clone)]
-pub struct VolatilityMetrics {
-    pub price_variance: Decimal,
-    pub rolling_std_dev: Decimal,
-    pub sample_count: u32,
-    pub last_updated: chrono::DateTime<chrono::Utc>,
+pub struct FeeSchedule {
+    pub exchange: ExchangeId,
+    pub maker_fee: Decimal,
+    pub taker_fee: Decimal,
+    pub tier: Option<String>,
 }
 
-impl Default for VolatilityMetrics {
-    fn default() -> Self {
+impl FeeSchedule {
+    pub fn new(exchange: ExchangeId, maker_fee: Decimal, taker_fee: Decimal) -> Self {
         Self {
-            price_variance: Decimal::ZERO,
-            rolling_std_dev: Decimal::ZERO,
-            sample_count: 0,
-            last_updated: chrono::Utc::now(),
+            exchange,
+            maker_fee,
+            taker_fee,
+            tier: None,
         }
+    }
+    
+    pub fn get_fee_rate(&self, is_maker: bool) -> Decimal {
+        if is_maker { self.maker_fee } else { self.taker_fee }
     }
 }
 
-/// Spread stability tracking
-#[derive(Debug, Clone)]
-pub struct SpreadStability {
-    pub avg_spread: Decimal,
-    pub spread_variance: Decimal,
-    pub stability_score: Decimal,
-    pub sample_count: u32,
-}
-
-impl Default for SpreadStability {
-    fn default() -> Self {
-        Self {
-            avg_spread: Decimal::ZERO,
-            spread_variance: Decimal::ZERO,
-            stability_score: Decimal::from_str_exact("0.5").unwrap(), // Neutral default
-            sample_count: 0,
-        }
-    }
-}
-
-/// Confidence scorer for arbitrage signals
+/// Confidence scorer with fee-aware profit calculation
+/// This is a critical Phase 1 component that handles:
+/// - Fee-adjusted profit calculations (prevents unprofitable signals)
+/// - Data freshness validation (prevents phantom signals)
+/// - Multi-factor confidence scoring
 pub struct ConfidenceScorer {
     config: ConfidenceConfig,
     exchange_reliability: HashMap<ExchangeId, ExchangeReliability>,
-    volatility_metrics: HashMap<String, VolatilityMetrics>, // symbol -> metrics
-    spread_stability: HashMap<(ExchangeId, String), SpreadStability>, // (exchange, symbol) -> stability
+    fee_schedules: HashMap<ExchangeId, FeeSchedule>,
 }
 
 impl ConfidenceScorer {
@@ -112,210 +98,202 @@ impl ConfidenceScorer {
         Self {
             config,
             exchange_reliability: HashMap::new(),
-            volatility_metrics: HashMap::new(),
-            spread_stability: HashMap::new(),
+            fee_schedules: Self::default_fee_schedules(),
         }
     }
-
-    /// Score a signal's confidence
-    pub fn score_signal(
-        &self,
-        signal: &Signal,
-        buy_order_book: &OrderBook,
-        sell_order_book: &OrderBook,
-    ) -> Result<(Decimal, ConfidenceFactors)> {
-        let factors = ConfidenceFactors {
-            depth_score: self.calculate_depth_score(buy_order_book, sell_order_book, signal)?,
-            volatility_score: self.calculate_volatility_score(&signal.symbol.to_pair())?,
-            reliability_score: self.calculate_reliability_score(signal.buy_exchange, signal.sell_exchange)?,
-            spread_stability_score: self.calculate_spread_stability_score(buy_order_book, sell_order_book)?,
-            freshness_score: self.calculate_freshness_score(buy_order_book, sell_order_book)?,
-        };
-
-        let weighted_score = self.calculate_weighted_score(&factors)?;
+    
+    /// Create default fee schedules for major exchanges
+    fn default_fee_schedules() -> HashMap<ExchangeId, FeeSchedule> {
+        let mut schedules = HashMap::new();
         
-        Ok((weighted_score, factors))
+        // Default taker fees for major exchanges (approximate)
+        schedules.insert(ExchangeId::OKX, FeeSchedule::new(
+            ExchangeId::OKX, 
+            Decimal::new(8, 4), // 0.0008 = 0.08% maker
+            Decimal::new(1, 3)   // 0.001 = 0.1% taker
+        ));
+        schedules.insert(ExchangeId::ByBit, FeeSchedule::new(
+            ExchangeId::ByBit,
+            Decimal::new(1, 3),  // 0.001 = 0.1% maker
+            Decimal::new(1, 3)   // 0.001 = 0.1% taker
+        ));
+        schedules.insert(ExchangeId::MEXC, FeeSchedule::new(
+            ExchangeId::MEXC,
+            Decimal::new(2, 3),  // 0.002 = 0.2% maker
+            Decimal::new(2, 3)   // 0.002 = 0.2% taker
+        ));
+        schedules.insert(ExchangeId::GateIo, FeeSchedule::new(
+            ExchangeId::GateIo,
+            Decimal::new(2, 3),  // 0.002 = 0.2% maker
+            Decimal::new(2, 3)   // 0.002 = 0.2% taker
+        ));
+        
+        schedules
     }
-
-    /// Calculate depth score based on order book liquidity
-    fn calculate_depth_score(
+    
+    /// Calculate net spread after fees in basis points
+    /// This is THE critical function that prevents unprofitable signals
+    pub fn calculate_net_spread_bps(
         &self,
-        buy_book: &OrderBook,
-        sell_book: &OrderBook,
-        signal: &Signal,
-    ) -> Result<Decimal> {
-        // Calculate available liquidity at signal prices
-        let buy_liquidity = self.calculate_liquidity_at_price(&buy_book.asks, signal.buy_price)?;
-        let sell_liquidity = self.calculate_liquidity_at_price(&sell_book.bids, signal.sell_price)?;
-
-        // Use the limiting factor (minimum liquidity)
-        let min_liquidity = buy_liquidity.min(sell_liquidity);
-
-        // Normalize to 0-1 score (higher liquidity = higher score)
-        // Using simple linear scale for now instead of logarithmic
-        let score = if min_liquidity > Decimal::ZERO {
-            // Simple normalization: cap at 1000 and scale to 0-1
-            let normalized = min_liquidity / Decimal::from(1000);
-            normalized.max(Decimal::ZERO).min(Decimal::ONE)
-        } else {
-            Decimal::ZERO
-        };
-
-        Ok(score)
-    }
-
-    /// Calculate available liquidity at a specific price level
-    fn calculate_liquidity_at_price(
-        &self,
-        levels: &[crate::types::OrderBookLevel],
-        target_price: Decimal,
-    ) -> Result<Decimal> {
-        let mut total_liquidity = Decimal::ZERO;
-
-        for level in levels {
-            // For asks, we can buy up to target_price
-            // For bids, we can sell down to target_price
-            if (levels == &[] || level.price <= target_price) || 
-               (levels != &[] && level.price >= target_price) {
-                total_liquidity += level.quantity;
-            } else {
-                break; // Levels are sorted, so we can stop here
-            }
-        }
-
-        Ok(total_liquidity)
-    }
-
-    /// Calculate volatility score (lower volatility = higher confidence)
-    fn calculate_volatility_score(&self, symbol: &str) -> Result<Decimal> {
-        if let Some(metrics) = self.volatility_metrics.get(symbol) {
-            // Convert standard deviation to confidence score
-            // Lower std dev = higher confidence
-            let volatility_factor = metrics.rolling_std_dev / Decimal::from(100); // Normalize
-            let score = (Decimal::ONE - volatility_factor.min(Decimal::ONE)).max(Decimal::ZERO);
-            Ok(score)
-        } else {
-            // Default neutral score if no volatility data
-            Ok(Decimal::from_str_exact("0.5").unwrap())
-        }
-    }
-
-    /// Calculate exchange reliability score
-    fn calculate_reliability_score(
-        &self,
+        buy_price: Decimal,
+        sell_price: Decimal,
         buy_exchange: ExchangeId,
         sell_exchange: ExchangeId,
-    ) -> Result<Decimal> {
-        let buy_reliability = self.exchange_reliability
-            .get(&buy_exchange)
-            .cloned()
-            .unwrap_or_default();
+    ) -> Result<i32> {
+        if buy_price.is_zero() {
+            return Err(ArbitrageError::Calculation("Zero buy price".to_string()));
+        }
         
-        let sell_reliability = self.exchange_reliability
-            .get(&sell_exchange)
-            .cloned()
-            .unwrap_or_default();
-
-        // Combine uptime and error rate for both exchanges
-        let buy_score = (buy_reliability.uptime_percent / Decimal::from(100)) * 
-                       (Decimal::ONE - buy_reliability.error_rate);
-        let sell_score = (sell_reliability.uptime_percent / Decimal::from(100)) * 
-                        (Decimal::ONE - sell_reliability.error_rate);
-
-        // Use the minimum (weakest link)
-        Ok(buy_score.min(sell_score))
+        // Get fee rates (default to 0.1% if not found)
+        let default_fee = Decimal::new(1, 3); // 0.001 = 0.1%
+        let buy_fee_rate = self.fee_schedules.get(&buy_exchange)
+            .map(|f| f.get_fee_rate(false)) // Assume taker for now
+            .unwrap_or(default_fee);
+        let sell_fee_rate = self.fee_schedules.get(&sell_exchange)
+            .map(|f| f.get_fee_rate(false)) // Assume taker for now
+            .unwrap_or(default_fee);
+        
+        // Calculate effective prices after fees
+        let effective_buy = buy_price * (Decimal::ONE + buy_fee_rate);
+        let effective_sell = sell_price * (Decimal::ONE - sell_fee_rate);
+        
+        if effective_sell <= effective_buy {
+            return Ok(-1); // Return negative to indicate unprofitable signal
+        }
+        
+        let net_spread_ratio = (effective_sell - effective_buy)
+            .checked_div(effective_buy)
+            .ok_or_else(|| ArbitrageError::Calculation("Division by zero in net spread calculation".to_string()))?;
+            
+        let spread_bps = net_spread_ratio
+            .checked_mul(Decimal::from(10000))
+            .ok_or_else(|| ArbitrageError::Calculation("Spread BPS overflow".to_string()))?;
+            
+        // Safe conversion to i32
+        Ok(spread_bps.to_i32().unwrap_or(0))
     }
-
-    /// Calculate spread stability score
-    fn calculate_spread_stability_score(
+    
+    /// Check if market data is fresh enough
+    pub fn is_data_fresh(&self, timestamp: DateTime<Utc>) -> bool {
+        let age_ms = (Utc::now() - timestamp).num_milliseconds();
+        age_ms >= 0 && (age_ms as u64) <= self.config.max_latency_ms
+    }
+    
+    /// Calculate confidence factors based on market conditions
+    pub fn calculate_confidence_factors(
         &self,
+        buy_vwap: &VwapResult,
+        sell_vwap: &VwapResult,
         buy_book: &OrderBook,
         sell_book: &OrderBook,
-    ) -> Result<Decimal> {
-        let buy_key = (buy_book.exchange, buy_book.symbol.to_pair());
-        let sell_key = (sell_book.exchange, sell_book.symbol.to_pair());
-
-        let buy_stability = self.spread_stability
-            .get(&buy_key)
-            .map(|s| s.stability_score)
-            .unwrap_or(Decimal::from_str_exact("0.5").unwrap());
-
-        let sell_stability = self.spread_stability
-            .get(&sell_key)
-            .map(|s| s.stability_score)
-            .unwrap_or(Decimal::from_str_exact("0.5").unwrap());
-
-        // Average the stability scores
-        Ok((buy_stability + sell_stability) / Decimal::from(2))
-    }
-
-    /// Calculate freshness score based on order book age
-    fn calculate_freshness_score(
-        &self,
-        buy_book: &OrderBook,
-        sell_book: &OrderBook,
-    ) -> Result<Decimal> {
-        let now = chrono::Utc::now();
-        let buy_age_ms = (now - buy_book.timestamp).num_milliseconds() as u64;
-        let sell_age_ms = (now - sell_book.timestamp).num_milliseconds() as u64;
-
-        // Use the older (worse) age
-        let max_age_ms = buy_age_ms.max(sell_age_ms);
-
-        // Fresher data gets higher score (linear decay for simplicity)
-        let decay_seconds = max_age_ms / 1000; // Convert to seconds
-        let score = if decay_seconds < 60 {
-            // Linear decay over 60 seconds
-            Decimal::ONE - (Decimal::from(decay_seconds) / Decimal::from(60))
-        } else {
-            Decimal::ZERO
+    ) -> ConfidenceFactors {
+        // Depth score: normalized by target VWAP amount
+        let min_filled = buy_vwap.filled_quantity.min(sell_vwap.filled_quantity);
+        let mid_price = buy_book.mid_price().unwrap_or_else(|| sell_book.mid_price().unwrap_or(Decimal::from(50000)));
+        let filled_usd = min_filled * mid_price;
+        let depth_ratio = filled_usd / self.config.target_vwap_usd;
+        let depth_score = (depth_ratio * Decimal::from(100)).min(self.config.depth_cap);
+        
+        // Reliability score: includes exchange reliability metrics
+        let book_valid = buy_book.is_valid() && sell_book.is_valid();
+        let fills_complete = buy_vwap.is_fully_filled && sell_vwap.is_fully_filled;
+        
+        // Factor in exchange reliability if available
+        let buy_reliability = self.exchange_reliability.get(&buy_book.exchange)
+            .map(|r| r.uptime_percent / Decimal::from(100))
+            .unwrap_or(Decimal::ONE);
+        let sell_reliability = self.exchange_reliability.get(&sell_book.exchange)
+            .map(|r| r.uptime_percent / Decimal::from(100))
+            .unwrap_or(Decimal::ONE);
+        let avg_reliability = (buy_reliability + sell_reliability) / Decimal::from(2);
+        
+        let base_reliability = match (book_valid, fills_complete) {
+            (true, true) => Decimal::from(100),
+            (true, false) => Decimal::from(70),
+            (false, true) => Decimal::from(50),
+            (false, false) => Decimal::from(20),
         };
-
-        Ok(score.max(Decimal::ZERO).min(Decimal::ONE))
+        let reliability_score = base_reliability * avg_reliability;
+        
+        // Spread stability: inverse of slippage with better normalization
+        let avg_slippage_bps = (buy_vwap.slippage_bps + sell_vwap.slippage_bps) / 2;
+        let spread_stability_score = (Decimal::from(100) - Decimal::from(avg_slippage_bps))
+            .max(Decimal::ZERO)
+            .min(Decimal::from(100));
+        
+        // Freshness score: based on data age
+        let buy_fresh = self.is_data_fresh(buy_book.timestamp);
+        let sell_fresh = self.is_data_fresh(sell_book.timestamp);
+        let freshness_score = match (buy_fresh, sell_fresh) {
+            (true, true) => Decimal::from(100),
+            (true, false) | (false, true) => Decimal::from(50),
+            (false, false) => Decimal::ZERO,
+        };
+        
+        // Volatility score: improved calculation with absolute volatility consideration
+        let slippage_diff = (buy_vwap.slippage_bps - sell_vwap.slippage_bps).abs();
+        let max_slippage = buy_vwap.slippage_bps.max(sell_vwap.slippage_bps);
+        
+        // Penalize both high absolute slippage and high slippage difference
+        let volatility_penalty = Decimal::from(slippage_diff) + (Decimal::from(max_slippage) / Decimal::from(2));
+        let volatility_score = (Decimal::from(100) - volatility_penalty)
+            .max(Decimal::ZERO)
+            .min(self.config.volatility_cap);
+        
+        ConfidenceFactors {
+            depth_score,
+            volatility_score,
+            reliability_score,
+            spread_stability_score,
+            freshness_score,
+        }
     }
-
-    /// Calculate weighted confidence score
-    fn calculate_weighted_score(&self, factors: &ConfidenceFactors) -> Result<Decimal> {
-        let weighted_sum = 
+    
+    /// Calculate overall confidence score with normalized weights
+    pub fn calculate_confidence(&self, factors: &ConfidenceFactors) -> Decimal {
+        // Calculate total weight for normalization
+        let total_weight = self.config.depth_weight + 
+                          self.config.volatility_weight + 
+                          self.config.reliability_weight + 
+                          self.config.spread_stability_weight + 
+                          self.config.freshness_weight;
+        
+        if total_weight.is_zero() {
+            return Decimal::ZERO;
+        }
+        
+        let weighted_score = 
             factors.depth_score * self.config.depth_weight +
             factors.volatility_score * self.config.volatility_weight +
             factors.reliability_score * self.config.reliability_weight +
             factors.spread_stability_score * self.config.spread_stability_weight +
             factors.freshness_score * self.config.freshness_weight;
-
-        // Ensure score is between 0 and 1
-        let score = weighted_sum.max(Decimal::ZERO).min(Decimal::ONE);
-        Ok(score)
+            
+        // Normalize to 0-100 scale using total weights
+        let normalized_score = (weighted_score / total_weight) * Decimal::from(100);
+        normalized_score.min(Decimal::from(100)).max(Decimal::ZERO)
     }
-
+    
     /// Update exchange reliability metrics
     pub fn update_exchange_reliability(&mut self, exchange: ExchangeId, reliability: ExchangeReliability) {
         self.exchange_reliability.insert(exchange, reliability);
     }
-
-    /// Update volatility metrics for a symbol
-    pub fn update_volatility_metrics(&mut self, symbol: String, metrics: VolatilityMetrics) {
-        self.volatility_metrics.insert(symbol, metrics);
+    
+    /// Get exchange reliability metrics
+    pub fn get_exchange_reliability(&self, exchange: ExchangeId) -> Option<&ExchangeReliability> {
+        self.exchange_reliability.get(&exchange)
     }
-
-    /// Update spread stability for exchange/symbol pair
-    pub fn update_spread_stability(&mut self, exchange: ExchangeId, symbol: String, stability: SpreadStability) {
-        self.spread_stability.insert((exchange, symbol), stability);
+    
+    /// Update fee schedule for an exchange
+    pub fn update_fee_schedule(&mut self, exchange: ExchangeId, schedule: FeeSchedule) {
+        self.fee_schedules.insert(exchange, schedule);
     }
-
-    /// Check if signal meets minimum confidence threshold
-    pub fn meets_threshold(&self, confidence: Decimal) -> bool {
-        confidence >= self.config.min_confidence_threshold
-    }
-
-    /// Get current configuration
-    pub fn get_config(&self) -> &ConfidenceConfig {
-        &self.config
-    }
-
-    /// Update configuration
-    pub fn update_config(&mut self, config: ConfidenceConfig) {
-        self.config = config;
+    
+    /// Get fee rate for a specific exchange and side
+    pub fn get_fee_rate(&self, exchange: ExchangeId, is_maker: bool) -> Decimal {
+        self.fee_schedules.get(&exchange)
+            .map(|f| f.get_fee_rate(is_maker))
+            .unwrap_or_else(|| Decimal::new(1, 3)) // Default 0.1%
     }
 }
 
