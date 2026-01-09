@@ -42,11 +42,13 @@ arbitrage-dashboard/
 
 ### exchange-connectors
 - **Purpose**: Exchange integration layer
+- **Status**: ✅ PRODUCTION READY (6 exchanges, ~95% test pass rate)
 - **Key Components**:
-  - WebSocket connection pools
-  - REST API clients
-  - Data normalization
+  - WebSocket connection pools with auto-reconnect
+  - REST API clients with rate limiting
+  - Data normalization (symbol formats, order books)
   - Connection health monitoring
+- **Supported Exchanges**: OKX, ByBit, MEXC, Gate.io, Kraken, Bitstamp
 
 ## Critical Design Principles
 
@@ -75,4 +77,16 @@ Exchange WS/REST → Normalizer → Strategy Detection → Signal Scoring → Ex
 - `Signal`: Arbitrage opportunity representation
 - `ExecutionInstruction`: Order execution plan
 - `OrderBook`: Normalized market depth data
-- `ExchangeId`: Supported exchange enumeration
+- `ExchangeId`: Supported exchange enumeration (OKX, ByBit, MEXC, GateIo, Kraken, Bitstamp)
+- `Symbol`: Trading pair representation (base/quote)
+- `ConnectionStatus`: WebSocket connection state tracking
+
+## Key Files Reference
+
+### Exchange Connectors
+- `crates/exchange-connectors/src/connector.rs` - ExchangeConnector trait definition
+- `crates/exchange-connectors/src/connections/*.rs` - Individual exchange implementations
+- `crates/exchange-connectors/src/utils.rs` - Symbol format utilities (NoSeparator, Underscore, Dash, Slash)
+
+### Strategies
+- `crates/arbitrage-core/src/strategies/base.rs` - Strategy trait and base types

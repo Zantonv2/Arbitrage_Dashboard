@@ -310,6 +310,38 @@ impl ExchangeConnector for BybitConnector {
         self.disconnect().await?;
         self.connect().await
     }
+
+    // === Trading Methods ===
+
+    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for ByBit".to_string()
+        ))
+    }
+
+    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for ByBit".to_string()
+        ))
+    }
+
+    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for ByBit".to_string()
+        ))
+    }
+
+    async fn get_balance(&self) -> Result<crate::connector::Balance> {
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for ByBit".to_string()
+        ))
+    }
+
+    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for ByBit".to_string()
+        ))
+    }
 }
 
 impl BybitConnector {

@@ -1,10 +1,30 @@
+//! # Arbitrage Engine
+//!
+//! Core orchestration engine for the arbitrage detection and execution pipeline.
+//! 
+//! ## Pipeline Flow
+//! ```text
+//! Market Data → Cache → Strategy Detection → Deduplicate → Fee Calculation →
+//! Risk Validation → Size Calculation → Confidence Scoring → Threshold Check →
+//! Store → Emit Signal
+//! ```
+//!
+//! ## Responsibilities
+//! - Receives market data updates (order books, tickers, funding rates)
+//! - Orchestrates strategy execution
+//! - Processes raw signals through the complete validation pipeline
+//! - Manages signal deduplication and caching
+//! - Emits validated signals for UI display or auto-execution
+
 use crate::{
-    normalizer::Normalizer,
     confidence_scorer::ConfidenceScorer,
-    storage::StorageService,
-    strategies::{StrategyRegistry, MarketBundle, FilterContext, RawSignal, Ticker, FundingRate},
-    types::{ExchangeId, OrderBook, Signal, Symbol},
     config::Config,
+    execution_preparer::ExecutionPreparer,
+    normalizer::Normalizer,
+    size_calculator::SizeCalculator,
+    storage::{SignalStatus, StorageService},
+    strategies::{FilterContext, FundingRate, MarketBundle, RawSignal, StrategyRegistry, Ticker},
+    types::{ExchangeId, OrderBook, Signal, Symbol},
     ArbitrageError, Result,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -13,52 +33,109 @@ use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, warn, info};
+use tracing::{debug, info, warn};
+use uuid::Uuid;
 
-/// Key for identifying unique arbitrage opportunities
+// ============================================================================
+// Types
+// ============================================================================
+
+/// Execution mode for the engine
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    /// Manual mode: signals are emitted for user review
+    Manual,
+    /// Auto mode: signals above threshold are auto-executed
+    Auto { confidence_threshold: Decimal },
+}
+
+impl Default for ExecutionMode {
+    fn default() -> Self {
+        Self::Manual
+    }
+}
+
+/// Key for identifying unique arbitrage opportunities (for deduplication)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OpportunityKey {
     pub symbol: Symbol,
     pub buy_exchange: ExchangeId,
     pub sell_exchange: ExchangeId,
+    pub strategy_id: String,
 }
 
-/// Cached signal for deduplication
+/// Cached signal entry for deduplication
 #[derive(Debug, Clone)]
 struct CachedSignal {
     signal: Signal,
     last_updated: DateTime<Utc>,
+    profit_bps: i32,
 }
 
-/// Core arbitrage computation engine with strategy integration
+/// Engine statistics for monitoring
+#[derive(Debug, Clone, Default)]
+pub struct EngineStats {
+    pub order_books_count: usize,
+    pub tickers_count: usize,
+    pub funding_rates_count: usize,
+    pub cached_signals_count: usize,
+    pub active_symbols_count: usize,
+    pub signals_detected: u64,
+    pub signals_filtered: u64,
+    pub signals_emitted: u64,
+    pub last_detection_time: Option<DateTime<Utc>>,
+}
+
+// ============================================================================
+// Arbitrage Engine
+// ============================================================================
+
+/// Core arbitrage computation and orchestration engine
+/// 
+/// The engine is responsible for:
+/// 1. Caching market data (order books, tickers, funding rates)
+/// 2. Running strategy detection when market data updates
+/// 3. Processing raw signals through the validation pipeline
+/// 4. Emitting validated signals for execution or display
 pub struct ArbitrageEngine {
-    /// Order book cache: (exchange, symbol) -> OrderBook
+    // Market data caches (concurrent-safe)
     order_books: Arc<DashMap<(ExchangeId, Symbol), OrderBook>>,
-    /// Ticker cache: (exchange, symbol) -> Ticker
     tickers: Arc<DashMap<(ExchangeId, Symbol), Ticker>>,
-    /// Funding rate cache: (exchange, symbol) -> FundingRate
     funding_rates: Arc<DashMap<(ExchangeId, Symbol), FundingRate>>,
-    /// Recent signals for deduplication
+    
+    // Signal deduplication cache
     signal_cache: Arc<DashMap<OpportunityKey, CachedSignal>>,
-    /// Signal broadcaster
+    
+    // Signal broadcasting
     signal_sender: broadcast::Sender<Signal>,
-    /// Normalizer for symbol/fee handling
+    
+    // Core modules
     normalizer: Arc<Normalizer>,
-    /// Confidence scorer for signal validation
     confidence_scorer: Arc<ConfidenceScorer>,
-    /// Storage service for persistence
+    size_calculator: Arc<SizeCalculator>,
+    execution_preparer: Arc<ExecutionPreparer>,
     storage: Arc<StorageService>,
-    /// Configuration
+    
+    // Configuration
     config: Config,
-    /// Profit change threshold for deduplication
-    profit_change_threshold: Decimal,
+    execution_mode: ExecutionMode,
+    
+    // Deduplication settings
+    profit_change_threshold_bps: i32,
+    signal_ttl: Duration,
+    
+    // Statistics
+    stats: Arc<DashMap<&'static str, u64>>,
 }
 
 impl ArbitrageEngine {
+    /// Create a new arbitrage engine with all required modules
     pub fn new(
         config: Config,
         normalizer: Arc<Normalizer>,
         confidence_scorer: Arc<ConfidenceScorer>,
+        size_calculator: Arc<SizeCalculator>,
+        execution_preparer: Arc<ExecutionPreparer>,
         storage: Arc<StorageService>,
     ) -> Result<(Self, broadcast::Receiver<Signal>)> {
         let (signal_sender, signal_receiver) = broadcast::channel(1000);
@@ -71,80 +148,134 @@ impl ArbitrageEngine {
             signal_sender,
             normalizer,
             confidence_scorer,
+            size_calculator,
+            execution_preparer,
             storage,
             config,
-            profit_change_threshold: Decimal::new(5, 2), // 5% = 0.05
+            execution_mode: ExecutionMode::default(),
+            profit_change_threshold_bps: 5, // 0.05% change triggers new signal
+            signal_ttl: Duration::seconds(300), // 5 minute TTL
+            stats: Arc::new(DashMap::new()),
         };
-
+        
         Ok((engine, signal_receiver))
     }
+    
+    /// Subscribe to signal broadcasts
+    pub fn subscribe(&self) -> broadcast::Receiver<Signal> {
+        self.signal_sender.subscribe()
+    }
+    
+    /// Set execution mode (Manual or Auto)
+    pub fn set_execution_mode(&mut self, mode: ExecutionMode) {
+        self.execution_mode = mode;
+        info!("Execution mode set to {:?}", mode);
+    }
+    
+    /// Get current execution mode
+    pub fn get_execution_mode(&self) -> ExecutionMode {
+        self.execution_mode
+    }
 
-    /// Update order book and trigger strategy-based arbitrage computation
+    // ========================================================================
+    // Market Data Updates
+    // ========================================================================
+    
+    /// Update order book cache
     pub async fn update_order_book(&self, order_book: OrderBook) -> Result<()> {
         let key = (order_book.exchange, order_book.symbol.clone());
         
         debug!(
-            "Updating order book for {} on {} with {} bids, {} asks",
-            order_book.symbol,
-            order_book.exchange,
-            order_book.bids.len(),
-            order_book.asks.len()
+            "Updating order book: {} on {} ({} bids, {} asks)",
+            order_book.symbol, order_book.exchange,
+            order_book.bids.len(), order_book.asks.len()
         );
-
-        // Store the order book
-        self.order_books.insert(key, order_book.clone());
-
+        
+        // Validate order book before caching
+        if !order_book.is_valid() {
+            return Err(ArbitrageError::Validation(
+                format!("Invalid order book for {} on {}", order_book.symbol, order_book.exchange)
+            ));
+        }
+        
+        self.order_books.insert(key, order_book);
+        self.increment_stat("order_book_updates");
+        
         Ok(())
     }
-
-    /// Update ticker data
+    
+    /// Update ticker cache
     pub async fn update_ticker(&self, ticker: Ticker) -> Result<()> {
         let key = (ticker.exchange, ticker.symbol.clone());
         
         debug!(
-            "Updating ticker for {} on {} - price: {}",
-            ticker.symbol,
-            ticker.exchange,
-            ticker.last
+            "Updating ticker: {} on {} (bid={}, ask={})",
+            ticker.symbol, ticker.exchange, ticker.bid, ticker.ask
         );
-
+        
         self.tickers.insert(key, ticker);
+        self.increment_stat("ticker_updates");
+        
         Ok(())
     }
-
-    /// Update funding rate data
+    
+    /// Update funding rate cache
     pub async fn update_funding_rate(&self, funding_rate: FundingRate) -> Result<()> {
         let key = (funding_rate.exchange, funding_rate.symbol.clone());
         
         debug!(
-            "Updating funding rate for {} on {} - rate: {}",
-            funding_rate.symbol,
-            funding_rate.exchange,
-            funding_rate.rate
+            "Updating funding rate: {} on {} (rate={})",
+            funding_rate.symbol, funding_rate.exchange, funding_rate.rate
         );
-
+        
         self.funding_rates.insert(key, funding_rate);
+        self.increment_stat("funding_rate_updates");
+        
         Ok(())
     }
 
+    // ========================================================================
+    // Strategy Detection Pipeline
+    // ========================================================================
+    
     /// Run strategy detection across all registered strategies
-    pub async fn detect_opportunities(&self, registry: &StrategyRegistry) -> Result<Vec<Signal>> {
-        let market_bundle = self.create_market_bundle()?;
-        let filter_context = self.create_filter_context()?;
+    /// 
+    /// This is the main entry point for the detection pipeline:
+    /// 1. Build market bundle from cached data
+    /// 2. Run each enabled strategy's detect() method
+    /// 3. Process each raw signal through the validation pipeline
+    /// 4. Emit validated signals
+    pub async fn detect_opportunities(
+        &self,
+        registry: &StrategyRegistry,
+    ) -> Result<Vec<Signal>> {
+        let start_time = std::time::Instant::now();
         
-        let mut all_signals = Vec::new();
+        // Build market bundle from cached data
+        let market_bundle = self.build_market_bundle();
+        let filter_context = self.build_filter_context()?;
         
-        // Get all enabled strategies
+        debug!(
+            "Running detection with {} order books, {} tickers, {} funding rates",
+            market_bundle.order_books.len(),
+            market_bundle.tickers.len(),
+            market_bundle.funding_rates.len()
+        );
+        
+        // Skip if no market data
+        if market_bundle.order_books.is_empty() && market_bundle.tickers.is_empty() {
+            debug!("No market data available, skipping detection");
+            return Ok(Vec::new());
+        }
+        
+        let mut validated_signals = Vec::new();
         let strategies = registry.get_enabled();
-        
-        info!("Running {} strategies for opportunity detection", strategies.len());
         
         for strategy in strategies {
             let strategy_id = strategy.id();
-            debug!("Running strategy: {}", strategy_id);
             
-            // Detect raw signals
-            let raw_signals: Vec<RawSignal> = match strategy.detect(&market_bundle) {
+            // Run strategy detection
+            let raw_signals = match strategy.detect(&market_bundle) {
                 Ok(signals) => signals,
                 Err(e) => {
                     warn!("Strategy {} detection failed: {}", strategy_id, e);
@@ -153,277 +284,414 @@ impl ArbitrageEngine {
             };
             
             debug!("Strategy {} detected {} raw signals", strategy_id, raw_signals.len());
-            println!("Strategy {} detected {} raw signals", strategy_id, raw_signals.len());
+            self.increment_stat("signals_detected");
             
-            // Filter and convert signals
-            for (i, raw_signal) in raw_signals.into_iter().enumerate() {
-                println!("Processing raw signal {}: {:?}", i, raw_signal.strategy_id);
-                
-                // Apply strategy-specific filtering
-                let is_valid = match strategy.filter(&raw_signal, &filter_context) {
-                    Ok(valid) => {
-                        println!("Signal {} filter result: {}", i, valid);
-                        valid
-                    },
-                    Err(e) => {
-                        println!("Signal {} filtering failed: {}", i, e);
-                        warn!("Strategy {} filtering failed: {}", strategy_id, e);
-                        continue;
+            // Process each raw signal through the pipeline
+            for raw_signal in raw_signals {
+                match self.process_signal_pipeline(
+                    raw_signal,
+                    &filter_context,
+                    &market_bundle,
+                    strategy.as_ref(),
+                ).await {
+                    Ok(Some(signal)) => {
+                        validated_signals.push(signal);
                     }
-                };
-                
-                if !is_valid {
-                    println!("Signal {} filtered out by strategy {}", i, strategy_id);
-                    debug!("Signal filtered out by strategy {}", strategy_id);
-                    continue;
-                }
-                
-                println!("Signal {} passed filtering, converting to Signal", i);
-                
-                // Convert RawSignal to Signal
-                let signal = match self.convert_raw_signal_to_signal(raw_signal).await {
-                    Ok(s) => {
-                        println!("Signal {} converted successfully", i);
-                        s
-                    },
-                    Err(e) => {
-                        println!("Signal {} conversion failed: {}", i, e);
-                        continue;
+                    Ok(None) => {
+                        // Signal was filtered out
+                        self.increment_stat("signals_filtered");
                     }
-                };
-                
-                // Apply deduplication
-                let should_emit = match self.should_emit_signal(&signal).await {
-                    Ok(emit) => {
-                        println!("Signal {} deduplication result: {}", i, emit);
-                        emit
-                    },
                     Err(e) => {
-                        println!("Signal {} deduplication failed: {}", i, e);
-                        continue;
+                        warn!("Signal processing failed: {}", e);
                     }
-                };
-                
-                if should_emit {
-                    println!("Signal {} added to final results", i);
-                    all_signals.push(signal);
-                } else {
-                    println!("Signal {} filtered out by deduplication", i);
                 }
             }
         }
         
-        info!("Total signals after filtering and deduplication: {}", all_signals.len());
+        let elapsed = start_time.elapsed();
+        debug!(
+            "Detection completed in {:?}: {} signals validated",
+            elapsed, validated_signals.len()
+        );
         
-        // Store signals in database (without await since store_signal is not async)
-        for signal in &all_signals {
-            if let Err(e) = self.storage.store_signal(
-                signal.clone(),
-                Decimal::from(75), // Default confidence score
-                crate::storage::SignalStatus::Detected,
+        Ok(validated_signals)
+    }
+    
+    /// Process a raw signal through the complete validation pipeline
+    /// 
+    /// Pipeline stages:
+    /// 1. Strategy filtering (strategy-specific rules)
+    /// 2. Deduplication check
+    /// 3. Fee calculation (net profit after fees)
+    /// 4. Risk validation (exposure limits, inventory)
+    /// 5. Size calculation (order book depth analysis)
+    /// 6. Confidence scoring (multi-factor scoring)
+    /// 7. Threshold check (min profit, min confidence)
+    /// 8. Storage and emission
+    async fn process_signal_pipeline(
+        &self,
+        raw_signal: RawSignal,
+        filter_context: &FilterContext,
+        market_bundle: &MarketBundle,
+        strategy: &dyn crate::strategies::Strategy,
+    ) -> Result<Option<Signal>> {
+        // Stage 1: Strategy-specific filtering
+        if !strategy.filter(&raw_signal, filter_context)? {
+            debug!("Signal filtered by strategy {}", raw_signal.strategy_id);
+            return Ok(None);
+        }
+        
+        // Extract buy/sell legs
+        let (buy_leg, sell_leg) = self.extract_legs(&raw_signal)?;
+        
+        // Stage 2: Deduplication check
+        let opportunity_key = OpportunityKey {
+            symbol: raw_signal.symbol.clone(),
+            buy_exchange: buy_leg.exchange,
+            sell_exchange: sell_leg.exchange,
+            strategy_id: raw_signal.strategy_id.clone(),
+        };
+        
+        if !self.should_emit_signal(&opportunity_key, raw_signal.expected_profit_bps) {
+            debug!("Signal deduplicated for {:?}", opportunity_key);
+            return Ok(None);
+        }
+        
+        // Stage 3: Fee calculation
+        let net_spread_bps = self.confidence_scorer.calculate_net_spread_bps(
+            buy_leg.price,
+            sell_leg.price,
+            buy_leg.exchange,
+            sell_leg.exchange,
+        )?;
+        
+        if net_spread_bps < 0 {
+            debug!("Signal unprofitable after fees: {} bps", net_spread_bps);
+            return Ok(None);
+        }
+        
+        // Stage 4: Risk validation
+        if !self.validate_risk(&raw_signal, filter_context)? {
+            debug!("Signal failed risk validation");
+            return Ok(None);
+        }
+        
+        // Stage 5: Build initial signal for size calculation
+        let mut signal = self.build_signal(&raw_signal, &buy_leg, &sell_leg, net_spread_bps)?;
+        
+        // Stage 6: Size calculation (requires order books)
+        let buy_book = market_bundle.get_order_book(buy_leg.exchange, &raw_signal.symbol);
+        let sell_book = market_bundle.get_order_book(sell_leg.exchange, &raw_signal.symbol);
+        
+        if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
+            match self.size_calculator.calculate_size(&signal, buy_ob, sell_ob) {
+                Ok(size_rec) => {
+                    signal.recommended_size = size_rec.recommended_size;
+                    signal.max_size = size_rec.max_size;
+                    signal.expected_slippage = size_rec.expected_slippage;
+                }
+                Err(e) => {
+                    debug!("Size calculation failed: {}", e);
+                    // Continue with zero size - signal still valid for display
+                }
+            }
+        }
+        
+        // Stage 7: Confidence scoring
+        if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
+            let target_qty = signal.recommended_size.max(Decimal::new(1, 2)); // Min 0.01
+            
+            if let (Some(buy_vwap), Some(sell_vwap)) = (
+                buy_ob.vwap_buy(target_qty),
+                sell_ob.vwap_sell(target_qty),
             ) {
-                warn!("Failed to store signal {}: {}", signal.id, e);
+                let factors = self.confidence_scorer.calculate_confidence_factors(
+                    &buy_vwap, &sell_vwap, buy_ob, sell_ob
+                );
+                signal.confidence = self.confidence_scorer.calculate_confidence(&factors);
             }
         }
         
-        // Broadcast signals
-        for signal in &all_signals {
-            if let Err(e) = self.signal_sender.send(signal.clone()) {
-                warn!("Failed to broadcast signal {}: {}", signal.id, e);
-            }
+        // Stage 8: Threshold check
+        let min_profit_bps = (self.config.trading.min_profit_threshold_percent * Decimal::from(10000))
+            .to_i32()
+            .unwrap_or(10);
+        let min_confidence = self.config.trading.min_confidence_threshold;
+        
+        if net_spread_bps < min_profit_bps {
+            debug!(
+                "Signal below profit threshold: {} < {} bps",
+                net_spread_bps, min_profit_bps
+            );
+            return Ok(None);
         }
         
-        Ok(all_signals)
+        if signal.confidence < min_confidence {
+            debug!(
+                "Signal below confidence threshold: {} < {}",
+                signal.confidence, min_confidence
+            );
+            return Ok(None);
+        }
+        
+        // Stage 9: Store signal
+        self.storage.store_signal(
+            signal.clone(),
+            signal.confidence,
+            SignalStatus::Detected,
+        )?;
+        
+        // Stage 10: Update deduplication cache
+        self.update_signal_cache(&opportunity_key, &signal, net_spread_bps);
+        
+        // Stage 11: Emit signal
+        self.emit_signal(&signal);
+        self.increment_stat("signals_emitted");
+        
+        info!(
+            "🎯 Signal emitted: {} {} → {} | profit={:.2}% | confidence={:.0}%",
+            signal.symbol,
+            signal.buy_exchange,
+            signal.sell_exchange,
+            signal.net_profit_percent * Decimal::from(100),
+            signal.confidence
+        );
+        
+        Ok(Some(signal))
     }
 
-    /// Create market bundle from current market data
-    fn create_market_bundle(&self) -> Result<MarketBundle> {
+    // ========================================================================
+    // Helper Methods
+    // ========================================================================
+    
+    /// Build market bundle from cached data
+    fn build_market_bundle(&self) -> MarketBundle {
         let mut bundle = MarketBundle::new();
         
-        // Add all order books
         for entry in self.order_books.iter() {
-            let order_book = entry.value().clone();
-            bundle.add_order_book(order_book);
+            bundle.add_order_book(entry.value().clone());
         }
         
-        // Add all tickers
         for entry in self.tickers.iter() {
-            let ticker: Ticker = entry.value().clone();
-            bundle.add_ticker(ticker);
+            bundle.add_ticker(entry.value().clone());
         }
         
-        // Add all funding rates
         for entry in self.funding_rates.iter() {
-            let funding_rate: FundingRate = entry.value().clone();
-            bundle.add_funding_rate(funding_rate);
+            bundle.add_funding_rate(entry.value().clone());
         }
         
-        debug!("Created market bundle with {} order books, {} tickers, {} funding rates",
-               self.order_books.len(), self.tickers.len(), self.funding_rates.len());
-        
-        Ok(bundle)
+        bundle
     }
-
-    /// Create filter context from configuration
-    fn create_filter_context(&self) -> Result<FilterContext> {
+    
+    /// Build filter context from configuration
+    fn build_filter_context(&self) -> Result<FilterContext> {
         let min_profit_bps = (self.config.trading.min_profit_threshold_percent * Decimal::from(10000))
             .to_i32()
             .ok_or_else(|| ArbitrageError::Calculation("Invalid min profit threshold".to_string()))?;
-            
-        let context = FilterContext::new(min_profit_bps);
+        
+        let mut context = FilterContext::new(min_profit_bps);
+        
+        // Set allowed exchanges from config
+        context.allowed_exchanges = vec![
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            ExchangeId::MEXC,
+            ExchangeId::GateIo,
+            ExchangeId::Kraken,
+            ExchangeId::Bitstamp,
+        ];
+        
+        // Set max exposure from risk config
+        context.max_exposure = self.config.risk.max_position_size_usd;
+        
+        // Set inventory limits from config
+        if self.config.inventory.enable_inventory_checks {
+            for exchange in &context.allowed_exchanges.clone() {
+                for (asset, limit) in &self.config.inventory.default_limits {
+                    context.set_inventory_limit(*exchange, asset.clone(), *limit);
+                }
+            }
+        }
         
         Ok(context)
     }
-
-    /// Convert RawSignal to Signal
-    async fn convert_raw_signal_to_signal(&self, raw_signal: RawSignal) -> Result<Signal> {
-        // For now, create a basic signal from the first two legs
-        if raw_signal.legs.len() < 2 {
-            return Err(ArbitrageError::Validation("Signal must have at least 2 legs".to_string()));
-        }
+    
+    /// Extract buy and sell legs from raw signal
+    fn extract_legs(&self, raw_signal: &RawSignal) -> Result<(crate::strategies::TradeLeg, crate::strategies::TradeLeg)> {
+        let buy_leg = raw_signal.legs.iter()
+            .find(|leg| leg.side == crate::types::Side::Buy)
+            .ok_or_else(|| ArbitrageError::Validation("No buy leg in signal".to_string()))?
+            .clone();
         
-        let buy_leg = &raw_signal.legs[0];
-        let sell_leg = &raw_signal.legs[1];
+        let sell_leg = raw_signal.legs.iter()
+            .find(|leg| leg.side == crate::types::Side::Sell)
+            .ok_or_else(|| ArbitrageError::Validation("No sell leg in signal".to_string()))?
+            .clone();
         
-        let signal = Signal::new(
-            raw_signal.symbol,
+        Ok((buy_leg, sell_leg))
+    }
+    
+    /// Build Signal from RawSignal and calculated values
+    fn build_signal(
+        &self,
+        raw_signal: &RawSignal,
+        buy_leg: &crate::strategies::TradeLeg,
+        sell_leg: &crate::strategies::TradeLeg,
+        net_spread_bps: i32,
+    ) -> Result<Signal> {
+        let gross_profit_percent = if !buy_leg.price.is_zero() {
+            (sell_leg.price - buy_leg.price) / buy_leg.price
+        } else {
+            Decimal::ZERO
+        };
+        
+        let net_profit_percent = Decimal::from(net_spread_bps) / Decimal::from(10000);
+        
+        let mut signal = Signal::new(
+            raw_signal.symbol.clone(),
             buy_leg.exchange,
             sell_leg.exchange,
             buy_leg.price,
             sell_leg.price,
         );
         
+        signal.gross_profit_percent = gross_profit_percent;
+        signal.net_profit_percent = net_profit_percent;
+        signal.metadata.insert(
+            "strategy_id".to_string(),
+            serde_json::Value::String(raw_signal.strategy_id.clone()),
+        );
+        
+        // Set expiry based on config
+        signal.expires_at = Utc::now() + Duration::seconds(
+            self.config.trading.max_signal_age_seconds as i64
+        );
+        
         Ok(signal)
     }
-
-    /// Check if signal should be emitted (deduplication logic)
-    async fn should_emit_signal(&self, signal: &Signal) -> Result<bool> {
-        let opportunity_key = OpportunityKey {
-            symbol: signal.symbol.clone(),
-            buy_exchange: signal.buy_exchange,
-            sell_exchange: signal.sell_exchange,
-        };
-
-        let now = Utc::now();
-        let should_emit = if let Some(cached) = self.signal_cache.get(&opportunity_key) {
-            let time_since_last = now - cached.last_updated;
-            let profit_change = (signal.net_profit_percent - cached.signal.net_profit_percent).abs();
-
-            // Emit if outside deduplication window or significant profit change
-            time_since_last.num_milliseconds() > self.config.trading.signal_deduplication_window_ms as i64 ||
-            profit_change > self.profit_change_threshold
-        } else {
-            true // First time seeing this opportunity
-        };
-
-        if should_emit {
-            // Update cache
-            self.signal_cache.insert(opportunity_key, CachedSignal {
-                signal: signal.clone(),
-                last_updated: now,
-            });
-        }
-
-        Ok(should_emit)
-    }
-
-    /// Get current order book for exchange/symbol
-    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<OrderBook> {
-        self.order_books.get(&(exchange, symbol.clone())).map(|entry| entry.clone())
-    }
-
-    /// Get current ticker for exchange/symbol
-    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Ticker> {
-        self.tickers.get(&(exchange, symbol.clone())).map(|entry| entry.value().clone())
-    }
-
-    /// Get current funding rate for exchange/symbol
-    pub fn get_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<FundingRate> {
-        self.funding_rates.get(&(exchange, symbol.clone())).map(|entry| entry.value().clone())
-    }
-
-    /// Get all active order books
-    pub fn get_all_order_books(&self) -> Vec<OrderBook> {
-        self.order_books.iter().map(|entry| entry.value().clone()).collect()
-    }
-
-    /// Get all active tickers
-    pub fn get_all_tickers(&self) -> Vec<Ticker> {
-        self.tickers.iter().map(|entry| entry.value().clone()).collect()
-    }
-
-    /// Get all active funding rates
-    pub fn get_all_funding_rates(&self) -> Vec<FundingRate> {
-        self.funding_rates.iter().map(|entry| entry.value().clone()).collect()
-    }
-
-    /// Clean up expired signals from cache
-    pub async fn cleanup_expired_signals(&self) {
-        let now = Utc::now();
-        let cleanup_threshold = Duration::milliseconds(self.config.trading.signal_deduplication_window_ms as i64 * 2);
-
-        self.signal_cache.retain(|_, cached| {
-            now - cached.last_updated < cleanup_threshold
-        });
-
-        debug!("Cleaned up expired signals, cache size: {}", self.signal_cache.len());
-    }
-
-    /// Get signal receiver for subscribing to signals
-    pub fn subscribe(&self) -> broadcast::Receiver<Signal> {
-        self.signal_sender.subscribe()
-    }
-
-    /// Get current cache statistics with enhanced metrics
-    pub fn get_stats(&self) -> ArbitrageEngineStats {
-        let now = Utc::now();
-        let stale_threshold = Duration::milliseconds(self.config.trading.stale_orderbook_threshold_ms as i64);
-        
-        // Count stale order books
-        let mut stale_books_count = 0;
-        let mut fresh_books_count = 0;
-        
-        for entry in self.order_books.iter() {
-            let (_, order_book) = entry.pair();
-            if now - order_book.timestamp > stale_threshold {
-                stale_books_count += 1;
-            } else {
-                fresh_books_count += 1;
+    
+    /// Validate risk constraints
+    fn validate_risk(&self, raw_signal: &RawSignal, context: &FilterContext) -> Result<bool> {
+        // Check exchange allowlist
+        for leg in &raw_signal.legs {
+            if !context.is_exchange_allowed(leg.exchange) {
+                return Ok(false);
             }
         }
         
-        // Count active symbols
-        let mut active_symbols = std::collections::HashSet::new();
-        for entry in self.order_books.iter() {
-            let ((_, symbol), _) = entry.pair();
-            active_symbols.insert(symbol.clone());
+        // Check notional value
+        let total_notional = raw_signal.total_notional();
+        if total_notional > context.max_exposure {
+            return Ok(false);
         }
         
-        ArbitrageEngineStats {
+        if total_notional < context.min_notional_usd {
+            return Ok(false);
+        }
+        
+        Ok(true)
+    }
+    
+    /// Check if signal should be emitted (deduplication)
+    fn should_emit_signal(&self, key: &OpportunityKey, profit_bps: i32) -> bool {
+        if let Some(cached) = self.signal_cache.get(key) {
+            // Check if signal has expired
+            if Utc::now() - cached.last_updated > self.signal_ttl {
+                return true;
+            }
+            
+            // Check if profit changed significantly
+            let profit_change = (profit_bps - cached.profit_bps).abs();
+            if profit_change < self.profit_change_threshold_bps {
+                return false;
+            }
+        }
+        
+        true
+    }
+    
+    /// Update signal cache for deduplication
+    fn update_signal_cache(&self, key: &OpportunityKey, signal: &Signal, profit_bps: i32) {
+        self.signal_cache.insert(key.clone(), CachedSignal {
+            signal: signal.clone(),
+            last_updated: Utc::now(),
+            profit_bps,
+        });
+    }
+    
+    /// Emit signal to subscribers
+    fn emit_signal(&self, signal: &Signal) {
+        // Broadcast to all subscribers (ignore send errors - no receivers is OK)
+        let _ = self.signal_sender.send(signal.clone());
+    }
+    
+    /// Increment a statistics counter
+    fn increment_stat(&self, key: &'static str) {
+        self.stats.entry(key).and_modify(|v| *v += 1).or_insert(1);
+    }
+    
+    /// Get engine statistics
+    pub fn get_stats(&self) -> EngineStats {
+        let mut unique_symbols = std::collections::HashSet::new();
+        for entry in self.order_books.iter() {
+            unique_symbols.insert(entry.key().1.clone());
+        }
+        
+        EngineStats {
             order_books_count: self.order_books.len(),
             tickers_count: self.tickers.len(),
             funding_rates_count: self.funding_rates.len(),
             cached_signals_count: self.signal_cache.len(),
-            min_profit_threshold: self.config.trading.min_profit_threshold_percent,
-            stale_books_count,
-            fresh_books_count,
-            active_symbols_count: active_symbols.len(),
-            dedup_window_ms: self.config.trading.signal_deduplication_window_ms,
-            stale_threshold_ms: self.config.trading.stale_orderbook_threshold_ms,
+            active_symbols_count: unique_symbols.len(),
+            signals_detected: self.stats.get("signals_detected").map(|v| *v).unwrap_or(0),
+            signals_filtered: self.stats.get("signals_filtered").map(|v| *v).unwrap_or(0),
+            signals_emitted: self.stats.get("signals_emitted").map(|v| *v).unwrap_or(0),
+            last_detection_time: Some(Utc::now()),
         }
+    }
+    
+    /// Clear stale data from caches
+    pub fn cleanup_stale_data(&self) {
+        let now = Utc::now();
+        let stale_threshold = Duration::milliseconds(
+            self.config.trading.stale_orderbook_threshold_ms as i64
+        );
+        
+        // Clean stale order books
+        self.order_books.retain(|_, ob| {
+            now - ob.timestamp < stale_threshold
+        });
+        
+        // Clean stale tickers
+        self.tickers.retain(|_, ticker| {
+            now - ticker.timestamp < stale_threshold
+        });
+        
+        // Clean expired signals from cache
+        self.signal_cache.retain(|_, cached| {
+            now - cached.last_updated < self.signal_ttl
+        });
+    }
+    
+    /// Get order book from cache
+    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<OrderBook> {
+        self.order_books.get(&(exchange, symbol.clone())).map(|v| v.clone())
+    }
+    
+    /// Get all cached order books
+    pub fn get_all_order_books(&self) -> Vec<OrderBook> {
+        self.order_books.iter().map(|entry| entry.value().clone()).collect()
+    }
+    
+    /// Get ticker from cache
+    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Ticker> {
+        self.tickers.get(&(exchange, symbol.clone())).map(|v| v.clone())
+    }
+    
+    /// Get funding rate from cache
+    pub fn get_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<FundingRate> {
+        self.funding_rates.get(&(exchange, symbol.clone())).map(|v| v.clone())
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ArbitrageEngineStats {
-    pub order_books_count: usize,
-    pub tickers_count: usize,
-    pub funding_rates_count: usize,
-    pub cached_signals_count: usize,
-    pub min_profit_threshold: Decimal,
-    pub stale_books_count: usize,
-    pub fresh_books_count: usize,
-    pub active_symbols_count: usize,
-    pub dedup_window_ms: u64,
-    pub stale_threshold_ms: u64,
-}
+

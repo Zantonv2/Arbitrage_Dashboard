@@ -160,6 +160,23 @@ pub trait ExchangeConnector: Send + Sync {
     
     /// Force reconnection
     async fn force_reconnect(&mut self) -> Result<()>;
+    
+    // === Trading Methods (Phase 4) ===
+    
+    /// Place a new order
+    async fn place_order(&self, order: &OrderRequest) -> Result<OrderResponse>;
+    
+    /// Cancel an existing order
+    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse>;
+    
+    /// Get order status
+    async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus>;
+    
+    /// Get account balance
+    async fn get_balance(&self) -> Result<Balance>;
+    
+    /// Get open orders
+    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>>;
 }
 
 /// Ticker data from exchange
@@ -227,4 +244,112 @@ impl Default for ConnectorStats {
             last_update: chrono::Utc::now(),
         }
     }
+}
+
+/// Order request for placing trades
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderRequest {
+    pub symbol: Symbol,
+    pub side: OrderSide,
+    pub order_type: OrderType,
+    pub quantity: rust_decimal::Decimal,
+    pub price: Option<rust_decimal::Decimal>,
+    pub time_in_force: TimeInForce,
+    pub client_order_id: Option<String>,
+}
+
+/// Order side (buy/sell)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OrderSide {
+    Buy,
+    Sell,
+}
+
+/// Order type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OrderType {
+    Market,
+    Limit,
+    StopLoss,
+    StopLossLimit,
+    TakeProfit,
+    TakeProfitLimit,
+}
+
+/// Time in force for orders
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TimeInForce {
+    GTC, // Good Till Cancelled
+    IOC, // Immediate Or Cancel
+    FOK, // Fill Or Kill
+    GTD, // Good Till Date
+}
+
+/// Order response after placement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderResponse {
+    pub order_id: String,
+    pub client_order_id: Option<String>,
+    pub symbol: Symbol,
+    pub side: OrderSide,
+    pub order_type: OrderType,
+    pub quantity: rust_decimal::Decimal,
+    pub price: Option<rust_decimal::Decimal>,
+    pub status: OrderStatusType,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Order cancellation response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelResponse {
+    pub order_id: String,
+    pub client_order_id: Option<String>,
+    pub status: OrderStatusType,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Order status information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderStatus {
+    pub order_id: String,
+    pub client_order_id: Option<String>,
+    pub symbol: Symbol,
+    pub side: OrderSide,
+    pub order_type: OrderType,
+    pub quantity: rust_decimal::Decimal,
+    pub price: Option<rust_decimal::Decimal>,
+    pub filled_quantity: rust_decimal::Decimal,
+    pub remaining_quantity: rust_decimal::Decimal,
+    pub average_price: Option<rust_decimal::Decimal>,
+    pub status: OrderStatusType,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Order status types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OrderStatusType {
+    New,
+    PartiallyFilled,
+    Filled,
+    Cancelled,
+    Rejected,
+    Expired,
+}
+
+/// Account balance information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Balance {
+    pub exchange: ExchangeId,
+    pub balances: HashMap<String, AssetBalance>,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Individual asset balance
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetBalance {
+    pub asset: String,
+    pub free: rust_decimal::Decimal,
+    pub locked: rust_decimal::Decimal,
+    pub total: rust_decimal::Decimal,
 }

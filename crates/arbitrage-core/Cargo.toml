@@ -23,6 +23,7 @@ tracing = { workspace = true }
 statrs = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+sqlx = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

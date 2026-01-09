@@ -90,10 +90,29 @@ impl MarketBundle {
     
     /// Get all unique symbols in the market bundle
     pub fn get_all_symbols(&self) -> Vec<Symbol> {
-        let mut symbols: Vec<Symbol> = self.order_books
-            .keys()
-            .map(|(_, symbol)| symbol.clone())
-            .collect();
+        let mut symbols: Vec<Symbol> = Vec::new();
+        
+        // Get symbols from order books
+        symbols.extend(
+            self.order_books
+                .keys()
+                .map(|(_, symbol)| symbol.clone())
+        );
+        
+        // Get symbols from tickers
+        symbols.extend(
+            self.tickers
+                .keys()
+                .map(|(_, symbol)| symbol.clone())
+        );
+        
+        // Get symbols from funding rates
+        symbols.extend(
+            self.funding_rates
+                .keys()
+                .map(|(_, symbol)| symbol.clone())
+        );
+        
         symbols.sort_by(|a, b| a.to_pair().cmp(&b.to_pair()));
         symbols.dedup();
         symbols
@@ -298,10 +317,12 @@ impl FilterContext {
     }
     
     pub fn can_sell(&self, exchange: ExchangeId, asset: &str, quantity: Decimal) -> bool {
+        let key = (exchange, asset.to_string());
         let available = self.inventory_limits
-            .get(&(exchange, asset.to_string()))
+            .get(&key)
             .copied()
             .unwrap_or_else(|| Decimal::ZERO);
+        
         available >= quantity
     }
     
