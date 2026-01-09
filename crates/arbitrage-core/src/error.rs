@@ -19,6 +19,9 @@ pub enum ArbitrageError {
     #[error("Storage error: {0}")]
     Storage(String),
     
+    #[error("Execution error: {0}")]
+    Execution(String),
+    
     #[error("Configuration error: {0}")]
     Config(String),
     

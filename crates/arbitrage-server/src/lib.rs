@@ -5,5 +5,6 @@ pub mod config_manager;
 pub mod key_store;
 pub mod audit_logger;
 pub mod bridge;
+pub mod order_executor;
 
 pub use server::ArbitrageServer;

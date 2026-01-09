@@ -59,7 +59,7 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
                     info!("Client {} disconnected", client_id);
                     break;
                 }
-                Ok(Message::Ping(data)) => {
+                Ok(Message::Ping(_data)) => {
                     debug!("Received ping from client {}", client_id);
                     // Pong will be sent automatically by axum
                 }
@@ -151,7 +151,7 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
 /// Handle incoming message from client
 async fn handle_client_message(
     message: &str,
-    state: &AppState,
+    _state: &AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parsed: serde_json::Value = serde_json::from_str(message)?;
     

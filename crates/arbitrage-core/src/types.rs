@@ -48,11 +48,43 @@ impl std::fmt::Display for ExchangeId {
     }
 }
 
+impl std::str::FromStr for ExchangeId {
+    type Err = crate::ArbitrageError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "okx" => Ok(ExchangeId::OKX),
+            "bybit" => Ok(ExchangeId::ByBit),
+            "mexc" => Ok(ExchangeId::MEXC),
+            "gateio" | "gate.io" => Ok(ExchangeId::GateIo),
+            "bitstamp" => Ok(ExchangeId::Bitstamp),
+            "kraken" => Ok(ExchangeId::Kraken),
+            "htx" => Ok(ExchangeId::HTX),
+            "bingx" => Ok(ExchangeId::BingX),
+            "hyperliquid" => Ok(ExchangeId::Hyperliquid),
+            "kucoin" => Ok(ExchangeId::KuCoin),
+            "bitget" => Ok(ExchangeId::Bitget),
+            "binance" => Ok(ExchangeId::Binance),
+            "coinbase" => Ok(ExchangeId::Coinbase),
+            _ => Err(crate::ArbitrageError::Validation(format!("Unknown exchange: {}", s))),
+        }
+    }
+}
+
 /// Order side (buy or sell)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Side {
     Buy,
     Sell,
+}
+
+impl std::fmt::Display for Side {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Side::Buy => write!(f, "Buy"),
+            Side::Sell => write!(f, "Sell"),
+        }
+    }
 }
 
 /// Order type

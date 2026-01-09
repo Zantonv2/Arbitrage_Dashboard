@@ -24,5 +24,16 @@ pub use base::*;
 pub use registry::StrategyRegistry;
 pub use strategies_specifics::*;
 
-// Re-export strategies
-pub use strategies::CexArbitrageStrategy;
+// Re-export all strategies
+pub use strategies::{
+    CexArbitrageStrategy,
+    FundingRateArbitrageStrategy,
+    StablecoinArbitrageStrategy,
+    SpotPerpArbitrageStrategy,
+    CrossExchangeArbitrageStrategy,
+    NewListingArbitrageStrategy,
+    LatencyArbitrageStrategy,
+    SpreadCaptureStrategy,
+    ConvergenceArbitrageStrategy,
+    HedgedFundingStrategy,
+};

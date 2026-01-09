@@ -304,6 +304,44 @@ impl ExchangeConnector for OKXConnector {
         self.disconnect().await?;
         self.connect().await
     }
+
+    // === Trading Methods ===
+
+    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+        // TODO: Implement OKX order placement
+        // This is a stub for Phase 4 implementation
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for OKX".to_string()
+        ))
+    }
+
+    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
+        // TODO: Implement OKX order cancellation
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for OKX".to_string()
+        ))
+    }
+
+    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
+        // TODO: Implement OKX order status query
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for OKX".to_string()
+        ))
+    }
+
+    async fn get_balance(&self) -> Result<crate::connector::Balance> {
+        // TODO: Implement OKX balance query
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for OKX".to_string()
+        ))
+    }
+
+    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
+        // TODO: Implement OKX open orders query
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "Trading methods not yet implemented for OKX".to_string()
+        ))
+    }
 }
 
 

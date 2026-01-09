@@ -9,6 +9,7 @@ pub struct Config {
     pub exchanges: HashMap<ExchangeId, ExchangeConfig>,
     pub trading: TradingConfig,
     pub risk: RiskConfig,
+    pub inventory: InventoryConfig,
     pub notifications: NotificationConfig,
     pub storage: StorageConfig,
     pub logging: LoggingConfig,
@@ -21,6 +22,7 @@ impl Default for Config {
             exchanges: HashMap::new(),
             trading: TradingConfig::default(),
             risk: RiskConfig::default(),
+            inventory: InventoryConfig::default(),
             notifications: NotificationConfig::default(),
             storage: StorageConfig::default(),
             logging: LoggingConfig::default(),
@@ -126,6 +128,34 @@ impl Default for RiskConfig {
             min_order_size_usd: Decimal::from(10),
             max_order_size_usd: Decimal::from(50000),
             max_concurrent_signals: 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryConfig {
+    /// Default inventory limits per exchange and asset
+    pub default_limits: HashMap<String, Decimal>,
+    /// Exchange-specific inventory limits
+    pub exchange_limits: HashMap<ExchangeId, HashMap<String, Decimal>>,
+    /// Enable inventory-based filtering
+    pub enable_inventory_checks: bool,
+}
+
+impl Default for InventoryConfig {
+    fn default() -> Self {
+        let mut default_limits = HashMap::new();
+        // Set generous default limits for testing
+        default_limits.insert("BTC".to_string(), Decimal::from(100));
+        default_limits.insert("ETH".to_string(), Decimal::from(1000));
+        default_limits.insert("USDT".to_string(), Decimal::from(1000000));
+        default_limits.insert("USDC".to_string(), Decimal::from(1000000));
+        default_limits.insert("USD".to_string(), Decimal::from(1000000));
+        
+        Self {
+            default_limits,
+            exchange_limits: HashMap::new(),
+            enable_inventory_checks: true,
         }
     }
 }

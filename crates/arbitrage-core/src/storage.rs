@@ -3,9 +3,8 @@ use crate::{
     ArbitrageError, Result,
 };
 use rust_decimal::Decimal;
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use sqlx::{sqlite::SqlitePool, Row};
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Storage configuration
@@ -57,6 +56,29 @@ pub enum SignalStatus {
     Failed,
 }
 
+impl SignalStatus {
+    fn to_string(&self) -> &'static str {
+        match self {
+            SignalStatus::Detected => "detected",
+            SignalStatus::Filtered => "filtered",
+            SignalStatus::Executed => "executed",
+            SignalStatus::Expired => "expired",
+            SignalStatus::Failed => "failed",
+        }
+    }
+
+    fn from_string(s: &str) -> Result<Self> {
+        match s {
+            "detected" => Ok(SignalStatus::Detected),
+            "filtered" => Ok(SignalStatus::Filtered),
+            "executed" => Ok(SignalStatus::Executed),
+            "expired" => Ok(SignalStatus::Expired),
+            "failed" => Ok(SignalStatus::Failed),
+            _ => Err(ArbitrageError::Storage(format!("Invalid signal status: {}", s))),
+        }
+    }
+}
+
 /// Execution status
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExecutionStatus {
@@ -65,6 +87,29 @@ pub enum ExecutionStatus {
     Completed,
     Failed,
     Cancelled,
+}
+
+impl ExecutionStatus {
+    fn to_string(&self) -> &'static str {
+        match self {
+            ExecutionStatus::Pending => "pending",
+            ExecutionStatus::PartiallyFilled => "partially_filled",
+            ExecutionStatus::Completed => "completed",
+            ExecutionStatus::Failed => "failed",
+            ExecutionStatus::Cancelled => "cancelled",
+        }
+    }
+
+    fn from_string(s: &str) -> Result<Self> {
+        match s {
+            "pending" => Ok(ExecutionStatus::Pending),
+            "partially_filled" => Ok(ExecutionStatus::PartiallyFilled),
+            "completed" => Ok(ExecutionStatus::Completed),
+            "failed" => Ok(ExecutionStatus::Failed),
+            "cancelled" => Ok(ExecutionStatus::Cancelled),
+            _ => Err(ArbitrageError::Storage(format!("Invalid execution status: {}", s))),
+        }
+    }
 }
 
 /// Query parameters for retrieving signals
@@ -91,314 +136,515 @@ impl Default for SignalQuery {
     }
 }
 
-/// Storage service for persisting signals and executions
+/// Storage service for persisting signals and executions using SQLite
 pub struct StorageService {
     config: StorageConfig,
-    // In-memory storage for Phase 1 (SQLite implementation would go here in production)
-    signals: Arc<Mutex<HashMap<Uuid, StoredSignal>>>,
-    executions: Arc<Mutex<HashMap<Uuid, StoredExecution>>>,
-    signal_counter: Arc<Mutex<u64>>,
+    pool: SqlitePool,
 }
 
 impl StorageService {
     pub fn new(config: StorageConfig) -> Result<Self> {
-        // In Phase 1, we'll use in-memory storage
-        // In production, this would initialize SQLite connection
-        Ok(Self {
-            config,
-            signals: Arc::new(Mutex::new(HashMap::new())),
-            executions: Arc::new(Mutex::new(HashMap::new())),
-            signal_counter: Arc::new(Mutex::new(0)),
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            Self::new_async(config).await
         })
     }
 
-    /// Store a detected signal with deduplication check
+    pub async fn new_async(config: StorageConfig) -> Result<Self> {
+        let database_url = format!("sqlite:{}", config.database_path);
+        
+        let pool = SqlitePool::connect(&database_url).await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to connect to database: {}", e)))?;
+
+        let service = Self { config, pool };
+        service.initialize_database().await?;
+        
+        Ok(service)
+    }
+
+    /// Initialize database tables
+    pub async fn initialize_database(&self) -> Result<()> {
+        let mut tx = self.pool.begin().await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to begin transaction: {}", e)))?;
+
+        // Create signals table
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS signals (
+                id TEXT PRIMARY KEY,
+                symbol_base TEXT NOT NULL,
+                symbol_quote TEXT NOT NULL,
+                buy_exchange TEXT NOT NULL,
+                sell_exchange TEXT NOT NULL,
+                buy_price TEXT NOT NULL,
+                sell_price TEXT NOT NULL,
+                gross_profit_percent TEXT NOT NULL,
+                net_profit_percent TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                recommended_size TEXT NOT NULL,
+                max_size TEXT NOT NULL,
+                expected_slippage TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                confidence_score TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        "#)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ArbitrageError::Storage(format!("Failed to create signals table: {}", e)))?;
+
+        // Create executions table
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS executions (
+                signal_id TEXT PRIMARY KEY,
+                instruction_data TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                status TEXT NOT NULL,
+                actual_profit TEXT,
+                execution_time_ms INTEGER,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        "#)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ArbitrageError::Storage(format!("Failed to create executions table: {}", e)))?;
+
+        // Create indexes for better query performance
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp)")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to create timestamp index: {}", e)))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status)")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to create status index: {}", e)))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol_base, symbol_quote)")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to create symbol index: {}", e)))?;
+
+        tx.commit().await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to commit transaction: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Store a detected signal
     pub fn store_signal(
         &self,
         signal: Signal,
         confidence_score: Decimal,
         status: SignalStatus,
     ) -> Result<()> {
-        let stored_signal = StoredSignal {
-            signal: signal.clone(),
-            timestamp: chrono::Utc::now(),
-            confidence_score,
-            status: status.clone(),
-        };
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            self.store_signal_async(signal, confidence_score, status).await
+        })
+    }
 
-        let mut signals = self.signals.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire signals lock".to_string()))?;
-        
-        // Check for existing signal and log if overwriting
-        if let Some(existing) = signals.get(&signal.id) {
-            tracing::warn!(
-                signal_id = %signal.id,
-                old_status = ?existing.status,
-                new_status = ?status,
-                "Overwriting existing signal"
-            );
-        }
-        
-        signals.insert(signal.id, stored_signal);
+    /// Store a detected signal (async version)
+    pub async fn store_signal_async(
+        &self,
+        signal: Signal,
+        confidence_score: Decimal,
+        status: SignalStatus,
+    ) -> Result<()> {
+        let metadata_json = serde_json::to_string(&signal.metadata)
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to serialize metadata: {}", e)))?;
 
-        // Cleanup old signals if we exceed max history
-        if signals.len() > self.config.max_signal_history {
-            self.cleanup_old_signals(&mut signals)?;
-        }
+        sqlx::query(r#"
+            INSERT OR REPLACE INTO signals (
+                id, symbol_base, symbol_quote, buy_exchange, sell_exchange,
+                buy_price, sell_price, gross_profit_percent, net_profit_percent,
+                confidence, recommended_size, max_size, expected_slippage,
+                expires_at, metadata, timestamp, confidence_score, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#)
+        .bind(signal.id.to_string())
+        .bind(&signal.symbol.base)
+        .bind(&signal.symbol.quote)
+        .bind(signal.buy_exchange.to_string())
+        .bind(signal.sell_exchange.to_string())
+        .bind(signal.buy_price.to_string())
+        .bind(signal.sell_price.to_string())
+        .bind(signal.gross_profit_percent.to_string())
+        .bind(signal.net_profit_percent.to_string())
+        .bind(signal.confidence.to_string())
+        .bind(signal.recommended_size.to_string())
+        .bind(signal.max_size.to_string())
+        .bind(signal.expected_slippage.to_string())
+        .bind(signal.expires_at.to_rfc3339())
+        .bind(metadata_json)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(confidence_score.to_string())
+        .bind(status.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| ArbitrageError::Storage(format!("Failed to store signal: {}", e)))?;
 
-        tracing::debug!(
-            signal_id = %signal.id,
-            confidence = %confidence_score,
-            status = ?status,
-            total_signals = signals.len(),
-            "Signal stored successfully"
-        );
+        // Cleanup old signals if needed
+        self.cleanup_old_signals().await?;
 
         Ok(())
     }
 
     /// Store an execution instruction
-    pub fn store_execution(
+    pub async fn store_execution(
         &self,
         instruction: ExecutionInstruction,
         status: ExecutionStatus,
     ) -> Result<()> {
-        let stored_execution = StoredExecution {
-            instruction: instruction.clone(),
-            timestamp: chrono::Utc::now(),
-            status,
-            actual_profit: None,
-            execution_time_ms: None,
-        };
+        let instruction_json = serde_json::to_string(&instruction)
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to serialize instruction: {}", e)))?;
 
-        let mut executions = self.executions.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire executions lock".to_string()))?;
-        
-        executions.insert(instruction.signal_id, stored_execution);
+        sqlx::query(r#"
+            INSERT OR REPLACE INTO executions (
+                signal_id, instruction_data, timestamp, status, actual_profit, execution_time_ms
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        "#)
+        .bind(instruction.signal_id.to_string())
+        .bind(instruction_json)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(status.to_string())
+        .bind(None::<String>)
+        .bind(None::<i64>)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| ArbitrageError::Storage(format!("Failed to store execution: {}", e)))?;
 
-        // Cleanup old executions if we exceed max history
-        if executions.len() > self.config.max_execution_history {
-            self.cleanup_old_executions(&mut executions)?;
-        }
+        // Cleanup old executions if needed
+        self.cleanup_old_executions().await?;
 
         Ok(())
     }
 
     /// Update signal status
-    pub fn update_signal_status(&self, signal_id: Uuid, status: SignalStatus) -> Result<()> {
-        let mut signals = self.signals.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire signals lock".to_string()))?;
-        
-        if let Some(stored_signal) = signals.get_mut(&signal_id) {
-            stored_signal.status = status;
-        }
+    pub async fn update_signal_status(&self, signal_id: Uuid, status: SignalStatus) -> Result<()> {
+        sqlx::query("UPDATE signals SET status = ? WHERE id = ?")
+            .bind(status.to_string())
+            .bind(signal_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to update signal status: {}", e)))?;
 
         Ok(())
     }
 
     /// Update execution status and results
-    pub fn update_execution_status(
+    pub async fn update_execution_status(
         &self,
         signal_id: Uuid,
         status: ExecutionStatus,
         actual_profit: Option<Decimal>,
         execution_time_ms: Option<u64>,
     ) -> Result<()> {
-        let mut executions = self.executions.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire executions lock".to_string()))?;
-        
-        if let Some(stored_execution) = executions.get_mut(&signal_id) {
-            stored_execution.status = status;
-            stored_execution.actual_profit = actual_profit;
-            stored_execution.execution_time_ms = execution_time_ms;
-        }
+        sqlx::query(r#"
+            UPDATE executions 
+            SET status = ?, actual_profit = ?, execution_time_ms = ?
+            WHERE signal_id = ?
+        "#)
+        .bind(status.to_string())
+        .bind(actual_profit.map(|p| p.to_string()))
+        .bind(execution_time_ms.map(|t| t as i64))
+        .bind(signal_id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| ArbitrageError::Storage(format!("Failed to update execution status: {}", e)))?;
 
         Ok(())
     }
 
     /// Query signals with filters
     pub fn query_signals(&self, query: &SignalQuery) -> Result<Vec<StoredSignal>> {
-        let signals = self.signals.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire signals lock".to_string()))?;
-        
-        let mut results: Vec<StoredSignal> = signals.values()
-            .filter(|stored_signal| {
-                // Apply filters
-                if let Some(status) = &query.status_filter {
-                    if stored_signal.status != *status {
-                        return false;
-                    }
-                }
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            self.query_signals_async(query).await
+        })
+    }
 
-                if let Some(symbol_filter) = &query.symbol_filter {
-                    // Normalize symbol comparison (case-insensitive)
-                    let filter_upper = symbol_filter.to_uppercase();
-                    let signal_base = stored_signal.signal.symbol.base.to_uppercase();
-                    let signal_quote = stored_signal.signal.symbol.quote.to_uppercase();
-                    
-                    if signal_base != filter_upper && signal_quote != filter_upper {
-                        return false;
-                    }
-                }
+    /// Query signals with filters (async version)
+    pub async fn query_signals_async(&self, query: &SignalQuery) -> Result<Vec<StoredSignal>> {
+        let mut sql = "SELECT * FROM signals WHERE 1=1".to_string();
+        let mut params: Vec<String> = Vec::new();
 
-                if let Some(exchange) = &query.exchange_filter {
-                    if stored_signal.signal.buy_exchange != *exchange && stored_signal.signal.sell_exchange != *exchange {
-                        return false;
-                    }
-                }
+        if let Some(status) = &query.status_filter {
+            sql.push_str(" AND status = ?");
+            params.push(status.to_string().to_string());
+        }
 
-                if let Some(min_confidence) = query.min_confidence {
-                    if stored_signal.confidence_score < min_confidence {
-                        return false;
-                    }
-                }
+        if let Some(symbol_filter) = &query.symbol_filter {
+            sql.push_str(" AND (symbol_base = ? OR symbol_quote = ?)");
+            params.push(symbol_filter.clone());
+            params.push(symbol_filter.clone());
+        }
 
-                if let Some((start, end)) = query.time_range {
-                    if stored_signal.timestamp < start || stored_signal.timestamp > end {
-                        return false;
-                    }
-                }
+        if let Some(exchange) = &query.exchange_filter {
+            sql.push_str(" AND (buy_exchange = ? OR sell_exchange = ?)");
+            let exchange_str = exchange.to_string();
+            params.push(exchange_str.clone());
+            params.push(exchange_str);
+        }
 
-                true
-            })
-            .cloned()
-            .collect();
+        if let Some(min_confidence) = query.min_confidence {
+            sql.push_str(" AND CAST(confidence_score AS REAL) >= ?");
+            params.push(min_confidence.to_string());
+        }
 
-        // Sort by timestamp (newest first)
-        results.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        if let Some((start, end)) = query.time_range {
+            sql.push_str(" AND timestamp BETWEEN ? AND ?");
+            params.push(start.to_rfc3339());
+            params.push(end.to_rfc3339());
+        }
 
-        // Apply limit
+        sql.push_str(" ORDER BY timestamp DESC");
+
         if let Some(limit) = query.limit {
-            results.truncate(limit);
+            sql.push_str(" LIMIT ?");
+            params.push(limit.to_string());
+        }
+
+        let mut query_builder = sqlx::query(&sql);
+        for param in params {
+            query_builder = query_builder.bind(param);
+        }
+
+        let rows = query_builder.fetch_all(&self.pool).await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to query signals: {}", e)))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let stored_signal = self.row_to_stored_signal(row)?;
+            results.push(stored_signal);
         }
 
         Ok(results)
     }
 
     /// Get execution by signal ID
-    pub fn get_execution(&self, signal_id: Uuid) -> Result<Option<StoredExecution>> {
-        let executions = self.executions.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire executions lock".to_string()))?;
-        
-        Ok(executions.get(&signal_id).cloned())
+    pub async fn get_execution(&self, signal_id: Uuid) -> Result<Option<StoredExecution>> {
+        let row = sqlx::query("SELECT * FROM executions WHERE signal_id = ?")
+            .bind(signal_id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to get execution: {}", e)))?;
+
+        if let Some(row) = row {
+            Ok(Some(self.row_to_stored_execution(row)?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Get storage statistics
-    pub fn get_statistics(&self) -> Result<StorageStatistics> {
-        let signals = self.signals.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire signals lock".to_string()))?;
-        let executions = self.executions.lock()
-            .map_err(|_| ArbitrageError::Storage("Failed to acquire executions lock".to_string()))?;
+    pub async fn get_statistics(&self) -> Result<StorageStatistics> {
+        let signal_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signals")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to count signals: {}", e)))?;
 
-        let mut status_counts = HashMap::new();
-        for stored_signal in signals.values() {
-            *status_counts.entry(stored_signal.status.clone()).or_insert(0) += 1;
+        let execution_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM executions")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to count executions: {}", e)))?;
+
+        // Get signal status counts
+        let status_rows = sqlx::query("SELECT status, COUNT(*) as count FROM signals GROUP BY status")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to get signal status counts: {}", e)))?;
+
+        let mut signal_status_counts = std::collections::HashMap::new();
+        for row in status_rows {
+            let status_str: String = row.get("status");
+            let count: i64 = row.get("count");
+            if let Ok(status) = SignalStatus::from_string(&status_str) {
+                signal_status_counts.insert(status, count as usize);
+            }
         }
 
-        let mut execution_status_counts = HashMap::new();
-        for stored_execution in executions.values() {
-            *execution_status_counts.entry(stored_execution.status.clone()).or_insert(0) += 1;
-        }
+        // Get execution status counts
+        let exec_status_rows = sqlx::query("SELECT status, COUNT(*) as count FROM executions GROUP BY status")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to get execution status counts: {}", e)))?;
 
-        // Rough memory usage estimate (for monitoring)
-        let estimated_size_per_signal = 1024; // ~1KB per signal (rough estimate)
-        let estimated_size_per_execution = 2048; // ~2KB per execution (rough estimate)
-        let memory_usage_estimate_mb = ((signals.len() * estimated_size_per_signal) + 
-                                       (executions.len() * estimated_size_per_execution)) as f64 / 1_048_576.0;
+        let mut execution_status_counts = std::collections::HashMap::new();
+        for row in exec_status_rows {
+            let status_str: String = row.get("status");
+            let count: i64 = row.get("count");
+            if let Ok(status) = ExecutionStatus::from_string(&status_str) {
+                execution_status_counts.insert(status, count as usize);
+            }
+        }
 
         Ok(StorageStatistics {
-            total_signals: signals.len(),
-            total_executions: executions.len(),
-            signal_status_counts: status_counts,
+            total_signals: signal_count as usize,
+            total_executions: execution_count as usize,
+            signal_status_counts,
             execution_status_counts,
-            memory_usage_estimate_mb,
-            avg_query_time_ms: None, // Could be implemented with query timing
+            memory_usage_estimate_mb: 0.0, // SQLite handles memory
+            avg_query_time_ms: None,
         })
     }
 
-    /// Cleanup old signals (keep most recent ones) - optimized for large datasets
-    fn cleanup_old_signals(&self, signals: &mut HashMap<Uuid, StoredSignal>) -> Result<()> {
-        if signals.len() <= self.config.max_signal_history {
-            return Ok(());
+    /// Cleanup old signals
+    async fn cleanup_old_signals(&self) -> Result<()> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signals")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to count signals: {}", e)))?;
+
+        if count as usize > self.config.max_signal_history {
+            let to_delete = count as usize - self.config.max_signal_history;
+            
+            sqlx::query(r#"
+                DELETE FROM signals 
+                WHERE id IN (
+                    SELECT id FROM signals 
+                    ORDER BY timestamp ASC 
+                    LIMIT ?
+                )
+            "#)
+            .bind(to_delete as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to cleanup old signals: {}", e)))?;
         }
 
-        // For large datasets, use BTreeMap for efficient sorting by timestamp
-        let mut timestamp_to_id: std::collections::BTreeMap<chrono::DateTime<chrono::Utc>, Uuid> = 
-            std::collections::BTreeMap::new();
-        
-        // Build timestamp index
-        for (id, stored_signal) in signals.iter() {
-            timestamp_to_id.insert(stored_signal.timestamp, *id);
+        Ok(())
+    }
+
+    /// Cleanup old executions
+    async fn cleanup_old_executions(&self) -> Result<()> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM executions")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to count executions: {}", e)))?;
+
+        if count as usize > self.config.max_execution_history {
+            let to_delete = count as usize - self.config.max_execution_history;
+            
+            sqlx::query(r#"
+                DELETE FROM executions 
+                WHERE signal_id IN (
+                    SELECT signal_id FROM executions 
+                    ORDER BY timestamp ASC 
+                    LIMIT ?
+                )
+            "#)
+            .bind(to_delete as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ArbitrageError::Storage(format!("Failed to cleanup old executions: {}", e)))?;
         }
-        
-        // Remove oldest signals (keep only max_signal_history most recent)
-        let to_remove = signals.len() - self.config.max_signal_history;
-        let mut removed_count = 0;
-        
-        for (_, signal_id) in timestamp_to_id.iter() {
-            if removed_count >= to_remove {
-                break;
-            }
-            signals.remove(signal_id);
-            removed_count += 1;
-        }
-        
-        tracing::info!(
-            removed_signals = removed_count,
-            remaining_signals = signals.len(),
-            "Cleaned up old signals"
+
+        Ok(())
+    }
+
+    /// Convert database row to StoredSignal
+    fn row_to_stored_signal(&self, row: sqlx::sqlite::SqliteRow) -> Result<StoredSignal> {
+        let id_str: String = row.get("id");
+        let id = Uuid::parse_str(&id_str)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid UUID: {}", e)))?;
+
+        let symbol = crate::types::Symbol::new(
+            &row.get::<String, _>("symbol_base"),
+            &row.get::<String, _>("symbol_quote"),
         );
 
-        Ok(())
+        let buy_exchange = row.get::<String, _>("buy_exchange").parse()
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid buy exchange: {}", e)))?;
+        let sell_exchange = row.get::<String, _>("sell_exchange").parse()
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid sell exchange: {}", e)))?;
+
+        let buy_price = Decimal::from_str(&row.get::<String, _>("buy_price"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid buy price: {}", e)))?;
+        let sell_price = Decimal::from_str(&row.get::<String, _>("sell_price"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid sell price: {}", e)))?;
+
+        let mut signal = Signal::new(symbol, buy_exchange, sell_exchange, buy_price, sell_price);
+        signal.id = id;
+
+        signal.gross_profit_percent = Decimal::from_str(&row.get::<String, _>("gross_profit_percent"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid gross profit: {}", e)))?;
+        signal.net_profit_percent = Decimal::from_str(&row.get::<String, _>("net_profit_percent"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid net profit: {}", e)))?;
+        signal.confidence = Decimal::from_str(&row.get::<String, _>("confidence"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid confidence: {}", e)))?;
+        signal.recommended_size = Decimal::from_str(&row.get::<String, _>("recommended_size"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid recommended size: {}", e)))?;
+        signal.max_size = Decimal::from_str(&row.get::<String, _>("max_size"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid max size: {}", e)))?;
+        signal.expected_slippage = Decimal::from_str(&row.get::<String, _>("expected_slippage"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid expected slippage: {}", e)))?;
+
+        let expires_at_str: String = row.get("expires_at");
+        signal.expires_at = chrono::DateTime::parse_from_rfc3339(&expires_at_str)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid expires_at: {}", e)))?
+            .with_timezone(&chrono::Utc);
+
+        let metadata_str: String = row.get("metadata");
+        signal.metadata = serde_json::from_str(&metadata_str)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid metadata: {}", e)))?;
+
+        let timestamp_str: String = row.get("timestamp");
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid timestamp: {}", e)))?
+            .with_timezone(&chrono::Utc);
+
+        let confidence_score = Decimal::from_str(&row.get::<String, _>("confidence_score"))
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid confidence score: {}", e)))?;
+
+        let status_str: String = row.get("status");
+        let status = SignalStatus::from_string(&status_str)?;
+
+        Ok(StoredSignal {
+            signal,
+            timestamp,
+            confidence_score,
+            status,
+        })
     }
 
-    /// Cleanup old executions (keep most recent ones) - optimized for large datasets
-    fn cleanup_old_executions(&self, executions: &mut HashMap<Uuid, StoredExecution>) -> Result<()> {
-        if executions.len() <= self.config.max_execution_history {
-            return Ok(());
-        }
+    /// Convert database row to StoredExecution
+    fn row_to_stored_execution(&self, row: sqlx::sqlite::SqliteRow) -> Result<StoredExecution> {
+        let signal_id_str: String = row.get("signal_id");
+        let signal_id = Uuid::parse_str(&signal_id_str)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid signal UUID: {}", e)))?;
 
-        // For large datasets, use BTreeMap for efficient sorting by timestamp
-        let mut timestamp_to_id: std::collections::BTreeMap<chrono::DateTime<chrono::Utc>, Uuid> = 
-            std::collections::BTreeMap::new();
-        
-        // Build timestamp index
-        for (id, stored_execution) in executions.iter() {
-            timestamp_to_id.insert(stored_execution.timestamp, *id);
-        }
-        
-        // Remove oldest executions (keep only max_execution_history most recent)
-        let to_remove = executions.len() - self.config.max_execution_history;
-        let mut removed_count = 0;
-        
-        for (_, execution_id) in timestamp_to_id.iter() {
-            if removed_count >= to_remove {
-                break;
-            }
-            executions.remove(execution_id);
-            removed_count += 1;
-        }
-        
-        tracing::info!(
-            removed_executions = removed_count,
-            remaining_executions = executions.len(),
-            "Cleaned up old executions"
-        );
+        let instruction_json: String = row.get("instruction_data");
+        let mut instruction: ExecutionInstruction = serde_json::from_str(&instruction_json)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid instruction data: {}", e)))?;
+        instruction.signal_id = signal_id;
 
-        Ok(())
-    }
+        let timestamp_str: String = row.get("timestamp");
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
+            .map_err(|e| ArbitrageError::Storage(format!("Invalid timestamp: {}", e)))?
+            .with_timezone(&chrono::Utc);
 
-    /// Initialize database (placeholder for SQLite setup)
-    pub fn initialize_database(&self) -> Result<()> {
-        // In Phase 1, this is a no-op
-        // In production, this would create SQLite tables
-        Ok(())
-    }
+        let status_str: String = row.get("status");
+        let status = ExecutionStatus::from_string(&status_str)?;
 
-    /// Backup data to file
-    pub fn backup_to_file(&self, _path: &Path) -> Result<()> {
-        // Placeholder for backup functionality
-        Ok(())
+        let actual_profit = if let Some(profit_str) = row.get::<Option<String>, _>("actual_profit") {
+            Some(Decimal::from_str(&profit_str)
+                .map_err(|e| ArbitrageError::Storage(format!("Invalid actual profit: {}", e)))?)
+        } else {
+            None
+        };
+
+        let execution_time_ms = row.get::<Option<i64>, _>("execution_time_ms").map(|t| t as u64);
+
+        Ok(StoredExecution {
+            instruction,
+            timestamp,
+            status,
+            actual_profit,
+            execution_time_ms,
+        })
     }
 
     /// Get current configuration
@@ -412,14 +658,8 @@ impl StorageService {
 pub struct StorageStatistics {
     pub total_signals: usize,
     pub total_executions: usize,
-    pub signal_status_counts: HashMap<SignalStatus, usize>,
-    pub execution_status_counts: HashMap<ExecutionStatus, usize>,
-    pub memory_usage_estimate_mb: f64, // Rough estimate for monitoring
-    pub avg_query_time_ms: Option<f64>, // Could be tracked for performance monitoring
-}
-
-impl Default for StorageService {
-    fn default() -> Self {
-        Self::new(StorageConfig::default()).expect("Failed to create default storage service")
-    }
+    pub signal_status_counts: std::collections::HashMap<SignalStatus, usize>,
+    pub execution_status_counts: std::collections::HashMap<ExecutionStatus, usize>,
+    pub memory_usage_estimate_mb: f64,
+    pub avg_query_time_ms: Option<f64>,
 }

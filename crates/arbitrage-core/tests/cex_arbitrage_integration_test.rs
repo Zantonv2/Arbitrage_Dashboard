@@ -4,6 +4,8 @@ use arbitrage_core::{
     types::{OrderBook, OrderBookLevel, Symbol, ExchangeId},
     normalizer::Normalizer,
     confidence_scorer::{ConfidenceScorer, ConfidenceConfig},
+    size_calculator::{SizeCalculator, SizeConfig},
+    execution_preparer::{ExecutionPreparer, ExecutionConfig},
     storage::{StorageService, StorageConfig},
     config::Config,
     Result,
@@ -12,21 +14,35 @@ use rust_decimal::Decimal;
 use std::sync::Arc;
 use tokio;
 
+/// Helper function to create test engine with all required components
+fn create_test_engine(config: Config) -> Result<(ArbitrageEngine, tokio::sync::broadcast::Receiver<arbitrage_core::types::Signal>)> {
+    let normalizer = Arc::new(Normalizer::new());
+    let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
+    let size_calculator = Arc::new(SizeCalculator::new(SizeConfig::default()));
+    let execution_preparer = Arc::new(ExecutionPreparer::new(ExecutionConfig::default()));
+    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
+    
+    ArbitrageEngine::new(
+        config,
+        normalizer,
+        confidence_scorer,
+        size_calculator,
+        execution_preparer,
+        storage,
+    )
+}
+
 /// Integration test for CEX arbitrage strategy through the full arbitrage engine
 #[tokio::test]
 async fn test_cex_arbitrage_integration() -> Result<()> {
     // Create arbitrage engine with CEX strategy
-    let config = Config::default();
-    let normalizer = Arc::new(Normalizer::new());
-    let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
-    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
+    let mut config = Config::default();
+    // Set realistic profit threshold (0.01% = 1 bps)
+    config.trading.min_profit_threshold_percent = Decimal::new(1, 4); // 0.0001
+    // Increase max exposure to allow larger test trades
+    config.risk.max_position_size_usd = Decimal::from(200000); // $200k for testing
     
-    let (engine, _receiver) = ArbitrageEngine::new(
-        config,
-        normalizer,
-        confidence_scorer,
-        storage,
-    )?;
+    let (engine, _receiver) = create_test_engine(config)?;
     
     // Register CEX arbitrage strategy
     let mut registry = StrategyRegistry::new();
@@ -91,17 +107,13 @@ async fn test_cex_arbitrage_integration() -> Result<()> {
 /// Integration test for no arbitrage scenario
 #[tokio::test]
 async fn test_cex_arbitrage_no_opportunity() -> Result<()> {
-    let config = Config::default();
-    let normalizer = Arc::new(Normalizer::new());
-    let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
-    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
+    let mut config = Config::default();
+    // Set realistic profit threshold
+    config.trading.min_profit_threshold_percent = Decimal::new(1, 4); // 0.0001
+    // Increase max exposure to allow larger test trades
+    config.risk.max_position_size_usd = Decimal::from(200000); // $200k for testing
     
-    let (engine, _receiver) = ArbitrageEngine::new(
-        config,
-        normalizer,
-        confidence_scorer,
-        storage,
-    )?;
+    let (engine, _receiver) = create_test_engine(config)?;
     
     let mut registry = StrategyRegistry::new();
     let cex_strategy = Arc::new(CexArbitrageStrategy::new());
@@ -150,17 +162,10 @@ async fn test_cex_arbitrage_no_opportunity() -> Result<()> {
 async fn test_cex_arbitrage_filtering() -> Result<()> {
     let mut config = Config::default();
     config.trading.min_profit_threshold_percent = Decimal::new(10, 2); // Require 10% profit (very high)
+    // Increase max exposure to allow larger test trades
+    config.risk.max_position_size_usd = Decimal::from(200000); // $200k for testing
     
-    let normalizer = Arc::new(Normalizer::new());
-    let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
-    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
-    
-    let (engine, _receiver) = ArbitrageEngine::new(
-        config,
-        normalizer,
-        confidence_scorer,
-        storage,
-    )?;
+    let (engine, _receiver) = create_test_engine(config)?;
     
     let mut registry = StrategyRegistry::new();
     let cex_strategy = Arc::new(CexArbitrageStrategy::new());
@@ -201,17 +206,13 @@ async fn test_cex_arbitrage_filtering() -> Result<()> {
 /// Integration test for multiple symbols
 #[tokio::test]
 async fn test_cex_arbitrage_multiple_symbols() -> Result<()> {
-    let config = Config::default();
-    let normalizer = Arc::new(Normalizer::new());
-    let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
-    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
+    let mut config = Config::default();
+    // Set realistic profit threshold
+    config.trading.min_profit_threshold_percent = Decimal::new(1, 4); // 0.0001
+    // Increase max exposure to allow larger test trades
+    config.risk.max_position_size_usd = Decimal::from(200000); // $200k for testing
     
-    let (engine, _receiver) = ArbitrageEngine::new(
-        config,
-        normalizer,
-        confidence_scorer,
-        storage,
-    )?;
+    let (engine, _receiver) = create_test_engine(config)?;
     
     let mut registry = StrategyRegistry::new();
     let cex_strategy = Arc::new(CexArbitrageStrategy::new());
