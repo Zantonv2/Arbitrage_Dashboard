@@ -456,7 +456,7 @@ impl FeeSchedule {
 }
 
 /// Exchange connection status
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ConnectionStatus {
     Disconnected,
     Connecting,

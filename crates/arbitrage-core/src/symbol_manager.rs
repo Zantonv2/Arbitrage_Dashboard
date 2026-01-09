@@ -1,7 +1,7 @@
 use crate::{
     symbol_discovery::{SymbolDiscoveryService, SymbolSelectionCriteria, MarketInfo},
     types::{ExchangeId, Symbol},
-    ArbitrageError, Result,
+    Result,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

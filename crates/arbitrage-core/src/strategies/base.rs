@@ -79,6 +79,37 @@ impl MarketBundle {
         self.tickers.get(&(exchange, symbol.clone()))
     }
     
+    /// Get all exchanges that have order books for a specific symbol
+    pub fn get_exchanges_for_symbol(&self, symbol: &Symbol) -> Vec<ExchangeId> {
+        self.order_books
+            .keys()
+            .filter(|(_, s)| s == symbol)
+            .map(|(exchange, _)| *exchange)
+            .collect()
+    }
+    
+    /// Get all unique symbols in the market bundle
+    pub fn get_all_symbols(&self) -> Vec<Symbol> {
+        let mut symbols: Vec<Symbol> = self.order_books
+            .keys()
+            .map(|(_, symbol)| symbol.clone())
+            .collect();
+        symbols.sort_by(|a, b| a.to_pair().cmp(&b.to_pair()));
+        symbols.dedup();
+        symbols
+    }
+    
+    /// Check if market data is available for a symbol on an exchange
+    pub fn has_data(&self, exchange: ExchangeId, symbol: &Symbol) -> bool {
+        self.order_books.contains_key(&(exchange, symbol.clone()))
+    }
+    
+    /// Get market data age for a symbol on an exchange
+    pub fn get_data_age(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<chrono::Duration> {
+        self.get_order_book(exchange, symbol)
+            .map(|ob| self.timestamp - ob.timestamp)
+    }
+    
     /// Get all order books for a specific symbol across all exchanges
     pub fn get_order_books_for_symbol(&self, symbol: &Symbol) -> Vec<&OrderBook> {
         self.order_books
@@ -141,6 +172,35 @@ impl RawSignal {
     
     pub fn add_metadata(&mut self, key: impl Into<String>, value: serde_json::Value) {
         self.metadata.insert(key.into(), value);
+    }
+    
+    /// Validate that the signal has valid legs and profit
+    pub fn is_valid(&self) -> bool {
+        !self.legs.is_empty() && 
+        self.legs.iter().all(|leg| !leg.price.is_zero() && !leg.quantity.is_zero()) &&
+        self.expected_profit_bps > 0
+    }
+    
+    /// Get total notional value of all legs
+    pub fn total_notional(&self) -> Decimal {
+        self.legs.iter()
+            .map(|leg| leg.price * leg.quantity)
+            .sum()
+    }
+    
+    /// Get unique exchanges involved in this signal
+    pub fn get_exchanges(&self) -> Vec<ExchangeId> {
+        let mut exchanges: Vec<ExchangeId> = self.legs.iter()
+            .map(|leg| leg.exchange)
+            .collect();
+        exchanges.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+        exchanges.dedup();
+        exchanges
+    }
+    
+    /// Check if signal involves a specific exchange
+    pub fn involves_exchange(&self, exchange: ExchangeId) -> bool {
+        self.legs.iter().any(|leg| leg.exchange == exchange)
     }
 }
 
@@ -244,6 +304,34 @@ impl FilterContext {
             .unwrap_or_else(|| Decimal::ZERO);
         available >= quantity
     }
+    
+    /// Check if an exchange is allowed for trading
+    pub fn is_exchange_allowed(&self, exchange: ExchangeId) -> bool {
+        self.allowed_exchanges.contains(&exchange)
+    }
+    
+    /// Check if both exchanges in a pair are allowed
+    pub fn are_exchanges_allowed(&self, exchange1: ExchangeId, exchange2: ExchangeId) -> bool {
+        self.is_exchange_allowed(exchange1) && self.is_exchange_allowed(exchange2)
+    }
+    
+    /// Get inventory balance for an asset on an exchange
+    pub fn get_inventory(&self, exchange: ExchangeId, asset: &str) -> Decimal {
+        self.inventory_limits
+            .get(&(exchange, asset.to_string()))
+            .copied()
+            .unwrap_or_else(|| Decimal::ZERO)
+    }
+    
+    /// Set inventory limit for an asset on an exchange
+    pub fn set_inventory_limit(&mut self, exchange: ExchangeId, asset: impl Into<String>, limit: Decimal) {
+        self.inventory_limits.insert((exchange, asset.into()), limit);
+    }
+    
+    /// Add fee schedule for an exchange
+    pub fn add_fee_schedule(&mut self, schedule: FeeSchedule) {
+        self.fee_schedules.insert(schedule.exchange, schedule);
+    }
 }
 
 /// Context for execution planning
@@ -257,14 +345,13 @@ pub struct ExecutionContext {
 
 impl ExecutionContext {
     pub fn new() -> Self {
-        // Safe decimal creation using Decimal::new(mantissa, scale)
         let default_slippage = Decimal::new(1, 3); // 0.001 = 0.1%
         
         Self {
             available_balances: HashMap::new(),
             fee_schedules: HashMap::new(),
             slippage_tolerance: default_slippage,
-            max_order_size: Decimal::from(1000), // Default $1k max order
+            max_order_size: Decimal::from(1000),
         }
     }
     
@@ -273,6 +360,22 @@ impl ExecutionContext {
             .get(&(exchange, asset.to_string()))
             .copied()
             .unwrap_or_else(|| Decimal::ZERO)
+    }
+    
+    pub fn set_balance(&mut self, exchange: ExchangeId, asset: impl Into<String>, balance: Decimal) {
+        self.available_balances.insert((exchange, asset.into()), balance);
+    }
+    
+    pub fn has_sufficient_balance(&self, exchange: ExchangeId, asset: &str, required: Decimal) -> bool {
+        self.get_balance(exchange, asset) >= required
+    }
+    
+    pub fn add_fee_schedule(&mut self, schedule: FeeSchedule) {
+        self.fee_schedules.insert(schedule.exchange, schedule);
+    }
+    
+    pub fn get_fee_schedule(&self, exchange: ExchangeId) -> Option<&FeeSchedule> {
+        self.fee_schedules.get(&exchange)
     }
 }
 
@@ -367,6 +470,23 @@ impl FundingRate {
             
         Ok(annual_rate)
     }
+    
+    /// Check if funding rate is reasonable (within -100% to +100%)
+    pub fn is_valid(&self) -> bool {
+        let min_rate = Decimal::new(-100, 2); // -1.0
+        let max_rate = Decimal::new(100, 2);  // 1.0
+        self.rate >= min_rate && self.rate <= max_rate
+    }
+    
+    /// Check if funding rate is positive (profitable for long holders)
+    pub fn is_positive(&self) -> bool {
+        self.rate > Decimal::ZERO
+    }
+    
+    /// Time until next funding in seconds
+    pub fn time_to_funding(&self) -> i64 {
+        (self.next_funding - Utc::now()).num_seconds()
+    }
 }
 
 /// Ticker information with price and volume data
@@ -400,20 +520,26 @@ impl Ticker {
         self.ask - self.bid
     }
     
-    pub fn mid_price(&self) -> Decimal {
-        (self.bid + self.ask) / Decimal::from(2)
+    pub fn mid_price(&self) -> Result<Decimal> {
+        if self.bid.is_zero() && self.ask.is_zero() {
+            return Err(ArbitrageError::Calculation("Both bid and ask are zero".to_string()));
+        }
+        
+        Ok((self.bid + self.ask) / Decimal::from(2))
     }
     
     pub fn spread_bps(&self) -> Result<Decimal> {
-        let mid = self.mid_price();
-        if mid.is_zero() {
-            return Err(ArbitrageError::Calculation("Zero mid price".to_string()));
-        }
+        let mid = self.mid_price()?;
         
         let spread_ratio = self.spread().checked_div(mid)
             .ok_or_else(|| ArbitrageError::Calculation("Division by zero in spread calculation".to_string()))?;
             
         Ok(spread_ratio * Decimal::from(10000)) // Convert to basis points
+    }
+    
+    /// Validate that bid < ask
+    pub fn is_valid(&self) -> bool {
+        self.bid < self.ask && !self.bid.is_zero() && !self.ask.is_zero()
     }
 }
 

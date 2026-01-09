@@ -31,6 +31,9 @@ pub enum ArbitrageError {
     #[error("Network error: {0}")]
     Network(String),
     
+    #[error("HTTP request error: {0}")]
+    Http(#[from] reqwest::Error),
+    
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
     

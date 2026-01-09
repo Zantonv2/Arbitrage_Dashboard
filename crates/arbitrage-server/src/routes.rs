@@ -182,26 +182,48 @@ pub async fn get_exchange_status(
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /api/status/exchanges");
 
-    // TODO: Get actual exchange status from connectors
+    // Get actual bridge statistics
+    let bridge_stats = state.bridge.lock().await.get_stats().await;
+    
     let status = json!({
-        "exchanges": [
-            {
-                "id": "bybit",
-                "status": "disconnected",
-                "last_heartbeat": null,
-                "uptime_percent": 0.0,
-                "error_count": 0,
-                "subscribed_symbols": []
-            },
-            {
-                "id": "bingx",
-                "status": "disconnected",
-                "last_heartbeat": null,
-                "uptime_percent": 0.0,
-                "error_count": 0,
-                "subscribed_symbols": []
-            }
-        ]
+        "connected_exchanges": bridge_stats.connected_exchanges,
+        "total_exchanges": bridge_stats.total_exchanges,
+        "total_messages": bridge_stats.total_messages_received,
+        "total_errors": bridge_stats.total_errors,
+        "active_symbols": bridge_stats.active_symbols,
+        "last_updated": chrono::Utc::now().to_rfc3339()
+    });
+
+    Ok(Json(status))
+}
+
+/// Get bridge service status
+pub async fn get_bridge_status(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /api/status/bridge");
+
+    let bridge_stats = state.bridge.lock().await.get_stats().await;
+    let engine_stats = state.arbitrage_engine.get_stats();
+    
+    let status = json!({
+        "bridge": {
+            "connected_exchanges": bridge_stats.connected_exchanges,
+            "total_exchanges": bridge_stats.total_exchanges,
+            "total_messages_received": bridge_stats.total_messages_received,
+            "total_errors": bridge_stats.total_errors,
+            "active_symbols": bridge_stats.active_symbols,
+        },
+        "engine": {
+            "cached_signals": engine_stats.cached_signals_count,
+            "order_books_cached": engine_stats.order_books_count,
+            "tickers_cached": engine_stats.tickers_count,
+            "funding_rates_cached": engine_stats.funding_rates_count,
+            "min_profit_threshold": engine_stats.min_profit_threshold,
+            "stale_books_count": engine_stats.stale_books_count,
+            "fresh_books_count": engine_stats.fresh_books_count,
+        },
+        "last_updated": chrono::Utc::now().to_rfc3339()
     });
 
     Ok(Json(status))
