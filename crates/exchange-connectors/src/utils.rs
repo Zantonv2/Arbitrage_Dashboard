@@ -58,6 +58,7 @@ pub fn format_symbol(symbol: &Symbol, format: SymbolFormat) -> String {
         SymbolFormat::NoSeparator => format!("{}{}", symbol.base.to_uppercase(), symbol.quote.to_uppercase()),
         SymbolFormat::Lowercase => format!("{}{}", symbol.base.to_lowercase(), symbol.quote.to_lowercase()),
         SymbolFormat::Dot => format!("{}.{}", symbol.base.to_uppercase(), symbol.quote.to_uppercase()),
+        SymbolFormat::Slash => format!("{}/{}", symbol.base.to_uppercase(), symbol.quote.to_uppercase()),
     }
 }
 
@@ -82,6 +83,13 @@ pub fn parse_symbol(symbol_str: &str, format: SymbolFormat) -> Result<Symbol> {
             let parts: Vec<&str> = symbol_str.split('.').collect();
             if parts.len() != 2 {
                 return Err(ConnectorError::InvalidSymbol(format!("Invalid dot format: {}", symbol_str)).into());
+            }
+            (parts[0], parts[1])
+        },
+        SymbolFormat::Slash => {
+            let parts: Vec<&str> = symbol_str.split('/').collect();
+            if parts.len() != 2 {
+                return Err(ConnectorError::InvalidSymbol(format!("Invalid slash format: {}", symbol_str)).into());
             }
             (parts[0], parts[1])
         },
@@ -114,6 +122,7 @@ pub enum SymbolFormat {
     NoSeparator,  // BTCUSDT (Binance, Bybit)
     Lowercase,    // btcusdt
     Dot,          // BTC.USDT (some exchanges)
+    Slash,        // BTC/USDT (Kraken)
 }
 
 /// Exponential backoff for reconnection attempts

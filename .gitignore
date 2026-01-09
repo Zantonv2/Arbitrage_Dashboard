@@ -4,6 +4,7 @@
 Cargo.lock
 
 # IDE
+.kiro/
 .vscode/
 .idea/
 *.swp
@@ -18,6 +19,7 @@ Cargo.lock
 .Trashes
 ehthumbs.db
 Thumbs.db
+libokx.rlib
 
 # Logs
 logs/

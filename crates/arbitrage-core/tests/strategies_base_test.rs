@@ -69,7 +69,9 @@ fn test_ticker_spread_calculation() {
     );
     
     assert_eq!(ticker.spread(), Decimal::from(100));
-    assert_eq!(ticker.mid_price(), Decimal::from(50000));
+    
+    let mid_price = ticker.mid_price().expect("Should calculate mid price");
+    assert_eq!(mid_price, Decimal::from(50000));
     
     let spread_bps = ticker.spread_bps().expect("Should calculate spread in bps");
     assert_eq!(spread_bps, Decimal::from(20)); // 100/50000 * 10000 = 20 bps
@@ -197,7 +199,10 @@ fn test_ticker_zero_price_handling() {
     
     // Should handle zero prices gracefully
     assert_eq!(ticker.spread(), Decimal::ZERO);
-    assert_eq!(ticker.mid_price(), Decimal::ZERO);
+    
+    // mid_price should return error for zero prices
+    let mid_result = ticker.mid_price();
+    assert!(mid_result.is_err());
     
     // spread_bps should return error for zero mid price
     let result = ticker.spread_bps();
@@ -242,4 +247,92 @@ fn test_fee_schedule_overflow_protection() {
         Ok(_) => {}, // Success is fine
         Err(_) => {}, // Error is also fine for overflow protection
     }
+}
+#[test]
+fn test_raw_signal_validation() {
+    let symbol = Symbol::new("BTC", "USDT");
+    let mut signal = RawSignal::new("test_strategy", symbol.clone());
+    
+    // Empty signal should be invalid
+    assert!(!signal.is_valid());
+    
+    // Add a valid leg
+    let leg = TradeLeg::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        Side::Buy,
+        Decimal::from(50000),
+        Decimal::from(1),
+    );
+    signal.add_leg(leg);
+    signal.set_profit_bps(100); // 1% profit
+    
+    // Now should be valid
+    assert!(signal.is_valid());
+    
+    // Test total notional
+    assert_eq!(signal.total_notional(), Decimal::from(50000));
+    
+    // Test exchanges
+    assert_eq!(signal.get_exchanges(), vec![ExchangeId::OKX]);
+    assert!(signal.involves_exchange(ExchangeId::OKX));
+    assert!(!signal.involves_exchange(ExchangeId::ByBit));
+}
+
+#[test]
+fn test_market_bundle_enhancements() {
+    let mut bundle = MarketBundle::new();
+    let symbol = Symbol::new("BTC", "USDT");
+    
+    // Test has_data
+    assert!(!bundle.has_data(ExchangeId::OKX, &symbol));
+    
+    // Add order book
+    let order_book = OrderBook::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(49900), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50100), Decimal::from(1))],
+    );
+    bundle.add_order_book(order_book);
+    
+    // Now should have data
+    assert!(bundle.has_data(ExchangeId::OKX, &symbol));
+    
+    // Test exchanges for symbol
+    let exchanges = bundle.get_exchanges_for_symbol(&symbol);
+    assert_eq!(exchanges, vec![ExchangeId::OKX]);
+    
+    // Test all symbols
+    let symbols = bundle.get_all_symbols();
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols[0], symbol);
+    
+    // Test data age
+    let age = bundle.get_data_age(ExchangeId::OKX, &symbol);
+    assert!(age.is_some());
+    assert!(age.unwrap().num_milliseconds() >= 0);
+}
+
+#[test]
+fn test_filter_context_enhancements() {
+    let mut context = FilterContext::new(50); // 0.5% min profit
+    
+    // Test exchange allowance
+    assert!(context.is_exchange_allowed(ExchangeId::OKX));
+    assert!(!context.is_exchange_allowed(ExchangeId::Binance)); // Not in default list
+    
+    // Test exchange pair allowance
+    assert!(context.are_exchanges_allowed(ExchangeId::OKX, ExchangeId::ByBit));
+    assert!(!context.are_exchanges_allowed(ExchangeId::OKX, ExchangeId::Binance));
+    
+    // Test inventory management
+    assert_eq!(context.get_inventory(ExchangeId::OKX, "BTC"), Decimal::ZERO);
+    
+    context.set_inventory_limit(ExchangeId::OKX, "BTC", Decimal::from(10));
+    assert_eq!(context.get_inventory(ExchangeId::OKX, "BTC"), Decimal::from(10));
+    
+    // Test can_sell with inventory
+    assert!(context.can_sell(ExchangeId::OKX, "BTC", Decimal::from(5)));
+    assert!(!context.can_sell(ExchangeId::OKX, "BTC", Decimal::from(15)));
 }
