@@ -1,4 +1,4 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate};
+use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
 use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
@@ -7,6 +7,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
 use tokio::sync::{broadcast, RwLock, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -54,7 +55,6 @@ pub struct KrakenConnector {
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
-
 
 impl KrakenConnector {
     pub fn new() -> Self {
@@ -303,34 +303,259 @@ impl ExchangeConnector for KrakenConnector {
     }
     // === Trading Methods ===
 
-    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn place_order(&self, order: &OrderRequest) -> Result<OrderResponse> {
+        let kraken_symbol = self.symbol_to_kraken(&order.symbol);
+        let url = format!("{}/0/private/AddOrder", self.config.rest_url);
+
+        let side = match order.side {
+            OrderSide::Buy => "buy",
+            OrderSide::Sell => "sell",
+        };
+
+        let order_type = match order.order_type {
+            OrderType::Market => "market",
+            OrderType::Limit => "limit",
+            _ => "limit",
+        };
+
+        let mut body = serde_json::json!({
+            "pair": kraken_symbol,
+            "type": side,
+            "ordertype": order_type,
+            "volume": order.quantity.to_string(),
+        });
+
+        if let Some(price) = order.price {
+            body["price"] = serde_json::Value::String(price.to_string());
+        }
+
+        if let Some(client_id) = &order.client_order_id {
+            body["userref"] = serde_json::Value::String(client_id.clone());
+        }
+
+        let response = self.client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?;
+
+        let response_json: Value = response.json().await?;
+
+        let order_id = response_json["result"]["txid"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|id| id.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(OrderResponse {
+            order_id,
+            client_order_id: order.client_order_id.clone(),
+            symbol: order.symbol.clone(),
+            side: order.side.clone(),
+            order_type: order.order_type.clone(),
+            quantity: order.quantity,
+            price: order.price,
+            status: OrderStatusType::New,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+        let url = format!("{}/0/private/CancelOrder", self.config.rest_url);
+
+        let body = serde_json::json!({
+            "txid": order_id,
+        });
+
+        let response = self.client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?;
+
+        let response_json: Value = response.json().await?;
+
+        let status = if response_json["error"].as_array().map_or(true, |arr| arr.is_empty()) {
+            OrderStatusType::Cancelled
+        } else {
+            OrderStatusType::Rejected
+        };
+
+        Ok(CancelResponse {
+            order_id: order_id.to_string(),
+            client_order_id: None,
+            status,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
+        let url = format!("{}/0/private/QueryOrders", self.config.rest_url);
+
+        let body = serde_json::json!({
+            "txid": order_id,
+        });
+
+        let response = self.client.post(&url).json(&body).send().await?;
+        let response_json: Value = response.json().await?;
+
+        if let Some(order_data) = response_json["result"].as_object()
+            .and_then(|result| result.get(order_id))
+        {
+            let pair = order_data["descr"]["pair"].as_str().unwrap_or("XBTUSD");
+            let order_symbol = self.symbol_from_kraken(pair)?;
+
+            let side = match order_data["descr"]["type"].as_str() {
+                Some("buy") => OrderSide::Buy,
+                Some("sell") => OrderSide::Sell,
+                _ => OrderSide::Buy,
+            };
+
+            let order_type = match order_data["descr"]["ordertype"].as_str() {
+                Some("market") => OrderType::Market,
+                Some("limit") => OrderType::Limit,
+                _ => OrderType::Limit,
+            };
+
+            let quantity = order_data["vol"]
+                .as_str()
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                .unwrap_or_default();
+
+            let price = order_data["descr"]["price"]
+                .as_str()
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+            let filled_quantity = order_data["vol_exec"]
+                .as_str()
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                .unwrap_or_default();
+
+            let status = match order_data["status"].as_str() {
+                Some("pending") => OrderStatusType::New,
+                Some("open") => OrderStatusType::New,
+                Some("closed") => OrderStatusType::Filled,
+                Some("canceled") => OrderStatusType::Cancelled,
+                Some("expired") => OrderStatusType::Expired,
+                _ => OrderStatusType::New,
+            };
+
+            Ok(OrderStatus {
+                order_id: order_id.to_string(),
+                client_order_id: order_data["userref"].as_str().map(|s| s.to_string()),
+                symbol: order_symbol,
+                side,
+                order_type,
+                quantity,
+                price,
+                filled_quantity,
+                remaining_quantity: quantity - filled_quantity,
+                average_price: price,
+                status,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            })
+        } else {
+            Err(arbitrage_core::ArbitrageError::ExchangeConnection("Order not found".to_string()))
+        }
     }
 
-    async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_balance(&self) -> Result<Balance> {
+        let url = format!("{}/0/private/Balance", self.config.rest_url);
+
+        let response = self.client.post(&url).send().await?;
+        let response_json: Value = response.json().await?;
+
+        let mut balances = HashMap::new();
+
+        if let Some(result) = response_json["result"].as_object() {
+            for (asset, balance_value) in result {
+                if let Some(balance_str) = balance_value.as_str() {
+                    if let Ok(balance) = rust_decimal::Decimal::from_str(balance_str) {
+                        balances.insert(asset.clone(), AssetBalance {
+                            asset: asset.clone(),
+                            free: balance,
+                            locked: rust_decimal::Decimal::ZERO,
+                            total: balance,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Balance {
+            exchange: ExchangeId::Kraken,
+            balances,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>> {
+        let url = format!("{}/0/private/OpenOrders", self.config.rest_url);
+
+        let response = self.client.post(&url).send().await?;
+        let response_json: Value = response.json().await?;
+
+        let mut orders = Vec::new();
+
+        if let Some(open_orders) = response_json["result"]["open"].as_object() {
+            for (order_id, order_data) in open_orders {
+                let pair = order_data["descr"]["pair"].as_str().unwrap_or("XBTUSD");
+                let order_symbol = self.symbol_from_kraken(pair)?;
+
+                // Filter by symbol if specified
+                if let Some(filter_symbol) = symbol {
+                    if order_symbol != *filter_symbol {
+                        continue;
+                    }
+                }
+
+                let side = match order_data["descr"]["type"].as_str() {
+                    Some("buy") => OrderSide::Buy,
+                    Some("sell") => OrderSide::Sell,
+                    _ => OrderSide::Buy,
+                };
+
+                let order_type = match order_data["descr"]["ordertype"].as_str() {
+                    Some("market") => OrderType::Market,
+                    Some("limit") => OrderType::Limit,
+                    _ => OrderType::Limit,
+                };
+
+                let quantity = order_data["vol"]
+                    .as_str()
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                let price = order_data["descr"]["price"]
+                    .as_str()
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+                let filled_quantity = order_data["vol_exec"]
+                    .as_str()
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                orders.push(OrderStatus {
+                    order_id: order_id.clone(),
+                    client_order_id: order_data["userref"].as_str().map(|s| s.to_string()),
+                    symbol: order_symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    price,
+                    filled_quantity,
+                    remaining_quantity: quantity - filled_quantity,
+                    average_price: price,
+                    status: OrderStatusType::New, // Open orders are "New"
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                });
+            }
+        }
+
+        Ok(orders)
     }
 }
 

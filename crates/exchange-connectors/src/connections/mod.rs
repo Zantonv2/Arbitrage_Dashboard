@@ -9,6 +9,6 @@ pub mod kraken;
 pub use okx::OKXConnector;
 pub use bybit::BybitConnector;
 pub use mexc::MEXCConnector;
-pub use gateio::GateIOConnector;
+pub use gateio::GateioConnector;
 pub use bitstamp::BitstampConnector;
 pub use kraken::KrakenConnector;

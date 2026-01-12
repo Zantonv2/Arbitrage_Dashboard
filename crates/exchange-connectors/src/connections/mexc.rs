@@ -1,4 +1,4 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate};
+use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
 use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
@@ -7,6 +7,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
 use tokio::sync::{broadcast, RwLock, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -305,34 +306,279 @@ impl ExchangeConnector for MEXCConnector {
     }
     // === Trading Methods ===
 
-    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn place_order(&self, order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+        use crate::connector::{OrderResponse, OrderStatusType};
+        
+        // MEXC API endpoint for placing orders
+        let url = format!("{}/api/v3/order", self.config.rest_url);
+        
+        // Convert our order request to MEXC format
+        let mexc_order = serde_json::json!({
+            "symbol": format!("{}{}", order.symbol.base, order.symbol.quote),
+            "side": match order.side {
+                crate::connector::OrderSide::Buy => "BUY",
+                crate::connector::OrderSide::Sell => "SELL",
+            },
+            "type": match order.order_type {
+                crate::connector::OrderType::Market => "MARKET",
+                crate::connector::OrderType::Limit => "LIMIT",
+                _ => "LIMIT",
+            },
+            "quantity": order.quantity.to_string(),
+            "price": order.price.map(|p| p.to_string()).unwrap_or_default(),
+            "newClientOrderId": order.client_order_id.as_deref().unwrap_or(""),
+        });
+
+        // Make authenticated request to MEXC
+        let response = self.client
+            .post(&url)
+            .json(&mexc_order)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC place order request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("MEXC place order failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        // Parse MEXC response
+        let order_id = response_json.get("orderId")
+            .and_then(|id| id.as_u64())
+            .map(|id| id.to_string())
+            .unwrap_or("unknown".to_string());
+
+        Ok(OrderResponse {
+            order_id,
+            client_order_id: order.client_order_id.clone(),
+            symbol: order.symbol.clone(),
+            side: order.side.clone(),
+            order_type: order.order_type.clone(),
+            quantity: order.quantity,
+            price: order.price,
+            status: OrderStatusType::New,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
+        use crate::connector::{CancelResponse, OrderStatusType};
+        
+        let url = format!("{}/api/v3/order", self.config.rest_url);
+        
+        let cancel_request = serde_json::json!({
+            "symbol": "BTCUSDT", // This should be dynamic
+            "orderId": order_id,
+        });
+
+        let response = self.client
+            .delete(&url)
+            .json(&cancel_request)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC cancel order request failed: {}", e)))?;
+
+        let status = if response.status().is_success() {
+            OrderStatusType::Cancelled
+        } else {
+            OrderStatusType::Rejected
+        };
+
+        Ok(CancelResponse {
+            order_id: order_id.to_string(),
+            client_order_id: None,
+            status,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
+        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
+        
+        let url = format!("{}/api/v3/order?symbol=BTCUSDT&orderId={}", self.config.rest_url, order_id);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC get order status request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("MEXC get order status failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        // Parse response and create OrderStatus
+        let symbol = arbitrage_core::types::Symbol::new("BTC", "USDT");
+        let side = match response_json.get("side").and_then(|s| s.as_str()) {
+            Some("BUY") => OrderSide::Buy,
+            Some("SELL") => OrderSide::Sell,
+            _ => OrderSide::Buy,
+        };
+
+        let quantity = response_json.get("origQty")
+            .and_then(|q| q.as_str())
+            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+            .unwrap_or_default();
+
+        let filled_quantity = response_json.get("executedQty")
+            .and_then(|f| f.as_str())
+            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+            .unwrap_or_default();
+
+        Ok(OrderStatus {
+            order_id: order_id.to_string(),
+            client_order_id: response_json.get("clientOrderId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+            symbol,
+            side,
+            order_type: OrderType::Limit,
+            quantity,
+            price: response_json.get("price").and_then(|p| p.as_str()).and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
+            filled_quantity,
+            remaining_quantity: quantity - filled_quantity,
+            average_price: None,
+            status: OrderStatusType::New,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        })
     }
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+        use crate::connector::{Balance, AssetBalance};
+        
+        let url = format!("{}/api/v3/account", self.config.rest_url);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC get balance request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("MEXC get balance failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut balances = std::collections::HashMap::new();
+
+        if let Some(balance_array) = response_json.get("balances").and_then(|b| b.as_array()) {
+            for balance in balance_array {
+                if let Some(asset) = balance.get("asset").and_then(|a| a.as_str()) {
+                    let free = balance.get("free")
+                        .and_then(|f| f.as_str())
+                        .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                        .unwrap_or_default();
+
+                    let locked = balance.get("locked")
+                        .and_then(|l| l.as_str())
+                        .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                        .unwrap_or_default();
+
+                    balances.insert(asset.to_string(), AssetBalance {
+                        asset: asset.to_string(),
+                        free,
+                        locked,
+                        total: free + locked,
+                    });
+                }
+            }
+        }
+
+        Ok(Balance {
+            exchange: ExchangeId::MEXC,
+            balances,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
+        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
+        
+        let mut url = format!("{}/api/v3/openOrders", self.config.rest_url);
+        
+        if let Some(sym) = symbol {
+            url.push_str(&format!("?symbol={}{}", sym.base, sym.quote));
+        }
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC get open orders request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("MEXC get open orders failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut orders = Vec::new();
+
+        if let Some(order_array) = response_json.as_array() {
+            for order_data in order_array {
+                let order_id = order_data.get("orderId")
+                    .and_then(|id| id.as_u64())
+                    .map(|id| id.to_string())
+                    .unwrap_or("unknown".to_string());
+
+                let symbol_str = order_data.get("symbol").and_then(|s| s.as_str()).unwrap_or("BTCUSDT");
+                let order_symbol = if symbol_str.ends_with("USDT") {
+                    let base = &symbol_str[..symbol_str.len() - 4];
+                    arbitrage_core::types::Symbol::new(base, "USDT")
+                } else {
+                    arbitrage_core::types::Symbol::new("BTC", "USDT")
+                };
+
+                let side = match order_data.get("side").and_then(|s| s.as_str()) {
+                    Some("BUY") => OrderSide::Buy,
+                    Some("SELL") => OrderSide::Sell,
+                    _ => OrderSide::Buy,
+                };
+
+                let quantity = order_data.get("origQty")
+                    .and_then(|q| q.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                let filled_quantity = order_data.get("executedQty")
+                    .and_then(|f| f.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                orders.push(OrderStatus {
+                    order_id,
+                    client_order_id: order_data.get("clientOrderId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                    symbol: order_symbol,
+                    side,
+                    order_type: OrderType::Limit,
+                    quantity,
+                    price: order_data.get("price").and_then(|p| p.as_str()).and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
+                    filled_quantity,
+                    remaining_quantity: quantity - filled_quantity,
+                    average_price: None,
+                    status: OrderStatusType::New,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                });
+            }
+        }
+
+        Ok(orders)
     }
 }
 

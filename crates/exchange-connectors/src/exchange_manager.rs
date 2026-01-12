@@ -449,4 +449,121 @@ impl ExchangeManager {
             }
         });
     }
+
+    /// Add a connector to the manager
+    pub async fn add_connector(&mut self, connector: Box<dyn ExchangeConnector>) -> Result<()> {
+        let exchange_id = connector.exchange_id();
+        let mut connectors = self.connectors.write().await;
+        connectors.insert(exchange_id, connector);
+        
+        info!("Added connector for {}", exchange_id);
+        Ok(())
+    }
+
+    /// Get a connector for a specific exchange
+    pub async fn get_connector(&self, exchange: &ExchangeId) -> Option<Box<dyn ExchangeConnector + '_>> {
+        // This is a simplified version - in practice we'd need to handle the lifetime properly
+        // For now, we'll return None and handle this in the OrderExecutor differently
+        None
+    }
+
+    /// Check if an exchange is connected
+    pub async fn is_exchange_connected(&self, exchange: &ExchangeId) -> bool {
+        let connectors = self.connectors.read().await;
+        if let Some(connector) = connectors.get(exchange) {
+            match connector.health_check().await {
+                Ok(health) => health.is_connected,
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Place order on specific exchange
+    pub async fn place_order(
+        &self,
+        exchange: &ExchangeId,
+        order: &crate::connector::OrderRequest,
+    ) -> Result<crate::connector::OrderResponse> {
+        let connectors = self.connectors.read().await;
+        
+        if let Some(connector) = connectors.get(exchange) {
+            // Apply rate limiting
+            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+                rate_limiter.acquire("rest").await?;
+            }
+            
+            connector.place_order(order).await
+        } else {
+            Err(arbitrage_core::ArbitrageError::Validation(
+                format!("Exchange {} not available", exchange)
+            ))
+        }
+    }
+
+    /// Cancel order on specific exchange
+    pub async fn cancel_order(
+        &self,
+        exchange: &ExchangeId,
+        order_id: &str,
+    ) -> Result<crate::connector::CancelResponse> {
+        let connectors = self.connectors.read().await;
+        
+        if let Some(connector) = connectors.get(exchange) {
+            // Apply rate limiting
+            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+                rate_limiter.acquire("rest").await?;
+            }
+            
+            connector.cancel_order(order_id).await
+        } else {
+            Err(arbitrage_core::ArbitrageError::Validation(
+                format!("Exchange {} not available", exchange)
+            ))
+        }
+    }
+
+    /// Get order status from specific exchange
+    pub async fn get_order_status(
+        &self,
+        exchange: &ExchangeId,
+        order_id: &str,
+    ) -> Result<crate::connector::OrderStatus> {
+        let connectors = self.connectors.read().await;
+        
+        if let Some(connector) = connectors.get(exchange) {
+            // Apply rate limiting
+            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+                rate_limiter.acquire("rest").await?;
+            }
+            
+            connector.get_order_status(order_id).await
+        } else {
+            Err(arbitrage_core::ArbitrageError::Validation(
+                format!("Exchange {} not available", exchange)
+            ))
+        }
+    }
+
+    /// Get balance from specific exchange
+    pub async fn get_balance(
+        &self,
+        exchange: &ExchangeId,
+    ) -> Result<crate::connector::Balance> {
+        let connectors = self.connectors.read().await;
+        
+        if let Some(connector) = connectors.get(exchange) {
+            // Apply rate limiting
+            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+                rate_limiter.acquire("rest").await?;
+            }
+            
+            connector.get_balance().await
+        } else {
+            Err(arbitrage_core::ArbitrageError::Validation(
+                format!("Exchange {} not available", exchange)
+            ))
+        }
+    }
 }

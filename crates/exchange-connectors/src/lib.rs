@@ -11,7 +11,7 @@ pub use exchange_manager::{ExchangeManager, ExchangeManagerConfig};
 pub use events::{ConnectionEvent, MarketDataEvent};
 pub use rate_limiter::{RateLimiter, RateLimitConfig, UnifiedRateLimitManager};
 pub use utils::*;
-pub use connections::{OKXConnector, BybitConnector, MEXCConnector, GateIOConnector, BitstampConnector, KrakenConnector};
+pub use connections::{OKXConnector, BybitConnector, MEXCConnector, GateioConnector, BitstampConnector, KrakenConnector};
 
 use arbitrage_core::{types::ExchangeId, Result};
 
@@ -21,7 +21,7 @@ pub fn create_connector(exchange_id: ExchangeId) -> Result<Box<dyn ExchangeConne
         ExchangeId::OKX => Ok(Box::new(OKXConnector::new())),
         ExchangeId::ByBit => Ok(Box::new(BybitConnector::new())),
         ExchangeId::MEXC => Ok(Box::new(MEXCConnector::new())),
-        ExchangeId::GateIo => Ok(Box::new(GateIOConnector::new())),
+        ExchangeId::GateIo => Ok(Box::new(GateioConnector::new())),
         ExchangeId::Bitstamp => Ok(Box::new(BitstampConnector::new())),
         ExchangeId::Kraken => Ok(Box::new(KrakenConnector::new())),
         _ => Err(arbitrage_core::ArbitrageError::Validation(
