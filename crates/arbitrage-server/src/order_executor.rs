@@ -91,7 +91,7 @@ impl OrderExecutor {
         );
 
         // Validate instruction
-        self.validate_instruction(instruction)?;
+        self.validate_instruction(instruction).await?;
 
         // Execute orders simultaneously
         let execution_result = match self.execute_orders_simultaneously(instruction).await {
@@ -104,7 +104,7 @@ impl OrderExecutor {
                     buy_order: None,
                     sell_order: None,
                     actual_profit: None,
-                    execution_time_ms: start_time.elapsed().as_millis() as u64,
+                    execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
                     error_message: Some(e.to_string()),
                     rollback_performed: false,
                 }
@@ -130,7 +130,7 @@ impl OrderExecutor {
     }
 
     /// Validate execution instruction
-    fn validate_instruction(&self, instruction: &ExecutionInstruction) -> Result<()> {
+    async fn validate_instruction(&self, instruction: &ExecutionInstruction) -> Result<()> {
         // Check minimum profit threshold
         if instruction.expected_profit < self.config.min_profit_threshold {
             return Err(ArbitrageError::Execution(format!(
@@ -151,20 +151,19 @@ impl OrderExecutor {
         }
 
         // Validate exchanges are available
-        // TODO: Add exchange connectivity validation when ExchangeManager methods are available
-        // if !self.exchange_manager.is_exchange_connected(&instruction.buy_order.exchange) {
-        //     return Err(ArbitrageError::Execution(format!(
-        //         "Buy exchange {} not connected",
-        //         instruction.buy_order.exchange
-        //     )));
-        // }
+        if !self.exchange_manager.is_exchange_connected(&instruction.buy_order.exchange).await {
+            return Err(ArbitrageError::Execution(format!(
+                "Buy exchange {} not connected",
+                instruction.buy_order.exchange
+            )));
+        }
 
-        // if !self.exchange_manager.is_exchange_connected(&instruction.sell_order.exchange) {
-        //     return Err(ArbitrageError::Execution(format!(
-        //         "Sell exchange {} not connected",
-        //         instruction.sell_order.exchange
-        //     )));
-        // }
+        if !self.exchange_manager.is_exchange_connected(&instruction.sell_order.exchange).await {
+            return Err(ArbitrageError::Execution(format!(
+                "Sell exchange {} not connected",
+                instruction.sell_order.exchange
+            )));
+        }
 
         Ok(())
     }
@@ -224,7 +223,7 @@ impl OrderExecutor {
                     buy_order: Some(buy_order),
                     sell_order: Some(sell_order),
                     actual_profit: Some(actual_profit),
-                    execution_time_ms,
+                    execution_time_ms: execution_time_ms.max(1), // Ensure it's at least 1ms
                     error_message: None,
                     rollback_performed: false,
                 })
@@ -243,7 +242,7 @@ impl OrderExecutor {
                     buy_order: Some(buy_order),
                     sell_order: None,
                     actual_profit: None,
-                    execution_time_ms,
+                    execution_time_ms: execution_time_ms.max(1),
                     error_message: Some(format!("Sell order failed: {}", sell_error)),
                     rollback_performed,
                 })
@@ -262,7 +261,7 @@ impl OrderExecutor {
                     buy_order: None,
                     sell_order: Some(sell_order),
                     actual_profit: None,
-                    execution_time_ms,
+                    execution_time_ms: execution_time_ms.max(1),
                     error_message: Some(format!("Buy order failed: {}", buy_error)),
                     rollback_performed,
                 })
@@ -275,7 +274,7 @@ impl OrderExecutor {
                     buy_order: None,
                     sell_order: None,
                     actual_profit: None,
-                    execution_time_ms,
+                    execution_time_ms: execution_time_ms.max(1),
                     error_message: Some(format!("Both orders failed - Buy: {}, Sell: {}", buy_error, sell_error)),
                     rollback_performed: false,
                 })
@@ -289,9 +288,14 @@ impl OrderExecutor {
         exchange: &ExchangeId,
         request: &OrderRequest,
     ) -> Result<OrderResponse> {
-        // TODO: Implement actual exchange connector integration
-        // For now, return a mock error since ExchangeManager methods are not available
-        Err(ArbitrageError::Execution(format!("Exchange {} not available - ExchangeManager integration pending", exchange)))
+        debug!("Placing {} order on {}: {} {}", 
+            match request.side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" },
+            exchange,
+            request.quantity,
+            request.symbol
+        );
+
+        self.exchange_manager.place_order(exchange, request).await
     }
 
     /// Calculate actual profit from executed orders

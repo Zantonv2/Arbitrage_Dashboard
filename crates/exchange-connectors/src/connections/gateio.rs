@@ -1,12 +1,13 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate};
+use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_decimal, parse_timestamp, SymbolFormat, ExponentialBackoff};
+use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
 use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
 use tokio::sync::{broadcast, RwLock, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -16,43 +17,23 @@ use tracing::{info, warn, error, debug};
 
 /// Gate.io WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct GateSubscription {
-    time: i64,
-    channel: String,
-    event: String,
-    payload: Vec<String>,
+struct GateioSubscription {
+    method: String,
+    params: Vec<String>,
+    id: u64,
 }
 
 /// Gate.io WebSocket response message
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
-struct GateWsResponse {
-    time: Option<i64>,
-    channel: Option<String>,
-    event: Option<String>,
-    error: Option<GateError>,
-    result: Option<Value>,
+struct GateioWsResponse {
+    method: Option<String>,
+    params: Option<Value>,
+    id: Option<u64>,
+    error: Option<Value>,
 }
 
-/// Gate.io error structure
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct GateError {
-    code: Option<i32>,
-    message: Option<String>,
-}
-
-/// Gate.io WebSocket market data message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct GateMarketData {
-    time: i64,
-    channel: String,
-    event: String,
-    result: Value,
-}
-
-pub struct GateIOConnector {
+pub struct GateioConnector {
     config: ConnectorConfig,
     client: Client,
     event_sender: broadcast::Sender<ConnectionEvent>,
@@ -62,12 +43,12 @@ pub struct GateIOConnector {
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
-impl GateIOConnector {
+impl GateioConnector {
     pub fn new() -> Self {
         let config = ConnectorConfig {
             exchange_id: ExchangeId::GateIo,
             ws_url: "wss://api.gateio.ws/ws/v4/".to_string(),
-            rest_url: "https://api.gateio.ws/api/v4".to_string(),
+            rest_url: "https://api.gateio.ws".to_string(),
             rate_limit_per_second: 10,
             rate_limit_burst: 20,
             ..Default::default()
@@ -89,17 +70,17 @@ impl GateIOConnector {
         }
     }
 
-    fn symbol_to_gate(&self, symbol: &Symbol) -> String {
+    fn symbol_to_gateio(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::Underscore)
     }
 
-    fn symbol_from_gate(&self, gate_symbol: &str) -> Result<Symbol> {
-        parse_symbol(gate_symbol, SymbolFormat::Underscore)
+    fn symbol_from_gateio(&self, gateio_symbol: &str) -> Result<Symbol> {
+        parse_symbol(gateio_symbol, SymbolFormat::Underscore)
     }
 }
 
 #[async_trait]
-impl ExchangeConnector for GateIOConnector {
+impl ExchangeConnector for GateioConnector {
     fn exchange_id(&self) -> ExchangeId {
         ExchangeId::GateIo
     }
@@ -116,9 +97,9 @@ impl ExchangeConnector for GateIOConnector {
     }
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
-        let gate_symbol = self.symbol_to_gate(symbol);
-        let url = format!("{}/spot/order_book?currency_pair={}&limit={}", 
-                         self.config.rest_url, gate_symbol, self.config.order_book_depth);
+        let gateio_symbol = self.symbol_to_gateio(symbol);
+        let url = format!("{}/api/v4/spot/order_book?currency_pair={}&limit={}", 
+                         self.config.rest_url, gateio_symbol, self.config.order_book_depth);
 
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
@@ -127,20 +108,16 @@ impl ExchangeConnector for GateIOConnector {
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
-        let url = format!("{}/spot/currency_pairs", self.config.rest_url);
+        let url = format!("{}/api/v4/spot/currency_pairs", self.config.rest_url);
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
         let mut symbols = Vec::new();
         if let Some(pairs) = data.as_array() {
-            for item in pairs {
-                if let Some(id) = item["id"].as_str() {
-                    if let Some(status) = item["trade_status"].as_str() {
-                        if status == "tradable" {
-                            if let Ok(symbol) = self.symbol_from_gate(id) {
-                                symbols.push(symbol);
-                            }
-                        }
+            for pair in pairs {
+                if let Some(id) = pair["id"].as_str() {
+                    if let Ok(symbol) = self.symbol_from_gateio(id) {
+                        symbols.push(symbol);
                     }
                 }
             }
@@ -149,17 +126,18 @@ impl ExchangeConnector for GateIOConnector {
     }
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
+        let url = format!("{}/api/v4/spot/tickers", self.config.rest_url);
+        let response = self.client.get(&url).send().await?;
+        let data: Value = response.json().await?;
+
         let mut tickers = HashMap::new();
-        for symbol in symbols {
-            let gate_symbol = self.symbol_to_gate(symbol);
-            let url = format!("{}/spot/tickers?currency_pair={}", self.config.rest_url, gate_symbol);
-            
-            if let Ok(response) = self.client.get(&url).send().await {
-                if let Ok(data) = response.json::<Value>().await {
-                    if let Some(arr) = data.as_array() {
-                        if let Some(ticker_data) = arr.first() {
-                            if let Ok(ticker) = self.parse_ticker(ticker_data, symbol) {
-                                tickers.insert(symbol.clone(), ticker);
+        if let Some(ticker_array) = data.as_array() {
+            for ticker_data in ticker_array {
+                if let Some(currency_pair) = ticker_data["currency_pair"].as_str() {
+                    if let Ok(symbol) = self.symbol_from_gateio(currency_pair) {
+                        if symbols.contains(&symbol) {
+                            if let Ok(ticker) = self.parse_ticker(ticker_data, &symbol) {
+                                tickers.insert(symbol, ticker);
                             }
                         }
                     }
@@ -169,26 +147,12 @@ impl ExchangeConnector for GateIOConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
-        for symbol in symbols {
-            let gate_symbol = self.symbol_to_gate(symbol);
-            // Gate.io uses futures API for funding rates
-            let url = format!("{}/futures/usdt/contracts/{}", self.config.rest_url, gate_symbol);
-            
-            if let Ok(response) = self.client.get(&url).send().await {
-                if let Ok(data) = response.json::<Value>().await {
-                    if let Ok(funding_rate) = self.parse_funding_rate(&data, symbol) {
-                        funding_rates.insert(symbol.clone(), funding_rate);
-                    }
-                }
-            }
-        }
-        Ok(funding_rates)
+    async fn fetch_funding_rates(&self, _symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+        // Gate.io spot doesn't have funding rates
+        Ok(HashMap::new())
     }
 
     async fn connect(&mut self) -> Result<()> {
-        // Check if already connected
         {
             let status = self.status.read().await;
             if *status == ConnectionStatus::Connected {
@@ -197,11 +161,8 @@ impl ExchangeConnector for GateIOConnector {
         }
 
         info!("Connecting to Gate.io WebSocket: {}", self.config.ws_url);
-        
-        // Update status to connecting
         *self.status.write().await = ConnectionStatus::Connecting;
 
-        // Start WebSocket connection task
         let ws_url = self.config.ws_url.clone();
         let event_sender = self.event_sender.clone();
         let status = self.status.clone();
@@ -213,10 +174,7 @@ impl ExchangeConnector for GateIOConnector {
             Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
         });
 
-        // Store the handle
         *self.ws_handle.lock().await = Some(handle);
-
-        // Wait for connection to establish (increased from 100ms for reliability)
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         Ok(())
@@ -224,23 +182,17 @@ impl ExchangeConnector for GateIOConnector {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("Disconnecting from Gate.io WebSocket");
-        
-        // Update status
         *self.status.write().await = ConnectionStatus::Disconnected;
 
-        // Cancel WebSocket task if running
         if let Some(handle) = self.ws_handle.lock().await.take() {
             handle.abort();
         }
 
-        // Clear subscribed symbols
         self.subscribed_symbols.write().await.clear();
-
         Ok(())
     }
 
     async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
-        // Store symbols for reconnection
         let mut subscribed = self.subscribed_symbols.write().await;
         for symbol in symbols {
             if !subscribed.contains(symbol) {
@@ -251,30 +203,18 @@ impl ExchangeConnector for GateIOConnector {
     }
 
     async fn unsubscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
-        // Remove symbols from subscription list
         let mut subscribed = self.subscribed_symbols.write().await;
         subscribed.retain(|s| !symbols.contains(s));
         Ok(())
     }
 
     async fn subscribe_tickers(&mut self, _symbols: &[Symbol]) -> Result<()> {
-        // Gate.io tickers are included in order book subscriptions
         Ok(())
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
         info!("Subscribing to Gate.io order books for {} symbols", symbols.len());
-        
-        // Add symbols to subscription list
         self.subscribe_symbols(symbols).await?;
-
-        // Send subscription message if connected
-        let status = self.status.read().await;
-        if *status == ConnectionStatus::Connected {
-            // The actual subscription will be handled by the WebSocket task
-            // when it detects new symbols in the subscribed_symbols list
-        }
-
         Ok(())
     }
 
@@ -311,40 +251,265 @@ impl ExchangeConnector for GateIOConnector {
         self.disconnect().await?;
         self.connect().await
     }
+
     // === Trading Methods ===
 
-    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn place_order(&self, order: &OrderRequest) -> Result<OrderResponse> {
+        let gateio_symbol = self.symbol_to_gateio(&order.symbol);
+        let url = format!("{}/api/v4/spot/orders", self.config.rest_url);
+
+        let side = match order.side {
+            OrderSide::Buy => "buy",
+            OrderSide::Sell => "sell",
+        };
+
+        let order_type = match order.order_type {
+            OrderType::Market => "market",
+            OrderType::Limit => "limit",
+            _ => "limit",
+        };
+
+        let mut body = serde_json::json!({
+            "currency_pair": gateio_symbol,
+            "side": side,
+            "type": order_type,
+            "amount": order.quantity.to_string(),
+        });
+
+        if let Some(price) = order.price {
+            body["price"] = serde_json::Value::String(price.to_string());
+        }
+
+        if let Some(client_id) = &order.client_order_id {
+            body["text"] = serde_json::Value::String(client_id.clone());
+        }
+
+        let response = self.client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?;
+
+        let response_json: Value = response.json().await?;
+
+        let order_id = response_json["id"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
+
+        let status = match response_json["status"].as_str() {
+            Some("open") => OrderStatusType::New,
+            Some("filled") => OrderStatusType::Filled,
+            Some("cancelled") => OrderStatusType::Cancelled,
+            _ => OrderStatusType::New,
+        };
+
+        Ok(OrderResponse {
+            order_id,
+            client_order_id: order.client_order_id.clone(),
+            symbol: order.symbol.clone(),
+            side: order.side.clone(),
+            order_type: order.order_type.clone(),
+            quantity: order.quantity,
+            price: order.price,
+            status,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+        let url = format!("{}/api/v4/spot/orders/{}", self.config.rest_url, order_id);
+
+        let response = self.client
+            .delete(&url)
+            .send()
+            .await?;
+
+        let response_json: Value = response.json().await?;
+
+        let status = match response_json["status"].as_str() {
+            Some("cancelled") => OrderStatusType::Cancelled,
+            _ => OrderStatusType::Rejected,
+        };
+
+        Ok(CancelResponse {
+            order_id: order_id.to_string(),
+            client_order_id: response_json["text"].as_str().map(|s| s.to_string()),
+            status,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
+        let url = format!("{}/api/v4/spot/orders/{}", self.config.rest_url, order_id);
+
+        let response = self.client.get(&url).send().await?;
+        let order_data: Value = response.json().await?;
+
+        let currency_pair = order_data["currency_pair"].as_str().unwrap_or("BTC_USDT");
+        let order_symbol = self.symbol_from_gateio(currency_pair)?;
+
+        let side = match order_data["side"].as_str() {
+            Some("buy") => OrderSide::Buy,
+            Some("sell") => OrderSide::Sell,
+            _ => OrderSide::Buy,
+        };
+
+        let order_type = match order_data["type"].as_str() {
+            Some("market") => OrderType::Market,
+            Some("limit") => OrderType::Limit,
+            _ => OrderType::Limit,
+        };
+
+        let quantity = order_data["amount"]
+            .as_str()
+            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+            .unwrap_or_default();
+
+        let price = order_data["price"]
+            .as_str()
+            .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+        let filled_quantity = order_data["filled_total"]
+            .as_str()
+            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+            .unwrap_or_default();
+
+        let status = match order_data["status"].as_str() {
+            Some("open") => OrderStatusType::New,
+            Some("filled") => OrderStatusType::Filled,
+            Some("cancelled") => OrderStatusType::Cancelled,
+            _ => OrderStatusType::New,
+        };
+
+        Ok(OrderStatus {
+            order_id: order_id.to_string(),
+            client_order_id: order_data["text"].as_str().map(|s| s.to_string()),
+            symbol: order_symbol,
+            side,
+            order_type,
+            quantity,
+            price,
+            filled_quantity,
+            remaining_quantity: quantity - filled_quantity,
+            average_price: price,
+            status,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        })
     }
 
-    async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_balance(&self) -> Result<Balance> {
+        let url = format!("{}/api/v4/spot/accounts", self.config.rest_url);
+
+        let response = self.client.get(&url).send().await?;
+        let accounts: Value = response.json().await?;
+
+        let mut balances = HashMap::new();
+
+        if let Some(account_array) = accounts.as_array() {
+            for account in account_array {
+                if let Some(currency) = account["currency"].as_str() {
+                    let available = account["available"]
+                        .as_str()
+                        .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                        .unwrap_or_default();
+
+                    let locked = account["locked"]
+                        .as_str()
+                        .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                        .unwrap_or_default();
+
+                    balances.insert(currency.to_string(), AssetBalance {
+                        asset: currency.to_string(),
+                        free: available,
+                        locked,
+                        total: available + locked,
+                    });
+                }
+            }
+        }
+
+        Ok(Balance {
+            exchange: ExchangeId::GateIo,
+            balances,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented".to_string()
-        ))
+    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>> {
+        let mut url = format!("{}/api/v4/spot/orders?status=open", self.config.rest_url);
+        
+        if let Some(sym) = symbol {
+            let gateio_symbol = self.symbol_to_gateio(sym);
+            url.push_str(&format!("&currency_pair={}", gateio_symbol));
+        }
+
+        let response = self.client.get(&url).send().await?;
+        let response_json: Value = response.json().await?;
+
+        let mut orders = Vec::new();
+
+        if let Some(order_array) = response_json.as_array() {
+            for order_data in order_array {
+                let order_id = order_data["id"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let currency_pair = order_data["currency_pair"].as_str().unwrap_or("BTC_USDT");
+                let order_symbol = self.symbol_from_gateio(currency_pair)?;
+
+                let side = match order_data["side"].as_str() {
+                    Some("buy") => OrderSide::Buy,
+                    Some("sell") => OrderSide::Sell,
+                    _ => OrderSide::Buy,
+                };
+
+                let order_type = match order_data["type"].as_str() {
+                    Some("market") => OrderType::Market,
+                    Some("limit") => OrderType::Limit,
+                    _ => OrderType::Limit,
+                };
+
+                let quantity = order_data["amount"]
+                    .as_str()
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                let price = order_data["price"]
+                    .as_str()
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+                let filled_quantity = order_data["filled_total"]
+                    .as_str()
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                orders.push(OrderStatus {
+                    order_id,
+                    client_order_id: order_data["text"].as_str().map(|s| s.to_string()),
+                    symbol: order_symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    price,
+                    filled_quantity,
+                    remaining_quantity: quantity - filled_quantity,
+                    average_price: price,
+                    status: OrderStatusType::New, // Open orders are "New"
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                });
+            }
+        }
+
+        Ok(orders)
     }
 }
 
-impl GateIOConnector {
+
+impl GateioConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
         ws_url: String,
@@ -365,10 +530,8 @@ impl GateIOConnector {
                     info!("Gate.io WebSocket connected successfully");
                     backoff.reset();
                     
-                    // Update status to connected
                     *status.write().await = ConnectionStatus::Connected;
                     
-                    // Send status change event
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::GateIo,
                         old_status: ConnectionStatus::Connecting,
@@ -376,7 +539,6 @@ impl GateIOConnector {
                         timestamp: chrono::Utc::now(),
                     });
 
-                    // Handle WebSocket messages
                     if let Err(e) = Self::handle_websocket_connection(
                         ws_stream,
                         &event_sender,
@@ -390,11 +552,7 @@ impl GateIOConnector {
                 }
                 Err(e) => {
                     error!("Failed to connect to Gate.io WebSocket: {}", e);
-                    
-                    // Update status to error
                     *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
-                    
-                    // Send error event
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::GateIo,
                         error: format!("WebSocket connection failed: {}", e),
@@ -403,30 +561,25 @@ impl GateIOConnector {
                 }
             }
 
-            // Check if we should continue reconnecting
             let current_status = status.read().await;
             if *current_status == ConnectionStatus::Disconnected {
                 break;
             }
 
-            // Wait before reconnecting
             let delay = backoff.next_delay();
             warn!("Gate.io WebSocket reconnecting in {:?}", delay);
             tokio::time::sleep(delay).await;
         }
     }
 
-    /// Establish WebSocket connection
     async fn connect_websocket(
         ws_url: &str,
     ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
         let (ws_stream, response) = connect_async(ws_url).await
             .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
-        
         Ok((ws_stream, response))
     }
 
-    /// Handle WebSocket connection and messages
     async fn handle_websocket_connection(
         mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
         event_sender: &broadcast::Sender<ConnectionEvent>,
@@ -437,55 +590,43 @@ impl GateIOConnector {
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
         let mut current_subscriptions: Vec<String> = Vec::new();
-        let mut last_ping = std::time::Instant::now();
+        let mut subscription_id = 1u64;
 
         loop {
-            // Check for new subscriptions every 5 seconds
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_symbols = Vec::new();
+                let mut new_params = Vec::new();
                 
                 for symbol in symbols.iter() {
-                    let gate_symbol = Self::symbol_to_gate_static(symbol);
+                    let gateio_symbol = Self::symbol_to_gateio_static(symbol);
                     
-                    if !current_subscriptions.contains(&gate_symbol) {
-                        new_symbols.push(gate_symbol.clone());
-                        current_subscriptions.push(gate_symbol);
+                    if !current_subscriptions.contains(&gateio_symbol) {
+                        new_params.push(gateio_symbol.clone());
+                        current_subscriptions.push(gateio_symbol);
                     }
                 }
 
-                if !new_symbols.is_empty() {
-                    let subscription = GateSubscription {
-                        time: chrono::Utc::now().timestamp(),
-                        channel: "spot.book_ticker".to_string(),
-                        event: "subscribe".to_string(),
-                        payload: new_symbols.clone(),
+                if !new_params.is_empty() {
+                    let subscription = GateioSubscription {
+                        method: "depth.subscribe".to_string(),
+                        params: new_params,
+                        id: subscription_id,
                     };
+                    subscription_id += 1;
 
                     let msg = serde_json::to_string(&subscription)
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize subscription: {}", e)))?;
+                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize: {}", e)))?;
                     
                     debug!("Sending Gate.io subscription: {}", msg);
-                    
                     ws_stream.send(Message::Text(msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send subscription: {}", e)))?;
+                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send: {}", e)))?;
                 }
                 
                 last_subscription_check = std::time::Instant::now();
             }
 
-            // Send ping every 25 seconds to keep connection alive
-            if last_ping.elapsed() > Duration::from_secs(25) {
-                let ping = r#"{"time":0,"channel":"spot.ping"}"#;
-                ws_stream.send(Message::Text(ping.into())).await
-                    .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
-                last_ping = std::time::Instant::now();
-            }
-
-            // Handle incoming messages with timeout
             match tokio::time::timeout(Duration::from_secs(30), ws_stream.next()).await {
                 Ok(Some(Ok(message))) => {
-                    // Update stats
                     {
                         let mut stats_guard = stats.lock().await;
                         stats_guard.messages_received += 1;
@@ -499,7 +640,6 @@ impl GateIOConnector {
                             }
                         }
                         Message::Ping(data) => {
-                            // Respond to ping with pong
                             ws_stream.send(Message::Pong(data)).await
                                 .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
                         }
@@ -520,14 +660,11 @@ impl GateIOConnector {
                 }
                 Err(_) => {
                     warn!("Gate.io WebSocket timeout, sending ping");
-                    // Send ping to keep connection alive
-                    let ping = r#"{"time":0,"channel":"spot.ping"}"#;
-                    ws_stream.send(Message::Text(ping.into())).await
+                    ws_stream.send(Message::Ping(vec![].into())).await
                         .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
                 }
             }
 
-            // Check if we should disconnect
             let current_status = status.read().await;
             if *current_status == ConnectionStatus::Disconnected {
                 break;
@@ -537,40 +674,23 @@ impl GateIOConnector {
         Ok(())
     }
 
-    /// Handle incoming text messages
     async fn handle_text_message(
         text: &str,
         event_sender: &broadcast::Sender<ConnectionEvent>,
     ) -> Result<()> {
         debug!("Received Gate.io message: {}", text);
 
-        // Try to parse as response first
-        if let Ok(response) = serde_json::from_str::<GateWsResponse>(text) {
-            if let Some(event) = &response.event {
-                if event == "subscribe" {
-                    debug!("Gate.io subscription response: {:?}", response);
-                    return Ok(());
-                }
-            }
-            
-            // Check for errors
-            if let Some(error) = &response.error {
-                warn!("Gate.io error: {:?}", error);
-                return Ok(());
-            }
-        }
-
-        // Try to parse as market data
-        if let Ok(market_data) = serde_json::from_str::<GateMarketData>(text) {
-            if market_data.channel == "spot.book_ticker" && market_data.event == "update" {
-                if let Ok(order_book) = Self::parse_book_ticker_message(&market_data) {
-                    let event = ConnectionEvent::MarketData(MarketDataEvent::OrderBook {
-                        exchange: ExchangeId::GateIo,
-                        order_book,
-                        timestamp: chrono::Utc::now(),
-                    });
-
-                    let _ = event_sender.send(event);
+        if let Ok(data) = serde_json::from_str::<Value>(text) {
+            if let Some(method) = data["method"].as_str() {
+                if method == "depth.update" {
+                    if let Ok(order_book) = Self::parse_orderbook_message(&data) {
+                        let event = ConnectionEvent::MarketData(MarketDataEvent::OrderBook {
+                            exchange: ExchangeId::GateIo,
+                            order_book,
+                            timestamp: chrono::Utc::now(),
+                        });
+                        let _ = event_sender.send(event);
+                    }
                 }
             }
         }
@@ -578,44 +698,63 @@ impl GateIOConnector {
         Ok(())
     }
 
-    /// Parse Gate.io book ticker message into OrderBook
-    fn parse_book_ticker_message(market_data: &GateMarketData) -> Result<OrderBook> {
-        let data = &market_data.result;
+    fn parse_orderbook_message(data: &Value) -> Result<OrderBook> {
+        let params = data["params"].as_array()
+            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing params".to_string()))?;
         
-        let symbol_str = data["s"].as_str().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing symbol".to_string()))?;
-        let symbol = Self::symbol_from_gate_static(symbol_str)?;
+        if params.len() < 3 {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection("Invalid params length".to_string()));
+        }
 
-        let bid_price = parse_decimal(&data["b"])?;
-        let bid_qty = parse_decimal(&data["B"])?;
-        let ask_price = parse_decimal(&data["a"])?;
-        let ask_qty = parse_decimal(&data["A"])?;
+        let currency_pair = params[2].as_str()
+            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing currency pair".to_string()))?;
+        
+        let symbol = Self::symbol_from_gateio_static(currency_pair)?;
+        
+        let book_data = &params[1];
+        let mut asks = Vec::new();
+        let mut bids = Vec::new();
 
-        let timestamp = if let Some(t) = data["t"].as_i64() {
-            chrono::DateTime::from_timestamp_millis(t)
-                .unwrap_or_else(|| chrono::Utc::now())
-        } else {
-            chrono::Utc::now()
-        };
+        if let Some(asks_data) = book_data["asks"].as_array() {
+            for ask in asks_data.iter().take(50) {
+                if let Some(ask_arr) = ask.as_array() {
+                    if ask_arr.len() >= 2 {
+                        let price = parse_decimal(&ask_arr[0])?;
+                        let quantity = parse_decimal(&ask_arr[1])?;
+                        asks.push(OrderBookLevel { price, quantity });
+                    }
+                }
+            }
+        }
+
+        if let Some(bids_data) = book_data["bids"].as_array() {
+            for bid in bids_data.iter().take(50) {
+                if let Some(bid_arr) = bid.as_array() {
+                    if bid_arr.len() >= 2 {
+                        let price = parse_decimal(&bid_arr[0])?;
+                        let quantity = parse_decimal(&bid_arr[1])?;
+                        bids.push(OrderBookLevel { price, quantity });
+                    }
+                }
+            }
+        }
 
         Ok(OrderBook {
             exchange: ExchangeId::GateIo,
             symbol,
-            bids: vec![OrderBookLevel { price: bid_price, quantity: bid_qty }],
-            asks: vec![OrderBookLevel { price: ask_price, quantity: ask_qty }],
-            timestamp,
-            sequence: data["u"].as_u64(),
+            bids,
+            asks,
+            timestamp: chrono::Utc::now(),
+            sequence: None,
         })
     }
 
-    /// Static version of symbol conversion for use in async contexts
-    fn symbol_to_gate_static(symbol: &Symbol) -> String {
+    fn symbol_to_gateio_static(symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::Underscore)
     }
 
-    /// Static version of symbol parsing for use in async contexts
-    fn symbol_from_gate_static(gate_symbol: &str) -> Result<Symbol> {
-        parse_symbol(gate_symbol, SymbolFormat::Underscore)
+    fn symbol_from_gateio_static(gateio_symbol: &str) -> Result<Symbol> {
+        parse_symbol(gateio_symbol, SymbolFormat::Underscore)
     }
 
     fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
@@ -657,28 +796,20 @@ impl GateIOConnector {
     }
 
     fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+        let last_price = parse_decimal(&data["last"])?;
+        let bid_price = parse_decimal(&data["highest_bid"])?;
+        let ask_price = parse_decimal(&data["lowest_ask"])?;
+        let volume_24h = parse_decimal(&data["base_volume"])?;
+        let price_change_24h = parse_decimal(&data["change_percentage"])?;
+
         Ok(TickerData {
             symbol: symbol.clone(),
             exchange: ExchangeId::GateIo,
-            last_price: parse_decimal(&data["last"])?,
-            bid_price: parse_decimal(&data["highest_bid"])?,
-            ask_price: parse_decimal(&data["lowest_ask"])?,
-            volume_24h: parse_decimal(&data["base_volume"]).unwrap_or_default(),
-            price_change_24h: parse_decimal(&data["change_percentage"]).unwrap_or_default(),
-            timestamp: chrono::Utc::now(),
-        })
-    }
-
-    fn parse_funding_rate(&self, data: &Value, symbol: &Symbol) -> Result<FundingRate> {
-        let funding_rate = parse_decimal(&data["funding_rate"])?;
-        let funding_time = parse_timestamp(&data["funding_next_apply"])?;
-        
-        Ok(FundingRate {
-            symbol: symbol.clone(),
-            exchange: ExchangeId::GateIo,
-            funding_rate,
-            predicted_rate: parse_decimal(&data["funding_rate_indicative"]).ok(),
-            funding_time,
+            last_price,
+            bid_price,
+            ask_price,
+            volume_24h,
+            price_change_24h,
             timestamp: chrono::Utc::now(),
         })
     }

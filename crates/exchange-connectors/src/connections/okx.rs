@@ -1,4 +1,4 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate};
+use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_symbol, parse_timestamp, parse_decimal, SymbolFormat, ExponentialBackoff};
 use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
@@ -7,6 +7,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
 use tokio::sync::{broadcast, RwLock, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -307,40 +308,342 @@ impl ExchangeConnector for OKXConnector {
 
     // === Trading Methods ===
 
-    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
-        // TODO: Implement OKX order placement
-        // This is a stub for Phase 4 implementation
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for OKX".to_string()
-        ))
+    async fn place_order(&self, order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+        use crate::connector::{OrderResponse, OrderStatusType};
+        
+        // OKX API endpoint for placing orders
+        let url = format!("{}/api/v5/trade/order", self.config.rest_url);
+        
+        // Convert our order request to OKX format
+        let okx_order = serde_json::json!({
+            "instId": format!("{}-{}", order.symbol.base, order.symbol.quote),
+            "tdMode": "cash", // Trading mode: cash for spot trading
+            "side": match order.side {
+                crate::connector::OrderSide::Buy => "buy",
+                crate::connector::OrderSide::Sell => "sell",
+            },
+            "ordType": match order.order_type {
+                crate::connector::OrderType::Market => "market",
+                crate::connector::OrderType::Limit => "limit",
+                _ => "limit", // Default to limit for other types
+            },
+            "sz": order.quantity.to_string(),
+            "px": order.price.map(|p| p.to_string()).unwrap_or_default(),
+            "clOrdId": order.client_order_id.as_deref().unwrap_or(""),
+        });
+
+        // Make authenticated request to OKX
+        let response = self.client
+            .post(&url)
+            .json(&okx_order)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX place order request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("OKX place order failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        // Parse OKX response
+        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()).and_then(|arr| arr.first()) {
+            let order_id = data.get("ordId")
+                .and_then(|id| id.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let status = match data.get("sCode").and_then(|s| s.as_str()) {
+                Some("0") => OrderStatusType::New, // Success
+                _ => OrderStatusType::Rejected,
+            };
+
+            Ok(OrderResponse {
+                order_id,
+                client_order_id: order.client_order_id.clone(),
+                symbol: order.symbol.clone(),
+                side: order.side.clone(),
+                order_type: order.order_type.clone(),
+                quantity: order.quantity,
+                price: order.price,
+                status,
+                timestamp: chrono::Utc::now(),
+            })
+        } else {
+            Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid response format from OKX".to_string()
+            ))
+        }
     }
 
-    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
-        // TODO: Implement OKX order cancellation
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for OKX".to_string()
-        ))
+    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
+        use crate::connector::{CancelResponse, OrderStatusType};
+        
+        let url = format!("{}/api/v5/trade/cancel-order", self.config.rest_url);
+        
+        let cancel_request = serde_json::json!({
+            "instId": "BTC-USDT", // This should be dynamic based on the order
+            "ordId": order_id,
+        });
+
+        let response = self.client
+            .post(&url)
+            .json(&cancel_request)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX cancel order request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("OKX cancel order failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let status = if response_json.get("code").and_then(|c| c.as_str()) == Some("0") {
+            OrderStatusType::Cancelled
+        } else {
+            OrderStatusType::Rejected
+        };
+
+        Ok(CancelResponse {
+            order_id: order_id.to_string(),
+            client_order_id: None,
+            status,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
-        // TODO: Implement OKX order status query
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for OKX".to_string()
-        ))
+    async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
+        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
+        
+        let url = format!("{}/api/v5/trade/order?ordId={}", self.config.rest_url, order_id);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX get order status request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("OKX get order status failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()).and_then(|arr| arr.first()) {
+            let symbol_str = data.get("instId").and_then(|s| s.as_str()).unwrap_or("BTC-USDT");
+            let parts: Vec<&str> = symbol_str.split('-').collect();
+            let symbol = if parts.len() >= 2 {
+                arbitrage_core::types::Symbol::new(parts[0], parts[1])
+            } else {
+                arbitrage_core::types::Symbol::new("BTC", "USDT")
+            };
+
+            let side = match data.get("side").and_then(|s| s.as_str()) {
+                Some("buy") => OrderSide::Buy,
+                Some("sell") => OrderSide::Sell,
+                _ => OrderSide::Buy,
+            };
+
+            let order_type = match data.get("ordType").and_then(|t| t.as_str()) {
+                Some("market") => OrderType::Market,
+                Some("limit") => OrderType::Limit,
+                _ => OrderType::Limit,
+            };
+
+            let quantity = data.get("sz")
+                .and_then(|q| q.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                .unwrap_or_default();
+
+            let price = data.get("px")
+                .and_then(|p| p.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+            let filled_quantity = data.get("fillSz")
+                .and_then(|f| f.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                .unwrap_or_default();
+
+            let status = match data.get("state").and_then(|s| s.as_str()) {
+                Some("live") => OrderStatusType::New,
+                Some("partially_filled") => OrderStatusType::PartiallyFilled,
+                Some("filled") => OrderStatusType::Filled,
+                Some("canceled") => OrderStatusType::Cancelled,
+                _ => OrderStatusType::New,
+            };
+
+            Ok(OrderStatus {
+                order_id: order_id.to_string(),
+                client_order_id: data.get("clOrdId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                symbol,
+                side,
+                order_type,
+                quantity,
+                price,
+                filled_quantity,
+                remaining_quantity: quantity - filled_quantity,
+                average_price: price,
+                status,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            })
+        } else {
+            Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid response format from OKX".to_string()
+            ))
+        }
     }
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        // TODO: Implement OKX balance query
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for OKX".to_string()
-        ))
+        use crate::connector::{Balance, AssetBalance};
+        
+        let url = format!("{}/api/v5/account/balance", self.config.rest_url);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX get balance request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("OKX get balance failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut balances = std::collections::HashMap::new();
+
+        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()).and_then(|arr| arr.first()) {
+            if let Some(details) = data.get("details").and_then(|d| d.as_array()) {
+                for detail in details {
+                    if let Some(currency) = detail.get("ccy").and_then(|c| c.as_str()) {
+                        let available = detail.get("availBal")
+                            .and_then(|a| a.as_str())
+                            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                            .unwrap_or_default();
+
+                        let frozen = detail.get("frozenBal")
+                            .and_then(|f| f.as_str())
+                            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                            .unwrap_or_default();
+
+                        balances.insert(currency.to_string(), AssetBalance {
+                            asset: currency.to_string(),
+                            free: available,
+                            locked: frozen,
+                            total: available + frozen,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Balance {
+            exchange: ExchangeId::OKX,
+            balances,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        // TODO: Implement OKX open orders query
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for OKX".to_string()
-        ))
+    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
+        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
+        
+        let mut url = format!("{}/api/v5/trade/orders-pending", self.config.rest_url);
+        
+        if let Some(sym) = symbol {
+            url.push_str(&format!("?instId={}-{}", sym.base, sym.quote));
+        }
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX get open orders request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("OKX get open orders failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut orders = Vec::new();
+
+        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()) {
+            for order_data in data {
+                let order_id = order_data.get("ordId")
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let symbol_str = order_data.get("instId").and_then(|s| s.as_str()).unwrap_or("BTC-USDT");
+                let parts: Vec<&str> = symbol_str.split('-').collect();
+                let order_symbol = if parts.len() >= 2 {
+                    arbitrage_core::types::Symbol::new(parts[0], parts[1])
+                } else {
+                    arbitrage_core::types::Symbol::new("BTC", "USDT")
+                };
+
+                let side = match order_data.get("side").and_then(|s| s.as_str()) {
+                    Some("buy") => OrderSide::Buy,
+                    Some("sell") => OrderSide::Sell,
+                    _ => OrderSide::Buy,
+                };
+
+                let order_type = match order_data.get("ordType").and_then(|t| t.as_str()) {
+                    Some("market") => OrderType::Market,
+                    Some("limit") => OrderType::Limit,
+                    _ => OrderType::Limit,
+                };
+
+                let quantity = order_data.get("sz")
+                    .and_then(|q| q.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                let price = order_data.get("px")
+                    .and_then(|p| p.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+                let filled_quantity = order_data.get("fillSz")
+                    .and_then(|f| f.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                orders.push(OrderStatus {
+                    order_id,
+                    client_order_id: order_data.get("clOrdId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                    symbol: order_symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    price,
+                    filled_quantity,
+                    remaining_quantity: quantity - filled_quantity,
+                    average_price: price,
+                    status: OrderStatusType::New, // Pending orders are "New"
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                });
+            }
+        }
+
+        Ok(orders)
     }
 }
 

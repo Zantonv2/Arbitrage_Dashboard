@@ -1,4 +1,4 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate};
+use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_symbol, parse_timestamp, parse_decimal, SymbolFormat, ExponentialBackoff};
 use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
@@ -7,6 +7,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use std::str::FromStr;
 use tokio::sync::{broadcast, RwLock, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
@@ -313,34 +314,355 @@ impl ExchangeConnector for BybitConnector {
 
     // === Trading Methods ===
 
-    async fn place_order(&self, _order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for ByBit".to_string()
-        ))
+    async fn place_order(&self, order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+        use crate::connector::{OrderResponse, OrderStatusType};
+        
+        // ByBit API endpoint for placing orders
+        let url = format!("{}/v5/order/create", self.config.rest_url);
+        
+        // Convert our order request to ByBit format
+        let bybit_order = serde_json::json!({
+            "category": "spot", // Trading category: spot for spot trading
+            "symbol": format!("{}{}", order.symbol.base, order.symbol.quote),
+            "side": match order.side {
+                crate::connector::OrderSide::Buy => "Buy",
+                crate::connector::OrderSide::Sell => "Sell",
+            },
+            "orderType": match order.order_type {
+                crate::connector::OrderType::Market => "Market",
+                crate::connector::OrderType::Limit => "Limit",
+                _ => "Limit", // Default to limit for other types
+            },
+            "qty": order.quantity.to_string(),
+            "price": order.price.map(|p| p.to_string()).unwrap_or_default(),
+            "orderLinkId": order.client_order_id.as_deref().unwrap_or(""),
+        });
+
+        // Make authenticated request to ByBit
+        let response = self.client
+            .post(&url)
+            .json(&bybit_order)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit place order request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("ByBit place order failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        // Parse ByBit response
+        if let Some(result) = response_json.get("result") {
+            let order_id = result.get("orderId")
+                .and_then(|id| id.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let status = match response_json.get("retCode").and_then(|c| c.as_u64()) {
+                Some(0) => OrderStatusType::New, // Success
+                _ => OrderStatusType::Rejected,
+            };
+
+            Ok(OrderResponse {
+                order_id,
+                client_order_id: order.client_order_id.clone(),
+                symbol: order.symbol.clone(),
+                side: order.side.clone(),
+                order_type: order.order_type.clone(),
+                quantity: order.quantity,
+                price: order.price,
+                status,
+                timestamp: chrono::Utc::now(),
+            })
+        } else {
+            Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid response format from ByBit".to_string()
+            ))
+        }
     }
 
-    async fn cancel_order(&self, _order_id: &str) -> Result<crate::connector::CancelResponse> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for ByBit".to_string()
-        ))
+    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
+        use crate::connector::{CancelResponse, OrderStatusType};
+        
+        let url = format!("{}/v5/order/cancel", self.config.rest_url);
+        
+        let cancel_request = serde_json::json!({
+            "category": "spot",
+            "symbol": "BTCUSDT", // This should be dynamic based on the order
+            "orderId": order_id,
+        });
+
+        let response = self.client
+            .post(&url)
+            .json(&cancel_request)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit cancel order request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("ByBit cancel order failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let status = if response_json.get("retCode").and_then(|c| c.as_u64()) == Some(0) {
+            OrderStatusType::Cancelled
+        } else {
+            OrderStatusType::Rejected
+        };
+
+        Ok(CancelResponse {
+            order_id: order_id.to_string(),
+            client_order_id: None,
+            status,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_order_status(&self, _order_id: &str) -> Result<crate::connector::OrderStatus> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for ByBit".to_string()
-        ))
+    async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
+        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
+        
+        let url = format!("{}/v5/order/realtime?category=spot&orderId={}", self.config.rest_url, order_id);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit get order status request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("ByBit get order status failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        if let Some(result) = response_json.get("result")
+            .and_then(|r| r.get("list"))
+            .and_then(|l| l.as_array())
+            .and_then(|arr| arr.first()) {
+            
+            let symbol_str = result.get("symbol").and_then(|s| s.as_str()).unwrap_or("BTCUSDT");
+            // ByBit uses concatenated symbols like BTCUSDT, need to parse
+            let symbol = if symbol_str.ends_with("USDT") {
+                let base = &symbol_str[..symbol_str.len() - 4];
+                arbitrage_core::types::Symbol::new(base, "USDT")
+            } else {
+                arbitrage_core::types::Symbol::new("BTC", "USDT")
+            };
+
+            let side = match result.get("side").and_then(|s| s.as_str()) {
+                Some("Buy") => OrderSide::Buy,
+                Some("Sell") => OrderSide::Sell,
+                _ => OrderSide::Buy,
+            };
+
+            let order_type = match result.get("orderType").and_then(|t| t.as_str()) {
+                Some("Market") => OrderType::Market,
+                Some("Limit") => OrderType::Limit,
+                _ => OrderType::Limit,
+            };
+
+            let quantity = result.get("qty")
+                .and_then(|q| q.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                .unwrap_or_default();
+
+            let price = result.get("price")
+                .and_then(|p| p.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+            let filled_quantity = result.get("cumExecQty")
+                .and_then(|f| f.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                .unwrap_or_default();
+
+            let status = match result.get("orderStatus").and_then(|s| s.as_str()) {
+                Some("New") => OrderStatusType::New,
+                Some("PartiallyFilled") => OrderStatusType::PartiallyFilled,
+                Some("Filled") => OrderStatusType::Filled,
+                Some("Cancelled") => OrderStatusType::Cancelled,
+                _ => OrderStatusType::New,
+            };
+
+            Ok(OrderStatus {
+                order_id: order_id.to_string(),
+                client_order_id: result.get("orderLinkId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                symbol,
+                side,
+                order_type,
+                quantity,
+                price,
+                filled_quantity,
+                remaining_quantity: quantity - filled_quantity,
+                average_price: price,
+                status,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            })
+        } else {
+            Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid response format from ByBit".to_string()
+            ))
+        }
     }
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for ByBit".to_string()
-        ))
+        use crate::connector::{Balance, AssetBalance};
+        
+        let url = format!("{}/v5/account/wallet-balance?accountType=SPOT", self.config.rest_url);
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit get balance request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("ByBit get balance failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut balances = std::collections::HashMap::new();
+
+        if let Some(result) = response_json.get("result")
+            .and_then(|r| r.get("list"))
+            .and_then(|l| l.as_array())
+            .and_then(|arr| arr.first()) {
+            
+            if let Some(coins) = result.get("coin").and_then(|c| c.as_array()) {
+                for coin in coins {
+                    if let Some(currency) = coin.get("coin").and_then(|c| c.as_str()) {
+                        let available = coin.get("walletBalance")
+                            .and_then(|a| a.as_str())
+                            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                            .unwrap_or_default();
+
+                        let locked = coin.get("locked")
+                            .and_then(|f| f.as_str())
+                            .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                            .unwrap_or_default();
+
+                        balances.insert(currency.to_string(), AssetBalance {
+                            asset: currency.to_string(),
+                            free: available - locked,
+                            locked,
+                            total: available,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Balance {
+            exchange: ExchangeId::ByBit,
+            balances,
+            timestamp: chrono::Utc::now(),
+        })
     }
 
-    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-            "Trading methods not yet implemented for ByBit".to_string()
-        ))
+    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
+        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
+        
+        let mut url = format!("{}/v5/order/realtime?category=spot", self.config.rest_url);
+        
+        if let Some(sym) = symbol {
+            url.push_str(&format!("&symbol={}{}", sym.base, sym.quote));
+        }
+
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit get open orders request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                format!("ByBit get open orders failed with status: {}", response.status())
+            ));
+        }
+
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+
+        let mut orders = Vec::new();
+
+        if let Some(list) = response_json.get("result")
+            .and_then(|r| r.get("list"))
+            .and_then(|l| l.as_array()) {
+            
+            for order_data in list {
+                let order_id = order_data.get("orderId")
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let symbol_str = order_data.get("symbol").and_then(|s| s.as_str()).unwrap_or("BTCUSDT");
+                let order_symbol = if symbol_str.ends_with("USDT") {
+                    let base = &symbol_str[..symbol_str.len() - 4];
+                    arbitrage_core::types::Symbol::new(base, "USDT")
+                } else {
+                    arbitrage_core::types::Symbol::new("BTC", "USDT")
+                };
+
+                let side = match order_data.get("side").and_then(|s| s.as_str()) {
+                    Some("Buy") => OrderSide::Buy,
+                    Some("Sell") => OrderSide::Sell,
+                    _ => OrderSide::Buy,
+                };
+
+                let order_type = match order_data.get("orderType").and_then(|t| t.as_str()) {
+                    Some("Market") => OrderType::Market,
+                    Some("Limit") => OrderType::Limit,
+                    _ => OrderType::Limit,
+                };
+
+                let quantity = order_data.get("qty")
+                    .and_then(|q| q.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                let price = order_data.get("price")
+                    .and_then(|p| p.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
+
+                let filled_quantity = order_data.get("cumExecQty")
+                    .and_then(|f| f.as_str())
+                    .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
+                    .unwrap_or_default();
+
+                orders.push(OrderStatus {
+                    order_id,
+                    client_order_id: order_data.get("orderLinkId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                    symbol: order_symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    price,
+                    filled_quantity,
+                    remaining_quantity: quantity - filled_quantity,
+                    average_price: price,
+                    status: OrderStatusType::New, // Open orders are "New"
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                });
+            }
+        }
+
+        Ok(orders)
     }
 }
 

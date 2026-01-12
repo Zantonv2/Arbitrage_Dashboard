@@ -42,3 +42,4 @@ reqwest = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+async-trait = { workspace = true }

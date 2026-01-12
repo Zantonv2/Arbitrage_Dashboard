@@ -4,21 +4,20 @@
 //! rollback logic, and error handling.
 
 use arbitrage_core::{
-    types::{ExecutionInstruction, Signal, Symbol, ExchangeId, OrderInstruction, OrderSide, OrderType},
+    types::{ExecutionInstruction, Symbol, ExchangeId, Order, Side, OrderType, TimeInForce},
     ArbitrageError,
 };
-use arbitrage_server::order_executor::{OrderExecutor, ExecutorConfig, ExecutionResult};
+use arbitrage_server::order_executor::{OrderExecutor, ExecutorConfig};
 use exchange_connectors::{
     connector::{
         ExchangeConnector, OrderRequest, OrderResponse, OrderStatus, OrderStatusType,
-        CancelResponse, Balance, AssetBalance, HealthStatus, ConnectorStats, TickerData, FundingRate
+        CancelResponse, Balance, AssetBalance, HealthStatus, ConnectorStats, TickerData, FundingRate,
+        OrderSide
     },
-    exchange_manager::ExchangeManager,
+    exchange_manager::{ExchangeManager, ExchangeManagerConfig},
 };
-use async_trait::async_trait;
 use rust_decimal::Decimal;
 use std::{collections::HashMap, sync::Arc};
-use tokio_test;
 use uuid::Uuid;
 
 /// Mock exchange connector for testing
@@ -48,7 +47,7 @@ impl MockExchangeConnector {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl ExchangeConnector for MockExchangeConnector {
     fn exchange_id(&self) -> ExchangeId {
         self.exchange_id
@@ -167,7 +166,7 @@ impl ExchangeConnector for MockExchangeConnector {
             order_id: order_id.to_string(),
             client_order_id: None,
             symbol: Symbol::new("BTC", "USDT"),
-            side: exchange_connectors::connector::OrderSide::Buy,
+            side: OrderSide::Buy,
             order_type: exchange_connectors::connector::OrderType::Market,
             quantity: Decimal::new(1, 1),
             price: Some(Decimal::new(50000, 0)),
@@ -212,36 +211,35 @@ fn create_test_execution() -> ExecutionInstruction {
     let signal_id = Uuid::new_v4();
     let symbol = Symbol::new("BTC", "USDT");
     
-    ExecutionInstruction {
-        signal_id,
-        symbol: symbol.clone(),
-        buy_exchange: ExchangeId::OKX,
-        sell_exchange: ExchangeId::ByBit,
-        buy_order: OrderInstruction {
-            symbol: symbol.clone(),
-            side: OrderSide::Buy,
-            order_type: OrderType::Market,
-            quantity: Decimal::new(1, 1), // 0.1 BTC
-            price: Some(Decimal::new(50000, 0)),
-            exchange: ExchangeId::OKX,
-        },
-        sell_order: OrderInstruction {
-            symbol,
-            side: OrderSide::Sell,
-            order_type: OrderType::Market,
-            quantity: Decimal::new(1, 1), // 0.1 BTC
-            price: Some(Decimal::new(50100, 0)),
-            exchange: ExchangeId::ByBit,
-        },
-        expected_profit: Decimal::new(200, 4), // 2%
-        max_slippage: Decimal::new(50, 4), // 0.5%
-        timeout_ms: 5000,
-    }
+    let buy_order = Order::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        Side::Buy,
+        OrderType::Market,
+        Decimal::new(1, 1), // 0.1 BTC
+        Some(Decimal::new(50000, 0)),
+    );
+    
+    let sell_order = Order::new(
+        ExchangeId::ByBit,
+        symbol.clone(),
+        Side::Sell,
+        OrderType::Market,
+        Decimal::new(1, 1), // 0.1 BTC
+        Some(Decimal::new(50100, 0)),
+    );
+    
+    let mut instruction = ExecutionInstruction::new(signal_id, buy_order, sell_order);
+    instruction.expected_profit = Decimal::new(200, 4); // 2%
+    instruction.slippage_buffer = Decimal::new(50, 4); // 0.5%
+    
+    instruction
 }
 
 /// Helper function to create mock exchange manager
 async fn create_mock_exchange_manager() -> Arc<ExchangeManager> {
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     
     // Add mock connectors
     manager.add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX))).await.unwrap();
@@ -271,7 +269,8 @@ async fn test_successful_arbitrage_execution() {
 
 #[tokio::test]
 async fn test_buy_order_failure_with_rollback() {
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     
     // Add failing buy exchange and successful sell exchange
     manager.add_connector(Box::new(
@@ -302,7 +301,8 @@ async fn test_buy_order_failure_with_rollback() {
 
 #[tokio::test]
 async fn test_sell_order_failure_with_rollback() {
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     
     // Add successful buy exchange and failing sell exchange
     manager.add_connector(Box::new(
@@ -333,7 +333,8 @@ async fn test_sell_order_failure_with_rollback() {
 
 #[tokio::test]
 async fn test_both_orders_failure() {
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     
     // Add failing exchanges
     manager.add_connector(Box::new(
@@ -361,7 +362,8 @@ async fn test_both_orders_failure() {
 
 #[tokio::test]
 async fn test_execution_timeout() {
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     
     // Add slow exchanges
     manager.add_connector(Box::new(
@@ -399,11 +401,11 @@ async fn test_profit_threshold_validation() {
     let mut instruction = create_test_execution();
     instruction.expected_profit = Decimal::new(100, 4); // Only 1% profit
     
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
+    let result = executor.execute_arbitrage(&instruction).await;
     
-    assert!(!result.success);
-    assert!(result.error_message.is_some());
-    assert!(result.error_message.as_ref().unwrap().contains("below threshold"));
+    assert!(result.is_err());
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("below threshold"));
 }
 
 #[tokio::test]
@@ -418,17 +420,18 @@ async fn test_position_size_validation() {
     let mut instruction = create_test_execution();
     instruction.buy_order.quantity = Decimal::new(1, 0); // 1 BTC = $50,000
     
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
+    let result = executor.execute_arbitrage(&instruction).await;
     
-    assert!(!result.success);
-    assert!(result.error_message.is_some());
-    assert!(result.error_message.as_ref().unwrap().contains("exceeds limit"));
+    assert!(result.is_err());
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("exceeds limit"));
 }
 
 #[tokio::test]
 async fn test_exchange_connectivity_validation() {
     // Create manager with only one exchange
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     manager.add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX))).await.unwrap();
     
     let exchange_manager = Arc::new(manager);
@@ -437,16 +440,17 @@ async fn test_exchange_connectivity_validation() {
     
     let instruction = create_test_execution(); // Requires both OKX and ByBit
     
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
+    let result = executor.execute_arbitrage(&instruction).await;
     
-    assert!(!result.success);
-    assert!(result.error_message.is_some());
-    assert!(result.error_message.as_ref().unwrap().contains("not connected"));
+    assert!(result.is_err());
+    let error_msg = result.unwrap_err().to_string();
+    assert!(error_msg.contains("not connected"));
 }
 
 #[tokio::test]
 async fn test_rollback_disabled() {
-    let mut manager = ExchangeManager::new();
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
     
     // Add failing buy exchange and successful sell exchange
     manager.add_connector(Box::new(
@@ -485,7 +489,8 @@ async fn test_concurrent_executions() {
         let handle = tokio::spawn(async move {
             let mut instruction = create_test_execution();
             instruction.signal_id = Uuid::new_v4();
-            instruction.buy_order.quantity = Decimal::new(i + 1, 1); // Different sizes
+            instruction.buy_order.quantity = Decimal::new(i + 1, 2); // 0.01, 0.02, 0.03, 0.04, 0.05 BTC
+            instruction.sell_order.quantity = Decimal::new(i + 1, 2);
             
             executor_clone.execute_arbitrage(&instruction).await
         });
