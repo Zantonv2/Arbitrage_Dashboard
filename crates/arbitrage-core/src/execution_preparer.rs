@@ -1,6 +1,6 @@
 use crate::{
-    types::{ExecutionInstruction, Order, OrderType, Signal, Side, TimeInForce},
     confidence_scorer::FeeSchedule,
+    types::{ExecutionInstruction, Order, OrderType, Side, Signal, TimeInForce},
     Result,
 };
 use rust_decimal::Decimal;
@@ -34,29 +34,38 @@ pub struct ExecutionPreparer {
 
 impl ExecutionPreparer {
     pub fn new(config: ExecutionConfig) -> Self {
-        Self { 
+        Self {
             config,
             fee_schedules: HashMap::new(),
         }
     }
-    
+
     /// Update fee schedule for an exchange
-    pub fn update_fee_schedule(&mut self, exchange: crate::types::ExchangeId, schedule: FeeSchedule) {
+    pub fn update_fee_schedule(
+        &mut self,
+        exchange: crate::types::ExchangeId,
+        schedule: FeeSchedule,
+    ) {
         self.fee_schedules.insert(exchange, schedule);
     }
-    
+
     /// Get fee rate for a specific exchange
     fn get_fee_rate(&self, exchange: crate::types::ExchangeId, is_maker: bool) -> Decimal {
-        self.fee_schedules.get(&exchange)
+        self.fee_schedules
+            .get(&exchange)
             .map(|f| f.get_fee_rate(is_maker))
             .unwrap_or_else(|| Decimal::new(1, 3)) // Default 0.1% if no fee schedule
     }
 
     /// Prepare execution instruction from signal
-    pub fn prepare_execution(&self, signal: &Signal, quantity: Decimal) -> Result<ExecutionInstruction> {
+    pub fn prepare_execution(
+        &self,
+        signal: &Signal,
+        quantity: Decimal,
+    ) -> Result<ExecutionInstruction> {
         // Apply slippage buffer to prices
         let slippage_multiplier = self.config.slippage_buffer_percent / Decimal::from(100);
-        
+
         let buy_price_with_buffer = signal.buy_price * (Decimal::ONE + slippage_multiplier);
         let sell_price_with_buffer = signal.sell_price * (Decimal::ONE - slippage_multiplier);
 
@@ -82,7 +91,7 @@ impl ExecutionPreparer {
 
         // Create execution instruction
         let mut instruction = ExecutionInstruction::new(signal.id, buy_order, sell_order);
-        
+
         // Set time in force
         instruction.buy_order.time_in_force = self.config.default_time_in_force;
         instruction.sell_order.time_in_force = self.config.default_time_in_force;
@@ -103,7 +112,7 @@ impl ExecutionPreparer {
         signal: &Signal,
     ) -> Result<()> {
         let quantity = instruction.buy_order.quantity;
-        
+
         // Expected case: fill at signal prices
         let expected_buy_cost = signal.buy_price * quantity;
         let expected_sell_revenue = signal.sell_price * quantity;
@@ -111,16 +120,18 @@ impl ExecutionPreparer {
 
         // Worst case: fill at buffered prices
         let worst_buy_cost = instruction.buy_order.price.unwrap_or(signal.buy_price) * quantity;
-        let worst_sell_revenue = instruction.sell_order.price.unwrap_or(signal.sell_price) * quantity;
+        let worst_sell_revenue =
+            instruction.sell_order.price.unwrap_or(signal.sell_price) * quantity;
         instruction.worst_case_profit = worst_sell_revenue - worst_buy_cost;
 
         // Calculate fees using real fee schedules (assume taker for conservative estimate)
         let buy_fee_rate = self.get_fee_rate(signal.buy_exchange, false);
         let sell_fee_rate = self.get_fee_rate(signal.sell_exchange, false);
-        
+
         instruction.buy_order.expected_fee = expected_buy_cost * buy_fee_rate;
         instruction.sell_order.expected_fee = expected_sell_revenue * sell_fee_rate;
-        instruction.total_fees = instruction.buy_order.expected_fee + instruction.sell_order.expected_fee;
+        instruction.total_fees =
+            instruction.buy_order.expected_fee + instruction.sell_order.expected_fee;
 
         // Adjust profits for fees
         instruction.expected_profit -= instruction.total_fees;
@@ -136,39 +147,57 @@ impl ExecutionPreparer {
         instruction.validation_errors.clear();
 
         // Check that we have prices for limit orders
-        if instruction.buy_order.order_type == OrderType::Limit && instruction.buy_order.price.is_none() {
-            instruction.validation_errors.push("Buy order missing price for limit order".to_string());
+        if instruction.buy_order.order_type == OrderType::Limit
+            && instruction.buy_order.price.is_none()
+        {
+            instruction
+                .validation_errors
+                .push("Buy order missing price for limit order".to_string());
         }
 
-        if instruction.sell_order.order_type == OrderType::Limit && instruction.sell_order.price.is_none() {
-            instruction.validation_errors.push("Sell order missing price for limit order".to_string());
+        if instruction.sell_order.order_type == OrderType::Limit
+            && instruction.sell_order.price.is_none()
+        {
+            instruction
+                .validation_errors
+                .push("Sell order missing price for limit order".to_string());
         }
 
         // Check quantities are positive
         if instruction.buy_order.quantity <= Decimal::ZERO {
-            instruction.validation_errors.push("Buy order quantity must be positive".to_string());
+            instruction
+                .validation_errors
+                .push("Buy order quantity must be positive".to_string());
         }
 
         if instruction.sell_order.quantity <= Decimal::ZERO {
-            instruction.validation_errors.push("Sell order quantity must be positive".to_string());
+            instruction
+                .validation_errors
+                .push("Sell order quantity must be positive".to_string());
         }
 
         // Check quantities match
         if instruction.buy_order.quantity != instruction.sell_order.quantity {
-            instruction.validation_errors.push("Buy and sell quantities must match".to_string());
+            instruction
+                .validation_errors
+                .push("Buy and sell quantities must match".to_string());
         }
 
         // Check symbols match
         if instruction.buy_order.symbol != instruction.sell_order.symbol {
-            instruction.validation_errors.push("Buy and sell symbols must match".to_string());
+            instruction
+                .validation_errors
+                .push("Buy and sell symbols must match".to_string());
         }
 
         // Check that worst case is still profitable (unless force execute is enabled)
         if instruction.worst_case_profit <= Decimal::ZERO && !self.config.enable_force_execute {
-            instruction.validation_errors.push(
-                format!("Worst case profit {} is not positive (use force_execute to override)", instruction.worst_case_profit)
-            );
-        } else if instruction.worst_case_profit <= Decimal::ZERO && self.config.enable_force_execute {
+            instruction.validation_errors.push(format!(
+                "Worst case profit {} is not positive (use force_execute to override)",
+                instruction.worst_case_profit
+            ));
+        } else if instruction.worst_case_profit <= Decimal::ZERO && self.config.enable_force_execute
+        {
             // Log warning but allow execution
             tracing::warn!(
                 signal_id = %instruction.signal_id,
@@ -179,22 +208,24 @@ impl ExecutionPreparer {
 
         // Validate minimum notional values (placeholder)
         let min_notional = Decimal::from(10); // $10 minimum
-        
+
         if let Some(buy_price) = instruction.buy_order.price {
             let buy_notional = buy_price * instruction.buy_order.quantity;
             if buy_notional < min_notional {
-                instruction.validation_errors.push(
-                    format!("Buy order notional {} below minimum {}", buy_notional, min_notional)
-                );
+                instruction.validation_errors.push(format!(
+                    "Buy order notional {} below minimum {}",
+                    buy_notional, min_notional
+                ));
             }
         }
 
         if let Some(sell_price) = instruction.sell_order.price {
             let sell_notional = sell_price * instruction.sell_order.quantity;
             if sell_notional < min_notional {
-                instruction.validation_errors.push(
-                    format!("Sell order notional {} below minimum {}", sell_notional, min_notional)
-                );
+                instruction.validation_errors.push(format!(
+                    "Sell order notional {} below minimum {}",
+                    sell_notional, min_notional
+                ));
             }
         }
 
@@ -218,7 +249,9 @@ impl ExecutionPreparer {
                 side: instruction.buy_order.side,
                 quantity: instruction.buy_order.quantity,
                 price: instruction.buy_order.price,
-                estimated_cost: instruction.buy_order.price
+                estimated_cost: instruction
+                    .buy_order
+                    .price
                     .map(|p| p * instruction.buy_order.quantity)
                     .unwrap_or(Decimal::ZERO),
                 estimated_fee: instruction.buy_order.expected_fee,
@@ -229,7 +262,9 @@ impl ExecutionPreparer {
                 side: instruction.sell_order.side,
                 quantity: instruction.sell_order.quantity,
                 price: instruction.sell_order.price,
-                estimated_cost: instruction.sell_order.price
+                estimated_cost: instruction
+                    .sell_order
+                    .price
                     .map(|p| p * instruction.sell_order.quantity)
                     .unwrap_or(Decimal::ZERO),
                 estimated_fee: instruction.sell_order.expected_fee,
