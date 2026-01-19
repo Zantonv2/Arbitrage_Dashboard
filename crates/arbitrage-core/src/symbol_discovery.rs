@@ -107,6 +107,7 @@ pub struct SymbolDiscoveryService {
     qualified_symbols: FxHashSet<Symbol>,
     symbol_scores: FxHashMap<Symbol, SymbolScore>,
     symbol_history: FxHashMap<Symbol, Vec<HistoricalPoint>>,
+    event_sender: broadcast::Sender<DiscoveryEvent>,
 }
 
 /// Scoring system for symbol prioritization
@@ -140,6 +141,7 @@ impl SymbolDiscoveryService {
             qualified_symbols: FxHashSet::default(),
             symbol_scores: FxHashMap::default(),
             symbol_history: FxHashMap::default(),
+            event_sender,
         };
 
         (service, event_receiver)
