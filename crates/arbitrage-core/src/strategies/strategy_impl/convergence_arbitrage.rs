@@ -79,7 +79,7 @@ impl ConvergenceArbitrageStrategy {
         // Update from tickers
         for ((exchange, symbol), ticker) in &market_data.tickers {
             let mid_price = (ticker.bid + ticker.ask) / Decimal::from(2);
-            let key = (*exchange, symbol.clone());
+            let key = (*exchange, (**symbol).clone());
 
             let history = self.price_history.entry(key).or_default();
 
@@ -336,12 +336,12 @@ impl ConvergenceArbitrageStrategy {
                     let short_quantity = position_value / short_price;
 
                     // Create convergence signal
-                    let mut signal = RawSignal::new(self.id(), long_symbol.clone());
+                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone());
 
                     // Long leg
                     let long_leg = TradeLeg::new(
                         exchange,
-                        long_symbol.clone(),
+                        (**long_symbol).clone(),
                         Side::Buy,
                         long_price,
                         long_quantity,
@@ -351,7 +351,7 @@ impl ConvergenceArbitrageStrategy {
                     // Short leg
                     let short_leg = TradeLeg::new(
                         exchange,
-                        short_symbol.clone(),
+                        (**short_symbol).clone(),
                         Side::Sell,
                         short_price,
                         short_quantity,
@@ -391,7 +391,7 @@ impl ConvergenceArbitrageStrategy {
     fn get_current_price(&self, market_data: &MarketBundle, symbol: &Symbol) -> Option<Decimal> {
         // Try to get from any available exchange
         for ((_, sym), ticker) in &market_data.tickers {
-            if sym == symbol {
+            if **sym == *symbol {
                 return Some((ticker.bid + ticker.ask) / Decimal::from(2));
             }
         }
@@ -410,14 +410,14 @@ impl ConvergenceArbitrageStrategy {
 
         // Collect exchanges for symbol1
         for (exchange, sym) in market_data.tickers.keys() {
-            if sym == symbol1 {
+            if **sym == *symbol1 {
                 exchanges1.insert(*exchange);
             }
         }
 
         // Collect exchanges for symbol2
         for (exchange, sym) in market_data.tickers.keys() {
-            if sym == symbol2 {
+            if **sym == *symbol2 {
                 exchanges2.insert(*exchange);
             }
         }
@@ -518,12 +518,12 @@ impl Strategy for ConvergenceArbitrageStrategy {
                     let short_quantity = position_value / short_price;
 
                     // Create convergence signal
-                    let mut signal = RawSignal::new(self.id(), long_symbol.clone());
+                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone());
 
                     // Long leg
                     let long_leg = TradeLeg::new(
                         exchange,
-                        long_symbol.clone(),
+                        (**long_symbol).clone(),
                         Side::Buy,
                         long_price,
                         long_quantity,
@@ -533,7 +533,7 @@ impl Strategy for ConvergenceArbitrageStrategy {
                     // Short leg
                     let short_leg = TradeLeg::new(
                         exchange,
-                        short_symbol.clone(),
+                        (**short_symbol).clone(),
                         Side::Sell,
                         short_price,
                         short_quantity,

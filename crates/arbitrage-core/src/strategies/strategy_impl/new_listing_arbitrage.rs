@@ -196,7 +196,7 @@ impl NewListingArbitrageStrategy {
         for ((exchange, symbol), ticker) in &market_data.tickers {
             if self.is_newly_listed(symbol) && self.is_valid_new_listing(symbol, ticker) {
                 symbol_tickers
-                    .entry(symbol.clone())
+                    .entry((**symbol).clone())
                     .or_default()
                     .push((*exchange, ticker));
             }
@@ -347,7 +347,7 @@ impl Strategy for NewListingArbitrageStrategy {
         let current_symbols: Vec<Symbol> = market_data
             .tickers
             .keys()
-            .map(|(_, symbol)| symbol.clone())
+            .map(|(_, symbol)| (**symbol).clone())
             .collect::<FxHashSet<_>>()
             .into_iter()
             .collect();
