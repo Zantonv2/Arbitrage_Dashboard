@@ -1,12 +1,11 @@
 use arbitrage_core::{
-    symbol_manager::{
-        SymbolManager, SymbolManagerConfig, 
-        CexArbitrageStrategy, FundingRateStrategy, StablecoinPegStrategy, 
-        LatencyArbitrageStrategy, SpotPerpetualStrategy, SpreadCaptureStrategy,
-        ConvergenceArbitrageStrategy, NewListingArbitrageStrategy,
-        SymbolStrategy
-    },
     symbol_discovery::{MarketInfo, OrderBookDepth},
+    symbol_manager::{
+        CexArbitrageStrategy, ConvergenceArbitrageStrategy, FundingRateStrategy,
+        LatencyArbitrageStrategy, NewListingArbitrageStrategy, SpotPerpetualStrategy,
+        SpreadCaptureStrategy, StablecoinPegStrategy, SymbolManager, SymbolManagerConfig,
+        SymbolStrategy,
+    },
     types::{ExchangeId, Symbol},
     Result,
 };
@@ -17,14 +16,14 @@ use rust_decimal::Decimal;
 fn test_symbol_manager_core_symbols() {
     let config = SymbolManagerConfig::default();
     let manager = SymbolManager::new(config.clone());
-    
+
     let active_symbols = manager.get_active_symbols();
-    
+
     // Should contain all core symbols
     for core_symbol in &config.core_symbols {
         assert!(active_symbols.contains(core_symbol));
     }
-    
+
     // Should have exactly the core symbols initially
     assert_eq!(active_symbols.len(), config.core_symbols.len());
 }
@@ -34,18 +33,18 @@ fn test_cex_arbitrage_strategy() {
     let strategy = CexArbitrageStrategy;
     let symbols = vec![
         Symbol::new("BTC", "USDT"),
-        Symbol::new("ETH", "BTC"),   // Should be filtered out
+        Symbol::new("ETH", "BTC"), // Should be filtered out
         Symbol::new("SOL", "USDC"),
         Symbol::new("BNB", "BUSD"),
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 3);
     assert!(strategy_symbols.contains(&Symbol::new("BTC", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("SOL", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("BNB", "BUSD")));
-    
+
     let requirements = strategy.get_requirements();
     assert_eq!(requirements.min_exchanges, 2);
     assert!(!requirements.requires_perpetuals);
@@ -63,14 +62,14 @@ fn test_funding_rate_strategy() {
         Symbol::new("SHIB", "USDT"), // Should be filtered out
         Symbol::new("LINK", "USDT"),
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 3);
     assert!(strategy_symbols.contains(&Symbol::new("BTC", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("ETH", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("LINK", "USDT")));
-    
+
     let requirements = strategy.get_requirements();
     assert!(requirements.requires_funding_data);
     assert!(requirements.requires_perpetuals);
@@ -83,21 +82,21 @@ fn test_stablecoin_peg_strategy() {
     let strategy = StablecoinPegStrategy;
     let symbols = vec![
         Symbol::new("USDT", "USDC"),
-        Symbol::new("BTC", "USDT"),  // Should be filtered out
+        Symbol::new("BTC", "USDT"), // Should be filtered out
         Symbol::new("BUSD", "USDT"),
         Symbol::new("DAI", "USDC"),
-        Symbol::new("ETH", "USDT"),  // Should be filtered out
+        Symbol::new("ETH", "USDT"), // Should be filtered out
         Symbol::new("TUSD", "USDT"),
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 4);
     assert!(strategy_symbols.contains(&Symbol::new("USDT", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("BUSD", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("DAI", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("TUSD", "USDT")));
-    
+
     let requirements = strategy.get_requirements();
     assert_eq!(requirements.max_spread_bps, 100); // 1% - wider for stablecoins
     assert_eq!(strategy.get_name(), "Stablecoin Peg Arbitrage");
@@ -113,14 +112,14 @@ fn test_latency_arbitrage_strategy() {
         Symbol::new("MATIC", "USDT"), // Should be filtered out (not in ultra-liquid list)
         Symbol::new("BTC", "USDC"),   // Should be filtered out (not USDT)
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 3);
     assert!(strategy_symbols.contains(&Symbol::new("BTC", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("ETH", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("SOL", "USDT")));
-    
+
     let requirements = strategy.get_requirements();
     assert_eq!(requirements.max_spread_bps, 5); // Ultra tight spreads
     assert_eq!(requirements.min_exchanges, 3);
@@ -136,16 +135,16 @@ fn test_spot_perpetual_strategy() {
         Symbol::new("ETH", "USDC"),
         Symbol::new("DOGE", "USDT"), // Should be filtered out (not in major list)
         Symbol::new("SOL", "USDT"),
-        Symbol::new("BTC", "BTC"),   // Should be filtered out (wrong quote)
+        Symbol::new("BTC", "BTC"), // Should be filtered out (wrong quote)
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 3);
     assert!(strategy_symbols.contains(&Symbol::new("BTC", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("ETH", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("SOL", "USDT")));
-    
+
     let requirements = strategy.get_requirements();
     assert!(requirements.requires_perpetuals);
     assert!(!requirements.requires_funding_data);
@@ -162,15 +161,15 @@ fn test_spread_capture_strategy() {
         Symbol::new("MATIC", "USDT"), // Should be filtered out (not in top-5 liquid)
         Symbol::new("XRP", "USDT"),
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 4);
     assert!(strategy_symbols.contains(&Symbol::new("BTC", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("ETH", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("SOL", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("XRP", "USDT")));
-    
+
     let requirements = strategy.get_requirements();
     assert_eq!(requirements.max_spread_bps, 10); // Very tight spreads
     assert_eq!(requirements.min_exchanges, 3);
@@ -186,14 +185,14 @@ fn test_convergence_arbitrage_strategy() {
         Symbol::new("AVAX", "USDT"),
         Symbol::new("DOGE", "USDT"), // Should be filtered out
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 3);
     assert!(strategy_symbols.contains(&Symbol::new("BTC", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("ETH", "USDC")));
     assert!(strategy_symbols.contains(&Symbol::new("AVAX", "USDT")));
-    
+
     let requirements = strategy.get_requirements();
     assert!(requirements.requires_perpetuals);
     assert!(!requirements.requires_funding_data);
@@ -208,13 +207,13 @@ fn test_new_listing_arbitrage_strategy() {
         Symbol::new("ANOTHERCOIN", "USDC"),
         Symbol::new("OLDCOIN", "BTC"), // Should be filtered out (wrong quote)
     ];
-    
+
     let strategy_symbols = strategy.get_strategy_symbols(&symbols);
-    
+
     assert_eq!(strategy_symbols.len(), 2);
     assert!(strategy_symbols.contains(&Symbol::new("NEWCOIN", "USDT")));
     assert!(strategy_symbols.contains(&Symbol::new("ANOTHERCOIN", "USDC")));
-    
+
     let requirements = strategy.get_requirements();
     assert_eq!(requirements.min_volume_usd, Decimal::from(100_000)); // Low volume for new listings
     assert_eq!(requirements.max_spread_bps, 500); // 5% - very wide spreads allowed
@@ -226,9 +225,9 @@ fn test_new_listing_arbitrage_strategy() {
 async fn test_symbol_manager_discovery_integration() {
     let mut config = SymbolManagerConfig::default();
     config.enable_discovery = true;
-    
+
     let mut manager = SymbolManager::new(config);
-    
+
     // Create market info for a new symbol
     let new_symbol = Symbol::new("AVAX", "USDT");
     let market_info = MarketInfo {
@@ -246,31 +245,31 @@ async fn test_symbol_manager_discovery_integration() {
             max_order_size_usd: Decimal::from(100_000),
         },
     };
-    
+
     // Update market data
     let result: Result<()> = manager.update_market_data(market_info.clone()).await;
     assert!(result.is_ok());
-    
+
     // Symbol should not be active yet (needs 2+ exchanges)
     assert!(!manager.is_symbol_active(&new_symbol));
-    
+
     // Add second exchange
     let market_info2 = MarketInfo {
         exchange: ExchangeId::BingX,
         price_usd: Decimal::new(3510, 2), // 35.10 - Slight price difference
         ..market_info.clone()
     };
-    
+
     let result: Result<()> = manager.update_market_data(market_info2).await;
     assert!(result.is_ok());
-    
+
     // Force refresh to trigger discovery
     let result: Result<()> = manager.refresh_discovered_symbols().await;
     assert!(result.is_ok());
-    
+
     // Now symbol should be active
     assert!(manager.is_symbol_active(&new_symbol));
-    
+
     // Should appear in active symbols list
     let active_symbols = manager.get_active_symbols();
     assert!(active_symbols.contains(&new_symbol));
@@ -288,20 +287,21 @@ fn test_strategy_requirements_validation() {
         Box::new(ConvergenceArbitrageStrategy),
         Box::new(NewListingArbitrageStrategy),
     ];
-    
+
     for strategy in strategies {
         let requirements = strategy.get_requirements();
-        
+
         // All strategies should have reasonable requirements
         assert!(requirements.min_volume_usd > Decimal::ZERO);
         assert!(requirements.max_spread_bps > 0);
         assert!(requirements.min_exchanges > 0);
         assert!(!requirements.quote_currencies.is_empty());
-        
+
         // Strategy name should not be empty
         assert!(!strategy.get_name().is_empty());
-        
-        println!("✅ {} - Volume: ${}, Spread: {}bps, Exchanges: {}", 
+
+        println!(
+            "✅ {} - Volume: ${}, Spread: {}bps, Exchanges: {}",
             strategy.get_name(),
             requirements.min_volume_usd,
             requirements.max_spread_bps,

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -9,21 +9,21 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExchangeId {
     // Tier 1: High-liquidity, low-latency exchanges
-    OKX,        // Spot + Futures + Options
-    ByBit,      // Spot + Futures + Options  
-    MEXC,       // Spot + Futures
-    
+    OKX,   // Spot + Futures + Options
+    ByBit, // Spot + Futures + Options
+    MEXC,  // Spot + Futures
+
     // Tier 2: Solid liquidity exchanges
-    GateIo,     // Spot + Futures
-    Bitstamp,   // Spot (fiat pairs)
-    Kraken,     // Spot + Futures (fiat pairs)
-    
+    GateIo,   // Spot + Futures
+    Bitstamp, // Spot (fiat pairs)
+    Kraken,   // Spot + Futures (fiat pairs)
+
     // Legacy (keeping for compatibility)
-    HTX,        // Former Huobi
-    BingX,      
+    HTX, // Former Huobi
+    BingX,
     Hyperliquid,
-    KuCoin,     
-    Bitget,     
+    KuCoin,
+    Bitget,
     Binance,
     Coinbase,
 }
@@ -66,7 +66,10 @@ impl std::str::FromStr for ExchangeId {
             "bitget" => Ok(ExchangeId::Bitget),
             "binance" => Ok(ExchangeId::Binance),
             "coinbase" => Ok(ExchangeId::Coinbase),
-            _ => Err(crate::ArbitrageError::Validation(format!("Unknown exchange: {}", s))),
+            _ => Err(crate::ArbitrageError::Validation(format!(
+                "Unknown exchange: {}",
+                s
+            ))),
         }
     }
 }
@@ -122,7 +125,7 @@ impl Symbol {
             quote: quote.into(),
         }
     }
-    
+
     pub fn from_pair(pair: &str) -> Option<Self> {
         let parts: Vec<&str> = pair.split('/').collect();
         if parts.len() == 2 {
@@ -131,7 +134,7 @@ impl Symbol {
             None
         }
     }
-    
+
     pub fn to_pair(&self) -> String {
         format!("{}/{}", self.base, self.quote)
     }
@@ -183,64 +186,64 @@ impl OrderBook {
             sequence: None,
         }
     }
-    
+
     pub fn best_bid(&self) -> Option<&OrderBookLevel> {
         self.bids.first()
     }
-    
+
     pub fn best_ask(&self) -> Option<&OrderBookLevel> {
         self.asks.first()
     }
-    
+
     pub fn spread(&self) -> Option<Decimal> {
         match (self.best_ask(), self.best_bid()) {
             (Some(ask), Some(bid)) => Some(ask.price - bid.price),
             _ => None,
         }
     }
-    
+
     pub fn mid_price(&self) -> Option<Decimal> {
         match (self.best_ask(), self.best_bid()) {
             (Some(ask), Some(bid)) => Some((ask.price + bid.price) / Decimal::from(2)),
             _ => None,
         }
     }
-    
+
     pub fn is_valid(&self) -> bool {
         // Check that bids are sorted descending and asks ascending
         let bids_sorted = self.bids.windows(2).all(|w| w[0].price >= w[1].price);
         let asks_sorted = self.asks.windows(2).all(|w| w[0].price <= w[1].price);
-        
+
         // Check that best bid < best ask
         let spread_valid = match (self.best_bid(), self.best_ask()) {
             (Some(bid), Some(ask)) => bid.price < ask.price,
             _ => true, // Empty books are considered valid
         };
-        
+
         bids_sorted && asks_sorted && spread_valid
     }
-    
+
     /// Calculate VWAP for buying a given quantity
     pub fn vwap_buy(&self, target_quantity: Decimal) -> Option<VwapResult> {
         if target_quantity <= Decimal::ZERO || self.asks.is_empty() {
             return None;
         }
-        
+
         let mut remaining_qty = target_quantity;
         let mut total_cost = Decimal::ZERO;
         let mut filled_qty = Decimal::ZERO;
-        
+
         for level in &self.asks {
             if remaining_qty <= Decimal::ZERO {
                 break;
             }
-            
+
             let qty_from_level = remaining_qty.min(level.quantity);
             total_cost += qty_from_level * level.price;
             filled_qty += qty_from_level;
             remaining_qty -= qty_from_level;
         }
-        
+
         if filled_qty > Decimal::ZERO {
             let vwap = total_cost / filled_qty;
             Some(VwapResult {
@@ -254,28 +257,28 @@ impl OrderBook {
             None
         }
     }
-    
+
     /// Calculate VWAP for selling a given quantity
     pub fn vwap_sell(&self, target_quantity: Decimal) -> Option<VwapResult> {
         if target_quantity <= Decimal::ZERO || self.bids.is_empty() {
             return None;
         }
-        
+
         let mut remaining_qty = target_quantity;
         let mut total_revenue = Decimal::ZERO;
         let mut filled_qty = Decimal::ZERO;
-        
+
         for level in &self.bids {
             if remaining_qty <= Decimal::ZERO {
                 break;
             }
-            
+
             let qty_from_level = remaining_qty.min(level.quantity);
             total_revenue += qty_from_level * level.price;
             filled_qty += qty_from_level;
             remaining_qty -= qty_from_level;
         }
-        
+
         if filled_qty > Decimal::ZERO {
             let vwap = total_revenue / filled_qty;
             Some(VwapResult {
@@ -289,28 +292,30 @@ impl OrderBook {
             None
         }
     }
-    
+
     /// Calculate available liquidity up to a price level
     pub fn liquidity_at_price(&self, price: Decimal, is_buy: bool) -> Decimal {
         if is_buy {
-            self.asks.iter()
+            self.asks
+                .iter()
                 .take_while(|level| level.price <= price)
                 .map(|level| level.quantity)
                 .sum()
         } else {
-            self.bids.iter()
+            self.bids
+                .iter()
                 .take_while(|level| level.price >= price)
                 .map(|level| level.quantity)
                 .sum()
         }
     }
-    
+
     /// Calculate slippage in basis points
     fn calculate_slippage_bps(&self, best_price: Decimal, vwap_price: Decimal) -> i32 {
         if best_price.is_zero() {
             return 0;
         }
-        
+
         let slippage_ratio = (vwap_price - best_price).abs() / best_price;
         (slippage_ratio * Decimal::from(10000))
             .to_i32()
@@ -379,11 +384,11 @@ impl Signal {
             metadata: HashMap::new(),
         }
     }
-    
+
     pub fn is_expired(&self) -> bool {
         Utc::now() > self.expires_at
     }
-    
+
     pub fn age_seconds(&self) -> i64 {
         (Utc::now() - self.created_at).num_seconds()
     }
@@ -461,7 +466,7 @@ impl ExecutionInstruction {
             validation_errors: Vec::new(),
         }
     }
-    
+
     pub fn is_valid(&self) -> bool {
         self.validation_errors.is_empty()
     }
@@ -520,4 +525,3 @@ impl ExchangeStatus {
         }
     }
 }
-

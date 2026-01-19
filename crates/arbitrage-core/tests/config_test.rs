@@ -34,8 +34,14 @@ fn test_exchange_config_defaults() {
 #[test]
 fn test_trading_config_defaults() {
     let trading_config = TradingConfig::default();
-    assert_eq!(trading_config.min_profit_threshold_percent, Decimal::from_str_exact("0.1").unwrap());
-    assert_eq!(trading_config.min_confidence_threshold, Decimal::from_str_exact("0.3").unwrap());
+    assert_eq!(
+        trading_config.min_profit_threshold_percent,
+        Decimal::from_str_exact("0.1").unwrap()
+    );
+    assert_eq!(
+        trading_config.min_confidence_threshold,
+        Decimal::from_str_exact("0.3").unwrap()
+    );
     assert_eq!(trading_config.max_signal_age_seconds, 300);
     assert_eq!(trading_config.default_time_in_force, "IOC");
 }
@@ -44,7 +50,10 @@ fn test_trading_config_defaults() {
 fn test_risk_config_defaults() {
     let risk_config = RiskConfig::default();
     assert_eq!(risk_config.max_position_size_usd, Decimal::from(10000));
-    assert_eq!(risk_config.conservative_size_multiplier, Decimal::from_str_exact("0.8").unwrap());
+    assert_eq!(
+        risk_config.conservative_size_multiplier,
+        Decimal::from_str_exact("0.8").unwrap()
+    );
     assert_eq!(risk_config.min_order_size_usd, Decimal::from(10));
     assert_eq!(risk_config.max_concurrent_signals, 100);
 }
@@ -79,9 +88,13 @@ fn test_logging_config_defaults() {
 #[test]
 fn test_symbol_mapping() {
     let mut mapping = SymbolMapping::new(Symbol::new("BTC", "USDT"));
-    mapping.exchange_symbols.insert(ExchangeId::ByBit, "BTCUSDT".to_string());
-    mapping.exchange_symbols.insert(ExchangeId::BingX, "BTC-USDT".to_string());
-    
+    mapping
+        .exchange_symbols
+        .insert(ExchangeId::ByBit, "BTCUSDT".to_string());
+    mapping
+        .exchange_symbols
+        .insert(ExchangeId::BingX, "BTC-USDT".to_string());
+
     assert_eq!(mapping.canonical.base, "BTC");
     assert_eq!(mapping.canonical.quote, "USDT");
     assert_eq!(mapping.exchange_symbols.len(), 2);
@@ -104,7 +117,10 @@ fn test_config_serialization() {
     let config = Config::default();
     let serialized = serde_json::to_string(&config).unwrap();
     let deserialized: Config = serde_json::from_str(&serialized).unwrap();
-    
+
     assert_eq!(config.server.port, deserialized.server.port);
-    assert_eq!(config.trading.min_profit_threshold_percent, deserialized.trading.min_profit_threshold_percent);
+    assert_eq!(
+        config.trading.min_profit_threshold_percent,
+        deserialized.trading.min_profit_threshold_percent
+    );
 }

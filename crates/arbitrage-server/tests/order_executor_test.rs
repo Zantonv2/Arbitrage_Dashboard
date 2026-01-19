@@ -4,15 +4,15 @@
 //! rollback logic, and error handling.
 
 use arbitrage_core::{
-    types::{ExecutionInstruction, Symbol, ExchangeId, Order, Side, OrderType, TimeInForce},
+    types::{ExchangeId, ExecutionInstruction, Order, OrderType, Side, Symbol, TimeInForce},
     ArbitrageError,
 };
-use arbitrage_server::order_executor::{OrderExecutor, ExecutorConfig};
+use arbitrage_server::order_executor::{ExecutorConfig, OrderExecutor};
 use exchange_connectors::{
     connector::{
-        ExchangeConnector, OrderRequest, OrderResponse, OrderStatus, OrderStatusType,
-        CancelResponse, Balance, AssetBalance, HealthStatus, ConnectorStats, TickerData, FundingRate,
-        OrderSide
+        AssetBalance, Balance, CancelResponse, ConnectorStats, ExchangeConnector, FundingRate,
+        HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderStatusType,
+        TickerData,
     },
     exchange_manager::{ExchangeManager, ExchangeManagerConfig},
 };
@@ -57,12 +57,17 @@ impl ExchangeConnector for MockExchangeConnector {
         arbitrage_core::types::ConnectionStatus::Connected
     }
 
-    fn event_receiver(&self) -> tokio::sync::broadcast::Receiver<exchange_connectors::events::ConnectionEvent> {
+    fn event_receiver(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<exchange_connectors::events::ConnectionEvent> {
         let (tx, rx) = tokio::sync::broadcast::channel(1);
         rx
     }
 
-    async fn fetch_order_book(&self, _symbol: &Symbol) -> arbitrage_core::Result<arbitrage_core::types::OrderBook> {
+    async fn fetch_order_book(
+        &self,
+        _symbol: &Symbol,
+    ) -> arbitrage_core::Result<arbitrage_core::types::OrderBook> {
         unimplemented!("Not needed for executor tests")
     }
 
@@ -70,11 +75,17 @@ impl ExchangeConnector for MockExchangeConnector {
         unimplemented!("Not needed for executor tests")
     }
 
-    async fn fetch_tickers(&self, _symbols: &[Symbol]) -> arbitrage_core::Result<HashMap<Symbol, TickerData>> {
+    async fn fetch_tickers(
+        &self,
+        _symbols: &[Symbol],
+    ) -> arbitrage_core::Result<HashMap<Symbol, TickerData>> {
         unimplemented!("Not needed for executor tests")
     }
 
-    async fn fetch_funding_rates(&self, _symbols: &[Symbol]) -> arbitrage_core::Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        _symbols: &[Symbol],
+    ) -> arbitrage_core::Result<HashMap<Symbol, FundingRate>> {
         unimplemented!("Not needed for executor tests")
     }
 
@@ -136,7 +147,9 @@ impl ExchangeConnector for MockExchangeConnector {
         }
 
         if self.should_fail_orders {
-            return Err(ArbitrageError::ExchangeConnection("Mock order failure".to_string()));
+            return Err(ArbitrageError::ExchangeConnection(
+                "Mock order failure".to_string(),
+            ));
         }
 
         Ok(OrderResponse {
@@ -181,18 +194,24 @@ impl ExchangeConnector for MockExchangeConnector {
 
     async fn get_balance(&self) -> arbitrage_core::Result<Balance> {
         let mut balances = HashMap::new();
-        balances.insert("BTC".to_string(), AssetBalance {
-            asset: "BTC".to_string(),
-            free: Decimal::new(10, 0),
-            locked: Decimal::ZERO,
-            total: Decimal::new(10, 0),
-        });
-        balances.insert("USDT".to_string(), AssetBalance {
-            asset: "USDT".to_string(),
-            free: Decimal::new(100000, 0),
-            locked: Decimal::ZERO,
-            total: Decimal::new(100000, 0),
-        });
+        balances.insert(
+            "BTC".to_string(),
+            AssetBalance {
+                asset: "BTC".to_string(),
+                free: Decimal::new(10, 0),
+                locked: Decimal::ZERO,
+                total: Decimal::new(10, 0),
+            },
+        );
+        balances.insert(
+            "USDT".to_string(),
+            AssetBalance {
+                asset: "USDT".to_string(),
+                free: Decimal::new(100000, 0),
+                locked: Decimal::ZERO,
+                total: Decimal::new(100000, 0),
+            },
+        );
 
         Ok(Balance {
             exchange: self.exchange_id,
@@ -201,7 +220,10 @@ impl ExchangeConnector for MockExchangeConnector {
         })
     }
 
-    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> arbitrage_core::Result<Vec<OrderStatus>> {
+    async fn get_open_orders(
+        &self,
+        _symbol: Option<&Symbol>,
+    ) -> arbitrage_core::Result<Vec<OrderStatus>> {
         Ok(Vec::new())
     }
 }
@@ -210,7 +232,7 @@ impl ExchangeConnector for MockExchangeConnector {
 fn create_test_execution() -> ExecutionInstruction {
     let signal_id = Uuid::new_v4();
     let symbol = Symbol::new("BTC", "USDT");
-    
+
     let buy_order = Order::new(
         ExchangeId::OKX,
         symbol.clone(),
@@ -219,7 +241,7 @@ fn create_test_execution() -> ExecutionInstruction {
         Decimal::new(1, 1), // 0.1 BTC
         Some(Decimal::new(50000, 0)),
     );
-    
+
     let sell_order = Order::new(
         ExchangeId::ByBit,
         symbol.clone(),
@@ -228,11 +250,11 @@ fn create_test_execution() -> ExecutionInstruction {
         Decimal::new(1, 1), // 0.1 BTC
         Some(Decimal::new(50100, 0)),
     );
-    
+
     let mut instruction = ExecutionInstruction::new(signal_id, buy_order, sell_order);
     instruction.expected_profit = Decimal::new(200, 4); // 2%
     instruction.slippage_buffer = Decimal::new(50, 4); // 0.5%
-    
+
     instruction
 }
 
@@ -240,11 +262,17 @@ fn create_test_execution() -> ExecutionInstruction {
 async fn create_mock_exchange_manager() -> Arc<ExchangeManager> {
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    
+
     // Add mock connectors
-    manager.add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX))).await.unwrap();
-    manager.add_connector(Box::new(MockExchangeConnector::new(ExchangeId::ByBit))).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX)))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::ByBit)))
+        .await
+        .unwrap();
+
     Arc::new(manager)
 }
 
@@ -253,11 +281,14 @@ async fn test_successful_arbitrage_execution() {
     let exchange_manager = create_mock_exchange_manager().await;
     let config = ExecutorConfig::default();
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(result.success);
     assert!(result.buy_order.is_some());
     assert!(result.sell_order.is_some());
@@ -271,26 +302,33 @@ async fn test_successful_arbitrage_execution() {
 async fn test_buy_order_failure_with_rollback() {
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    
+
     // Add failing buy exchange and successful sell exchange
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::OKX).with_failure(true)
-    )).await.unwrap();
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::ByBit)
-    )).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::OKX).with_failure(true),
+        ))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::ByBit)))
+        .await
+        .unwrap();
+
     let exchange_manager = Arc::new(manager);
     let config = ExecutorConfig {
         enable_rollback: true,
         ..Default::default()
     };
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(!result.success);
     assert!(result.buy_order.is_none());
     assert!(result.sell_order.is_some());
@@ -303,26 +341,33 @@ async fn test_buy_order_failure_with_rollback() {
 async fn test_sell_order_failure_with_rollback() {
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    
+
     // Add successful buy exchange and failing sell exchange
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::OKX)
-    )).await.unwrap();
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::ByBit).with_failure(true)
-    )).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX)))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::ByBit).with_failure(true),
+        ))
+        .await
+        .unwrap();
+
     let exchange_manager = Arc::new(manager);
     let config = ExecutorConfig {
         enable_rollback: true,
         ..Default::default()
     };
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(!result.success);
     assert!(result.buy_order.is_some());
     assert!(result.sell_order.is_none());
@@ -335,23 +380,32 @@ async fn test_sell_order_failure_with_rollback() {
 async fn test_both_orders_failure() {
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    
+
     // Add failing exchanges
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::OKX).with_failure(true)
-    )).await.unwrap();
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::ByBit).with_failure(true)
-    )).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::OKX).with_failure(true),
+        ))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::ByBit).with_failure(true),
+        ))
+        .await
+        .unwrap();
+
     let exchange_manager = Arc::new(manager);
     let config = ExecutorConfig::default();
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(!result.success);
     assert!(result.buy_order.is_none());
     assert!(result.sell_order.is_none());
@@ -364,26 +418,35 @@ async fn test_both_orders_failure() {
 async fn test_execution_timeout() {
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    
+
     // Add slow exchanges
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::OKX).with_delay(3000)
-    )).await.unwrap();
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::ByBit).with_delay(3000)
-    )).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::OKX).with_delay(3000),
+        ))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::ByBit).with_delay(3000),
+        ))
+        .await
+        .unwrap();
+
     let exchange_manager = Arc::new(manager);
     let config = ExecutorConfig {
         execution_timeout_ms: 1000, // Short timeout
         ..Default::default()
     };
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(!result.success);
     assert!(result.error_message.is_some());
     assert!(result.error_message.as_ref().unwrap().contains("timeout"));
@@ -397,12 +460,12 @@ async fn test_profit_threshold_validation() {
         ..Default::default()
     };
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let mut instruction = create_test_execution();
     instruction.expected_profit = Decimal::new(100, 4); // Only 1% profit
-    
+
     let result = executor.execute_arbitrage(&instruction).await;
-    
+
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("below threshold"));
@@ -416,12 +479,12 @@ async fn test_position_size_validation() {
         ..Default::default()
     };
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let mut instruction = create_test_execution();
     instruction.buy_order.quantity = Decimal::new(1, 0); // 1 BTC = $50,000
-    
+
     let result = executor.execute_arbitrage(&instruction).await;
-    
+
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("exceeds limit"));
@@ -432,16 +495,19 @@ async fn test_exchange_connectivity_validation() {
     // Create manager with only one exchange
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    manager.add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX))).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX)))
+        .await
+        .unwrap();
+
     let exchange_manager = Arc::new(manager);
     let config = ExecutorConfig::default();
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution(); // Requires both OKX and ByBit
-    
+
     let result = executor.execute_arbitrage(&instruction).await;
-    
+
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
     assert!(error_msg.contains("not connected"));
@@ -451,26 +517,33 @@ async fn test_exchange_connectivity_validation() {
 async fn test_rollback_disabled() {
     let config = ExchangeManagerConfig::default();
     let mut manager = ExchangeManager::new(config);
-    
+
     // Add failing buy exchange and successful sell exchange
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::OKX).with_failure(true)
-    )).await.unwrap();
-    manager.add_connector(Box::new(
-        MockExchangeConnector::new(ExchangeId::ByBit)
-    )).await.unwrap();
-    
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::OKX).with_failure(true),
+        ))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::ByBit)))
+        .await
+        .unwrap();
+
     let exchange_manager = Arc::new(manager);
     let config = ExecutorConfig {
         enable_rollback: false, // Disable rollback
         ..Default::default()
     };
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(!result.success);
     assert!(!result.rollback_performed); // Should not perform rollback
 }
@@ -480,10 +553,10 @@ async fn test_concurrent_executions() {
     let exchange_manager = create_mock_exchange_manager().await;
     let config = ExecutorConfig::default();
     let executor = Arc::new(OrderExecutor::new(config, exchange_manager));
-    
+
     // Execute multiple arbitrage opportunities concurrently
     let mut handles = Vec::new();
-    
+
     for i in 0..5 {
         let executor_clone = executor.clone();
         let handle = tokio::spawn(async move {
@@ -491,21 +564,24 @@ async fn test_concurrent_executions() {
             instruction.signal_id = Uuid::new_v4();
             instruction.buy_order.quantity = Decimal::new(i + 1, 2); // 0.01, 0.02, 0.03, 0.04, 0.05 BTC
             instruction.sell_order.quantity = Decimal::new(i + 1, 2);
-            
+
             executor_clone.execute_arbitrage(&instruction).await
         });
         handles.push(handle);
     }
-    
+
     // Wait for all executions to complete
     let mut successful_executions = 0;
     for handle in handles {
-        let result = handle.await.expect("Task panicked").expect("Execution failed");
+        let result = handle
+            .await
+            .expect("Task panicked")
+            .expect("Execution failed");
         if result.success {
             successful_executions += 1;
         }
     }
-    
+
     assert_eq!(successful_executions, 5);
 }
 
@@ -514,17 +590,20 @@ async fn test_actual_profit_calculation() {
     let exchange_manager = create_mock_exchange_manager().await;
     let config = ExecutorConfig::default();
     let executor = OrderExecutor::new(config, exchange_manager);
-    
+
     let instruction = create_test_execution();
-    
-    let result = executor.execute_arbitrage(&instruction).await.expect("Execution failed");
-    
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
     assert!(result.success);
     assert!(result.actual_profit.is_some());
-    
+
     let actual_profit = result.actual_profit.unwrap();
     assert!(actual_profit > Decimal::ZERO);
-    
+
     // Verify profit calculation makes sense
     // Buy at 50000, sell at 50100, quantity 0.1 BTC
     // Expected profit: (50100 - 50000) / 50000 * 0.1 = 0.002 (0.2%)
@@ -537,7 +616,7 @@ async fn test_config_updates() {
     let exchange_manager = create_mock_exchange_manager().await;
     let config = ExecutorConfig::default();
     let mut executor = OrderExecutor::new(config, exchange_manager);
-    
+
     // Update configuration
     let new_config = ExecutorConfig {
         execution_timeout_ms: 10000,
@@ -546,14 +625,26 @@ async fn test_config_updates() {
         min_profit_threshold: Decimal::new(50, 4), // 0.5%
         max_position_size: Decimal::new(50000, 0), // $50,000
     };
-    
+
     executor.update_config(new_config.clone());
-    
+
     // Verify config was updated
     let current_config = executor.get_config();
-    assert_eq!(current_config.execution_timeout_ms, new_config.execution_timeout_ms);
-    assert_eq!(current_config.max_slippage_percent, new_config.max_slippage_percent);
+    assert_eq!(
+        current_config.execution_timeout_ms,
+        new_config.execution_timeout_ms
+    );
+    assert_eq!(
+        current_config.max_slippage_percent,
+        new_config.max_slippage_percent
+    );
     assert_eq!(current_config.enable_rollback, new_config.enable_rollback);
-    assert_eq!(current_config.min_profit_threshold, new_config.min_profit_threshold);
-    assert_eq!(current_config.max_position_size, new_config.max_position_size);
+    assert_eq!(
+        current_config.min_profit_threshold,
+        new_config.min_profit_threshold
+    );
+    assert_eq!(
+        current_config.max_position_size,
+        new_config.max_position_size
+    );
 }

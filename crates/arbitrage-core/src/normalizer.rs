@@ -1,5 +1,5 @@
 use crate::{
-    config::{SymbolMapping, StablecoinGroup},
+    config::{StablecoinGroup, SymbolMapping},
     types::{ExchangeId, FeeSchedule, OrderBook, OrderBookLevel, Symbol},
     ArbitrageError, Result,
 };
@@ -26,7 +26,8 @@ impl Normalizer {
     /// Load symbol mappings from configuration
     pub fn load_symbol_mappings(&mut self, mappings: Vec<SymbolMapping>) {
         for mapping in mappings {
-            self.symbol_mappings.insert(mapping.canonical.clone(), mapping);
+            self.symbol_mappings
+                .insert(mapping.canonical.clone(), mapping);
         }
     }
 
@@ -66,14 +67,19 @@ impl Normalizer {
     }
 
     /// Format quantity to exchange-specific precision
-    pub fn format_quantity(&self, symbol: &Symbol, exchange: ExchangeId, quantity: Decimal) -> Result<Decimal> {
-        let mapping = self.symbol_mappings
-            .get(symbol)
-            .ok_or_else(|| ArbitrageError::Normalization(format!("No mapping for symbol {}", symbol)))?;
+    pub fn format_quantity(
+        &self,
+        symbol: &Symbol,
+        exchange: ExchangeId,
+        quantity: Decimal,
+    ) -> Result<Decimal> {
+        let mapping = self.symbol_mappings.get(symbol).ok_or_else(|| {
+            ArbitrageError::Normalization(format!("No mapping for symbol {}", symbol))
+        })?;
 
-        let precision = mapping.precision
-            .get(&exchange)
-            .ok_or_else(|| ArbitrageError::Normalization(format!("No precision for {} on {}", symbol, exchange)))?;
+        let precision = mapping.precision.get(&exchange).ok_or_else(|| {
+            ArbitrageError::Normalization(format!("No precision for {} on {}", symbol, exchange))
+        })?;
 
         let scale = 10_u64.pow(*precision);
         let scaled = quantity * Decimal::from(scale);
@@ -91,7 +97,7 @@ impl Normalizer {
         // Normalize to uppercase for comparison
         let sym1 = symbol1.to_uppercase();
         let sym2 = symbol2.to_uppercase();
-        
+
         if sym1 == sym2 {
             return true;
         }
@@ -118,19 +124,21 @@ impl Normalizer {
         sequence: Option<u64>,
     ) -> Result<OrderBook> {
         // Map symbol to canonical format
-        let symbol = self.map_symbol(exchange, exchange_symbol)
-            .ok_or_else(|| ArbitrageError::Normalization(
-                format!("Unknown symbol {} on {}", exchange_symbol, exchange)
-            ))?;
+        let symbol = self.map_symbol(exchange, exchange_symbol).ok_or_else(|| {
+            ArbitrageError::Normalization(format!(
+                "Unknown symbol {} on {}",
+                exchange_symbol, exchange
+            ))
+        })?;
 
         // Convert to OrderBookLevel structs and sort
-        // Note: For high-frequency trading with large order books, 
+        // Note: For high-frequency trading with large order books,
         // consider pre-sorted data or incremental updates to avoid sorting overhead
         let mut bid_levels: Vec<OrderBookLevel> = bids
             .into_iter()
             .map(|(price, qty)| OrderBookLevel::new(price, qty))
             .collect();
-        
+
         let mut ask_levels: Vec<OrderBookLevel> = asks
             .into_iter()
             .map(|(price, qty)| OrderBookLevel::new(price, qty))
@@ -152,7 +160,7 @@ impl Normalizer {
         // Validate the order book
         if !order_book.is_valid() {
             return Err(ArbitrageError::Normalization(
-                "Invalid order book: bid >= ask or unsorted levels".to_string()
+                "Invalid order book: bid >= ask or unsorted levels".to_string(),
             ));
         }
 
@@ -182,17 +190,17 @@ impl Normalizer {
         quantity: Decimal,
         price: Decimal,
     ) -> Result<()> {
-        let mapping = self.symbol_mappings
-            .get(symbol)
-            .ok_or_else(|| ArbitrageError::Validation(format!("No mapping for symbol {}", symbol)))?;
+        let mapping = self.symbol_mappings.get(symbol).ok_or_else(|| {
+            ArbitrageError::Validation(format!("No mapping for symbol {}", symbol))
+        })?;
 
         // Check minimum quantity
         if let Some(min_qty) = mapping.min_quantity.get(&exchange) {
             if quantity < *min_qty {
-                return Err(ArbitrageError::Validation(
-                    format!("Quantity {} below minimum {} for {} on {}", 
-                           quantity, min_qty, symbol, exchange)
-                ));
+                return Err(ArbitrageError::Validation(format!(
+                    "Quantity {} below minimum {} for {} on {}",
+                    quantity, min_qty, symbol, exchange
+                )));
             }
         }
 
@@ -200,10 +208,10 @@ impl Normalizer {
         if let Some(min_notional) = mapping.min_notional.get(&exchange) {
             let notional = quantity * price;
             if notional < *min_notional {
-                return Err(ArbitrageError::Validation(
-                    format!("Notional value {} below minimum {} for {} on {}", 
-                           notional, min_notional, symbol, exchange)
-                ));
+                return Err(ArbitrageError::Validation(format!(
+                    "Notional value {} below minimum {} for {} on {}",
+                    notional, min_notional, symbol, exchange
+                )));
             }
         }
 
