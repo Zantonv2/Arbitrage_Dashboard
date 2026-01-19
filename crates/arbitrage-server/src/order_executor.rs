@@ -4,13 +4,12 @@
 //! Handles order placement, tracking, rollback, and hedge logic for failed executions.
 
 use arbitrage_core::{
-    types::{ExecutionInstruction, ExchangeId},
+    types::{ExchangeId, ExecutionInstruction},
     ArbitrageError, Result,
 };
 use exchange_connectors::{
     connector::{
-        ExchangeConnector, OrderRequest, OrderResponse, OrderSide, OrderType, 
-        TimeInForce
+        ExchangeConnector, OrderRequest, OrderResponse, OrderSide, OrderType, TimeInForce,
     },
     exchange_manager::ExchangeManager,
 };
@@ -81,7 +80,7 @@ impl OrderExecutor {
         instruction: &ExecutionInstruction,
     ) -> Result<ExecutionResult> {
         let start_time = std::time::Instant::now();
-        
+
         info!(
             "🎯 Executing arbitrage: {} {} → {} (${:.2})",
             instruction.buy_order.symbol,
@@ -121,7 +120,10 @@ impl OrderExecutor {
         } else {
             warn!(
                 "❌ Arbitrage execution failed: {} ({}ms)",
-                execution_result.error_message.as_deref().unwrap_or("Unknown error"),
+                execution_result
+                    .error_message
+                    .as_deref()
+                    .unwrap_or("Unknown error"),
                 execution_result.execution_time_ms
             );
         }
@@ -141,24 +143,32 @@ impl OrderExecutor {
         }
 
         // Check position size limits
-        let position_value = instruction.buy_order.quantity * instruction.buy_order.price.unwrap_or_default();
+        let position_value =
+            instruction.buy_order.quantity * instruction.buy_order.price.unwrap_or_default();
         if position_value > self.config.max_position_size {
             return Err(ArbitrageError::Execution(format!(
                 "Position size ${:.2} exceeds limit ${:.2}",
-                position_value,
-                self.config.max_position_size
+                position_value, self.config.max_position_size
             )));
         }
 
         // Validate exchanges are available
-        if !self.exchange_manager.is_exchange_connected(&instruction.buy_order.exchange).await {
+        if !self
+            .exchange_manager
+            .is_exchange_connected(&instruction.buy_order.exchange)
+            .await
+        {
             return Err(ArbitrageError::Execution(format!(
                 "Buy exchange {} not connected",
                 instruction.buy_order.exchange
             )));
         }
 
-        if !self.exchange_manager.is_exchange_connected(&instruction.sell_order.exchange).await {
+        if !self
+            .exchange_manager
+            .is_exchange_connected(&instruction.sell_order.exchange)
+            .await
+        {
             return Err(ArbitrageError::Execution(format!(
                 "Sell exchange {} not connected",
                 instruction.sell_order.exchange
@@ -198,16 +208,15 @@ impl OrderExecutor {
 
         // Execute orders with timeout
         let execution_timeout = Duration::from_millis(self.config.execution_timeout_ms);
-        
-        let (buy_result, sell_result) = timeout(
-            execution_timeout,
-            async {
-                tokio::join!(
-                    self.place_order(&instruction.buy_order.exchange, &buy_request),
-                    self.place_order(&instruction.sell_order.exchange, &sell_request)
-                )
-            },
-        ).await.map_err(|_| ArbitrageError::Execution("Execution timeout".to_string()))?;
+
+        let (buy_result, sell_result) = timeout(execution_timeout, async {
+            tokio::join!(
+                self.place_order(&instruction.buy_order.exchange, &buy_request),
+                self.place_order(&instruction.sell_order.exchange, &sell_request)
+            )
+        })
+        .await
+        .map_err(|_| ArbitrageError::Execution("Execution timeout".to_string()))?;
 
         let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
@@ -216,7 +225,7 @@ impl OrderExecutor {
             (Ok(buy_order), Ok(sell_order)) => {
                 // Both orders successful
                 let actual_profit = self.calculate_actual_profit(&buy_order, &sell_order);
-                
+
                 Ok(ExecutionResult {
                     signal_id: instruction.signal_id,
                     success: true,
@@ -231,7 +240,8 @@ impl OrderExecutor {
             (Ok(buy_order), Err(sell_error)) => {
                 // Buy succeeded, sell failed - need rollback
                 let rollback_performed = if self.config.enable_rollback {
-                    self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order).await
+                    self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order)
+                        .await
                 } else {
                     false
                 };
@@ -250,7 +260,8 @@ impl OrderExecutor {
             (Err(buy_error), Ok(sell_order)) => {
                 // Sell succeeded, buy failed - need rollback
                 let rollback_performed = if self.config.enable_rollback {
-                    self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order).await
+                    self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order)
+                        .await
                 } else {
                     false
                 };
@@ -275,7 +286,10 @@ impl OrderExecutor {
                     sell_order: None,
                     actual_profit: None,
                     execution_time_ms: execution_time_ms.max(1),
-                    error_message: Some(format!("Both orders failed - Buy: {}, Sell: {}", buy_error, sell_error)),
+                    error_message: Some(format!(
+                        "Both orders failed - Buy: {}, Sell: {}",
+                        buy_error, sell_error
+                    )),
                     rollback_performed: false,
                 })
             }
@@ -288,8 +302,12 @@ impl OrderExecutor {
         exchange: &ExchangeId,
         request: &OrderRequest,
     ) -> Result<OrderResponse> {
-        debug!("Placing {} order on {}: {} {}", 
-            match request.side { OrderSide::Buy => "BUY", OrderSide::Sell => "SELL" },
+        debug!(
+            "Placing {} order on {}: {} {}",
+            match request.side {
+                OrderSide::Buy => "BUY",
+                OrderSide::Sell => "SELL",
+            },
             exchange,
             request.quantity,
             request.symbol
@@ -299,12 +317,16 @@ impl OrderExecutor {
     }
 
     /// Calculate actual profit from executed orders
-    fn calculate_actual_profit(&self, buy_order: &OrderResponse, sell_order: &OrderResponse) -> Decimal {
+    fn calculate_actual_profit(
+        &self,
+        buy_order: &OrderResponse,
+        sell_order: &OrderResponse,
+    ) -> Decimal {
         // For now, use simple calculation - in production would need to account for fees, slippage, etc.
         let buy_price = buy_order.price.unwrap_or_default();
         let sell_price = sell_order.price.unwrap_or_default();
         let quantity = buy_order.quantity.min(sell_order.quantity);
-        
+
         if buy_price > Decimal::ZERO && quantity > Decimal::ZERO {
             ((sell_price - buy_price) / buy_price) * quantity
         } else {

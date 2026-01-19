@@ -12,10 +12,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 /// Handle WebSocket upgrade
-pub async fn websocket_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+pub async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     debug!("WebSocket connection requested");
     ws.on_upgrade(|socket| handle_websocket(socket, state))
 }
@@ -24,7 +21,7 @@ pub async fn websocket_handler(
 async fn handle_websocket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let client_id = uuid::Uuid::new_v4();
-    
+
     info!("WebSocket client connected: {}", client_id);
 
     // Subscribe to signals
@@ -37,7 +34,10 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
         "timestamp": chrono::Utc::now().to_rfc3339()
     });
 
-    if let Err(e) = sender.send(Message::Text(welcome_msg.to_string().into())).await {
+    if let Err(e) = sender
+        .send(Message::Text(welcome_msg.to_string().into()))
+        .await
+    {
         error!("Failed to send welcome message: {}", e);
         return;
     }
@@ -49,7 +49,7 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
             match msg {
                 Ok(Message::Text(text)) => {
                     debug!("Received message from client {}: {}", client_id, text);
-                    
+
                     // Handle client messages (ping, subscribe, etc.)
                     if let Err(e) = handle_client_message(&text, &state_clone).await {
                         warn!("Error handling client message: {}", e);
@@ -67,7 +67,10 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
                     debug!("Received pong from client {}", client_id);
                 }
                 Ok(Message::Binary(_)) => {
-                    warn!("Received unexpected binary message from client {}", client_id);
+                    warn!(
+                        "Received unexpected binary message from client {}",
+                        client_id
+                    );
                 }
                 Err(e) => {
                     error!("WebSocket error for client {}: {}", client_id, e);
@@ -154,8 +157,9 @@ async fn handle_client_message(
     _state: &AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let parsed: serde_json::Value = serde_json::from_str(message)?;
-    
-    let msg_type = parsed.get("type")
+
+    let msg_type = parsed
+        .get("type")
         .and_then(|t| t.as_str())
         .unwrap_or("unknown");
 

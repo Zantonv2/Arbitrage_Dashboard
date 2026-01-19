@@ -1,19 +1,15 @@
+use arbitrage_core::types::{ConnectionStatus, ExchangeId, Symbol};
+use exchange_connectors::{
+    connections::{
+        bitstamp::BitstampConnector, bybit::BybitConnector, gateio::GateioConnector,
+        kraken::KrakenConnector, mexc::MEXCConnector, okx::OKXConnector,
+    },
+    connector::ExchangeConnector,
+    events::ConnectionEvent,
+};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
-use arbitrage_core::types::{ExchangeId, Symbol, ConnectionStatus};
-use exchange_connectors::{
-    connector::ExchangeConnector,
-    connections::{
-        okx::OKXConnector,
-        bybit::BybitConnector,
-        mexc::MEXCConnector,
-        gateio::GateioConnector,
-        bitstamp::BitstampConnector,
-        kraken::KrakenConnector,
-    },
-    events::ConnectionEvent,
-};
 
 /// Test configuration for each exchange
 struct TestConfig {
@@ -24,7 +20,12 @@ struct TestConfig {
 }
 
 impl TestConfig {
-    fn new(exchange_id: ExchangeId, test_symbols: Vec<Symbol>, supports_funding_rates: bool, expected_min_symbols: usize) -> Self {
+    fn new(
+        exchange_id: ExchangeId,
+        test_symbols: Vec<Symbol>,
+        supports_funding_rates: bool,
+        expected_min_symbols: usize,
+    ) -> Self {
         Self {
             exchange_id,
             test_symbols,
@@ -52,7 +53,8 @@ impl TestResults {
         } else {
             self.failed_tests += 1;
             let detail = details.unwrap_or_else(|| "No details".to_string());
-            self.test_details.push(format!("❌ {} - {}", test_name, detail));
+            self.test_details
+                .push(format!("❌ {} - {}", test_name, detail));
         }
     }
 
@@ -77,7 +79,7 @@ fn create_test_symbols() -> Vec<Symbol> {
 /// Get test configurations for all exchanges
 fn get_test_configs() -> Vec<TestConfig> {
     let test_symbols = create_test_symbols();
-    
+
     vec![
         TestConfig::new(ExchangeId::OKX, test_symbols.clone(), true, 100),
         TestConfig::new(ExchangeId::ByBit, test_symbols.clone(), true, 50),
@@ -114,28 +116,35 @@ async fn test_rest_api(connector: &dyn ExchangeConnector, config: &TestConfig) -
             results.add_test(
                 &format!("{} fetch_symbols", exchange_name),
                 success,
-                Some(format!("Found {} symbols (expected >= {})", symbols.len(), config.expected_min_symbols))
+                Some(format!(
+                    "Found {} symbols (expected >= {})",
+                    symbols.len(),
+                    config.expected_min_symbols
+                )),
             );
         }
         Ok(Err(e)) => {
             results.add_test(
                 &format!("{} fetch_symbols", exchange_name),
                 false,
-                Some(format!("Error: {}", e))
+                Some(format!("Error: {}", e)),
             );
         }
         Err(_) => {
             results.add_test(
                 &format!("{} fetch_symbols", exchange_name),
                 false,
-                Some("Timeout".to_string())
+                Some("Timeout".to_string()),
             );
         }
     }
 
     // Test 2: Fetch order books
     for symbol in &config.test_symbols {
-        println!("  Testing fetch_order_book for {} {}...", exchange_name, symbol);
+        println!(
+            "  Testing fetch_order_book for {} {}...",
+            exchange_name, symbol
+        );
         match timeout(Duration::from_secs(15), connector.fetch_order_book(symbol)).await {
             Ok(Ok(order_book)) => {
                 let has_bids = !order_book.bids.is_empty();
@@ -144,21 +153,25 @@ async fn test_rest_api(connector: &dyn ExchangeConnector, config: &TestConfig) -
                 results.add_test(
                     &format!("{} fetch_order_book({})", exchange_name, symbol),
                     success,
-                    Some(format!("Bids: {}, Asks: {}", order_book.bids.len(), order_book.asks.len()))
+                    Some(format!(
+                        "Bids: {}, Asks: {}",
+                        order_book.bids.len(),
+                        order_book.asks.len()
+                    )),
                 );
             }
             Ok(Err(e)) => {
                 results.add_test(
                     &format!("{} fetch_order_book({})", exchange_name, symbol),
                     false,
-                    Some(format!("Error: {}", e))
+                    Some(format!("Error: {}", e)),
                 );
             }
             Err(_) => {
                 results.add_test(
                     &format!("{} fetch_order_book({})", exchange_name, symbol),
                     false,
-                    Some("Timeout".to_string())
+                    Some("Timeout".to_string()),
                 );
             }
         }
@@ -166,27 +179,32 @@ async fn test_rest_api(connector: &dyn ExchangeConnector, config: &TestConfig) -
 
     // Test 3: Fetch tickers
     println!("  Testing fetch_tickers for {}...", exchange_name);
-    match timeout(Duration::from_secs(20), connector.fetch_tickers(&config.test_symbols)).await {
+    match timeout(
+        Duration::from_secs(20),
+        connector.fetch_tickers(&config.test_symbols),
+    )
+    .await
+    {
         Ok(Ok(tickers)) => {
             let success = !tickers.is_empty();
             results.add_test(
                 &format!("{} fetch_tickers", exchange_name),
                 success,
-                Some(format!("Found {} tickers", tickers.len()))
+                Some(format!("Found {} tickers", tickers.len())),
             );
         }
         Ok(Err(e)) => {
             results.add_test(
                 &format!("{} fetch_tickers", exchange_name),
                 false,
-                Some(format!("Error: {}", e))
+                Some(format!("Error: {}", e)),
             );
         }
         Err(_) => {
             results.add_test(
                 &format!("{} fetch_tickers", exchange_name),
                 false,
-                Some("Timeout".to_string())
+                Some("Timeout".to_string()),
             );
         }
     }
@@ -194,26 +212,31 @@ async fn test_rest_api(connector: &dyn ExchangeConnector, config: &TestConfig) -
     // Test 4: Fetch funding rates (if supported)
     if config.supports_funding_rates {
         println!("  Testing fetch_funding_rates for {}...", exchange_name);
-        match timeout(Duration::from_secs(20), connector.fetch_funding_rates(&config.test_symbols)).await {
+        match timeout(
+            Duration::from_secs(20),
+            connector.fetch_funding_rates(&config.test_symbols),
+        )
+        .await
+        {
             Ok(Ok(funding_rates)) => {
                 results.add_test(
                     &format!("{} fetch_funding_rates", exchange_name),
                     true,
-                    Some(format!("Found {} funding rates", funding_rates.len()))
+                    Some(format!("Found {} funding rates", funding_rates.len())),
                 );
             }
             Ok(Err(e)) => {
                 results.add_test(
                     &format!("{} fetch_funding_rates", exchange_name),
                     false,
-                    Some(format!("Error: {}", e))
+                    Some(format!("Error: {}", e)),
                 );
             }
             Err(_) => {
                 results.add_test(
                     &format!("{} fetch_funding_rates", exchange_name),
                     false,
-                    Some("Timeout".to_string())
+                    Some("Timeout".to_string()),
                 );
             }
         }
@@ -226,21 +249,21 @@ async fn test_rest_api(connector: &dyn ExchangeConnector, config: &TestConfig) -
             results.add_test(
                 &format!("{} health_check", exchange_name),
                 true,
-                Some(format!("REST status: {:?}", health.rest_api_status))
+                Some(format!("REST status: {:?}", health.rest_api_status)),
             );
         }
         Ok(Err(e)) => {
             results.add_test(
                 &format!("{} health_check", exchange_name),
                 false,
-                Some(format!("Error: {}", e))
+                Some(format!("Error: {}", e)),
             );
         }
         Err(_) => {
             results.add_test(
                 &format!("{} health_check", exchange_name),
                 false,
-                Some("Timeout".to_string())
+                Some("Timeout".to_string()),
             );
         }
     }
@@ -258,7 +281,7 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
     results.add_test(
         &format!("{} initial_status", exchange_name),
         initial_status == ConnectionStatus::Disconnected,
-        Some(format!("Status: {:?}", initial_status))
+        Some(format!("Status: {:?}", initial_status)),
     );
 
     // Test 2: WebSocket connection
@@ -268,7 +291,7 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
             results.add_test(
                 &format!("{} websocket_connect", exchange_name),
                 true,
-                Some("Connected successfully".to_string())
+                Some("Connected successfully".to_string()),
             );
 
             // Wait a moment for connection to stabilize
@@ -279,7 +302,7 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
             results.add_test(
                 &format!("{} connected_status", exchange_name),
                 connected_status == ConnectionStatus::Connected,
-                Some(format!("Status: {:?}", connected_status))
+                Some(format!("Status: {:?}", connected_status)),
             );
 
             // Test 4: Event receiver
@@ -287,49 +310,61 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
             results.add_test(
                 &format!("{} event_receiver", exchange_name),
                 true,
-                Some("Event receiver created".to_string())
+                Some("Event receiver created".to_string()),
             );
 
             // Test 5: Subscribe to order books
             println!("  Testing order book subscription for {}...", exchange_name);
-            match timeout(Duration::from_secs(15), connector.subscribe_order_books(&config.test_symbols)).await {
+            match timeout(
+                Duration::from_secs(15),
+                connector.subscribe_order_books(&config.test_symbols),
+            )
+            .await
+            {
                 Ok(Ok(_)) => {
                     results.add_test(
                         &format!("{} subscribe_order_books", exchange_name),
                         true,
-                        Some(format!("Subscribed to {} symbols", config.test_symbols.len()))
+                        Some(format!(
+                            "Subscribed to {} symbols",
+                            config.test_symbols.len()
+                        )),
                     );
 
                     // Test 6: Wait for market data events
                     println!("  Waiting for market data from {}...", exchange_name);
                     let mut received_events = 0;
                     let start_time = std::time::Instant::now();
-                    
+
                     // Subscribe to symbols first to ensure we get data
                     if let Err(e) = connector.subscribe_order_books(&config.test_symbols).await {
                         println!("    Warning: Failed to subscribe to order books: {}", e);
                     }
-                    
+
                     while received_events < 3 && start_time.elapsed() < Duration::from_secs(45) {
                         match timeout(Duration::from_secs(5), event_receiver.recv()).await {
-                            Ok(Ok(event)) => {
-                                match event {
-                                    ConnectionEvent::MarketData(_) => {
-                                        received_events += 1;
-                                        println!("    Received market data event {} from {}", received_events, exchange_name);
-                                    }
-                                    ConnectionEvent::StatusChange { new_status, .. } => {
-                                        println!("    Status change to {:?} for {}", new_status, exchange_name);
-                                    }
-                                    ConnectionEvent::SubscriptionConfirmed { .. } => {
-                                        println!("    Subscription confirmed for {}", exchange_name);
-                                    }
-                                    ConnectionEvent::Error { error, .. } => {
-                                        println!("    Error from {}: {}", exchange_name, error);
-                                    }
-                                    _ => {}
+                            Ok(Ok(event)) => match event {
+                                ConnectionEvent::MarketData(_) => {
+                                    received_events += 1;
+                                    println!(
+                                        "    Received market data event {} from {}",
+                                        received_events, exchange_name
+                                    );
                                 }
-                            }
+                                ConnectionEvent::StatusChange { new_status, .. } => {
+                                    println!(
+                                        "    Status change to {:?} for {}",
+                                        new_status, exchange_name
+                                    );
+                                }
+                                ConnectionEvent::SubscriptionConfirmed { .. } => {
+                                    println!("    Subscription confirmed for {}", exchange_name);
+                                }
+                                ConnectionEvent::Error { error, .. } => {
+                                    println!("    Error from {}: {}", exchange_name, error);
+                                }
+                                _ => {}
+                            },
                             Ok(Err(_)) => {
                                 // Channel closed or lagged
                                 break;
@@ -344,74 +379,83 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
                     results.add_test(
                         &format!("{} receive_market_data", exchange_name),
                         received_events > 0,
-                        Some(format!("Received {} market data events", received_events))
+                        Some(format!("Received {} market data events", received_events)),
                     );
 
                     // Test 7: Subscribe to tickers
                     println!("  Testing ticker subscription for {}...", exchange_name);
-                    match timeout(Duration::from_secs(10), connector.subscribe_tickers(&config.test_symbols)).await {
+                    match timeout(
+                        Duration::from_secs(10),
+                        connector.subscribe_tickers(&config.test_symbols),
+                    )
+                    .await
+                    {
                         Ok(Ok(_)) => {
                             results.add_test(
                                 &format!("{} subscribe_tickers", exchange_name),
                                 true,
-                                Some("Ticker subscription successful".to_string())
+                                Some("Ticker subscription successful".to_string()),
                             );
                         }
                         Ok(Err(e)) => {
                             results.add_test(
                                 &format!("{} subscribe_tickers", exchange_name),
                                 false,
-                                Some(format!("Error: {}", e))
+                                Some(format!("Error: {}", e)),
                             );
                         }
                         Err(_) => {
                             results.add_test(
                                 &format!("{} subscribe_tickers", exchange_name),
                                 false,
-                                Some("Timeout".to_string())
+                                Some("Timeout".to_string()),
                             );
                         }
                     }
 
                     // Test 8: Unsubscribe from symbols
                     println!("  Testing unsubscribe for {}...", exchange_name);
-                    match timeout(Duration::from_secs(10), connector.unsubscribe_symbols(&config.test_symbols)).await {
+                    match timeout(
+                        Duration::from_secs(10),
+                        connector.unsubscribe_symbols(&config.test_symbols),
+                    )
+                    .await
+                    {
                         Ok(Ok(_)) => {
                             results.add_test(
                                 &format!("{} unsubscribe_symbols", exchange_name),
                                 true,
-                                Some("Unsubscribe successful".to_string())
+                                Some("Unsubscribe successful".to_string()),
                             );
                         }
                         Ok(Err(e)) => {
                             results.add_test(
                                 &format!("{} unsubscribe_symbols", exchange_name),
                                 false,
-                                Some(format!("Error: {}", e))
+                                Some(format!("Error: {}", e)),
                             );
                         }
                         Err(_) => {
                             results.add_test(
                                 &format!("{} unsubscribe_symbols", exchange_name),
                                 false,
-                                Some("Timeout".to_string())
+                                Some("Timeout".to_string()),
                             );
                         }
                     }
-
-                } 
+                }
                 Ok(Err(e)) => {
                     results.add_test(
                         &format!("{} subscribe_order_books", exchange_name),
                         false,
-                        Some(format!("Error: {}", e))
+                        Some(format!("Error: {}", e)),
                     );
                 }
                 Err(_) => {
                     results.add_test(
                         &format!("{} subscribe_order_books", exchange_name),
                         false,
-                        Some("Timeout".to_string())
+                        Some("Timeout".to_string()),
                     );
                 }
             }
@@ -423,21 +467,21 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
                     results.add_test(
                         &format!("{} force_reconnect", exchange_name),
                         true,
-                        Some("Reconnect successful".to_string())
+                        Some("Reconnect successful".to_string()),
                     );
                 }
                 Ok(Err(e)) => {
                     results.add_test(
                         &format!("{} force_reconnect", exchange_name),
                         false,
-                        Some(format!("Error: {}", e))
+                        Some(format!("Error: {}", e)),
                     );
                 }
                 Err(_) => {
                     results.add_test(
                         &format!("{} force_reconnect", exchange_name),
                         false,
-                        Some("Timeout".to_string())
+                        Some("Timeout".to_string()),
                     );
                 }
             }
@@ -450,38 +494,37 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
                     results.add_test(
                         &format!("{} disconnect", exchange_name),
                         disconnected_status == ConnectionStatus::Disconnected,
-                        Some(format!("Final status: {:?}", disconnected_status))
+                        Some(format!("Final status: {:?}", disconnected_status)),
                     );
                 }
                 Ok(Err(e)) => {
                     results.add_test(
                         &format!("{} disconnect", exchange_name),
                         false,
-                        Some(format!("Error: {}", e))
+                        Some(format!("Error: {}", e)),
                     );
                 }
                 Err(_) => {
                     results.add_test(
                         &format!("{} disconnect", exchange_name),
                         false,
-                        Some("Timeout".to_string())
+                        Some("Timeout".to_string()),
                     );
                 }
             }
-
         }
         Ok(Err(e)) => {
             results.add_test(
                 &format!("{} websocket_connect", exchange_name),
                 false,
-                Some(format!("Error: {}", e))
+                Some(format!("Error: {}", e)),
             );
         }
         Err(_) => {
             results.add_test(
                 &format!("{} websocket_connect", exchange_name),
                 false,
-                Some("Timeout".to_string())
+                Some("Timeout".to_string()),
             );
         }
     }
@@ -490,7 +533,10 @@ async fn test_websocket(connector: &mut dyn ExchangeConnector, config: &TestConf
 }
 
 /// Test connector statistics and monitoring
-async fn test_connector_stats(connector: &dyn ExchangeConnector, config: &TestConfig) -> TestResults {
+async fn test_connector_stats(
+    connector: &dyn ExchangeConnector,
+    config: &TestConfig,
+) -> TestResults {
     let mut results = TestResults::default();
     let exchange_name = format!("{:?}", config.exchange_id);
 
@@ -499,7 +545,10 @@ async fn test_connector_stats(connector: &dyn ExchangeConnector, config: &TestCo
     results.add_test(
         &format!("{} get_stats", exchange_name),
         stats.exchange == config.exchange_id,
-        Some(format!("Exchange: {:?}, Messages: {}", stats.exchange, stats.messages_received))
+        Some(format!(
+            "Exchange: {:?}, Messages: {}",
+            stats.exchange, stats.messages_received
+        )),
     );
 
     // Test 2: Health check
@@ -508,21 +557,24 @@ async fn test_connector_stats(connector: &dyn ExchangeConnector, config: &TestCo
             results.add_test(
                 &format!("{} health_status", exchange_name),
                 true,
-                Some(format!("Connected: {}, Errors: {}", health.is_connected, health.error_count))
+                Some(format!(
+                    "Connected: {}, Errors: {}",
+                    health.is_connected, health.error_count
+                )),
             );
         }
         Ok(Err(e)) => {
             results.add_test(
                 &format!("{} health_status", exchange_name),
                 false,
-                Some(format!("Error: {}", e))
+                Some(format!("Error: {}", e)),
             );
         }
         Err(_) => {
             results.add_test(
                 &format!("{} health_status", exchange_name),
                 false,
-                Some("Timeout".to_string())
+                Some("Timeout".to_string()),
             );
         }
     }
@@ -534,7 +586,7 @@ async fn test_connector_stats(connector: &dyn ExchangeConnector, config: &TestCo
 async fn test_exchange(config: TestConfig) -> TestResults {
     let mut combined_results = TestResults::default();
     let exchange_name = format!("{:?}", config.exchange_id);
-    
+
     println!("\n🔄 Testing {} Exchange", exchange_name);
     println!("{}", "=".repeat(50));
 
@@ -543,29 +595,40 @@ async fn test_exchange(config: TestConfig) -> TestResults {
     // Test REST API
     println!("\n📡 Testing REST API for {}...", exchange_name);
     let rest_results = test_rest_api(connector.as_ref(), &config).await;
-    
+
     // Test WebSocket
     println!("\n🔌 Testing WebSocket for {}...", exchange_name);
     let ws_results = test_websocket(connector.as_mut(), &config).await;
-    
+
     // Test Stats and Monitoring
     println!("\n📊 Testing Stats for {}...", exchange_name);
     let stats_results = test_connector_stats(connector.as_ref(), &config).await;
 
     // Combine all results
-    combined_results.total_tests = rest_results.total_tests + ws_results.total_tests + stats_results.total_tests;
-    combined_results.passed_tests = rest_results.passed_tests + ws_results.passed_tests + stats_results.passed_tests;
-    combined_results.failed_tests = rest_results.failed_tests + ws_results.failed_tests + stats_results.failed_tests;
-    
-    combined_results.test_details.extend(rest_results.test_details);
-    combined_results.test_details.extend(ws_results.test_details);
-    combined_results.test_details.extend(stats_results.test_details);
+    combined_results.total_tests =
+        rest_results.total_tests + ws_results.total_tests + stats_results.total_tests;
+    combined_results.passed_tests =
+        rest_results.passed_tests + ws_results.passed_tests + stats_results.passed_tests;
+    combined_results.failed_tests =
+        rest_results.failed_tests + ws_results.failed_tests + stats_results.failed_tests;
 
-    println!("\n📋 {} Results: {}/{} tests passed ({:.1}%)", 
-             exchange_name, 
-             combined_results.passed_tests, 
-             combined_results.total_tests,
-             combined_results.success_rate());
+    combined_results
+        .test_details
+        .extend(rest_results.test_details);
+    combined_results
+        .test_details
+        .extend(ws_results.test_details);
+    combined_results
+        .test_details
+        .extend(stats_results.test_details);
+
+    println!(
+        "\n📋 {} Results: {}/{} tests passed ({:.1}%)",
+        exchange_name,
+        combined_results.passed_tests,
+        combined_results.total_tests,
+        combined_results.success_rate()
+    );
 
     combined_results
 }
@@ -574,7 +637,7 @@ async fn test_exchange(config: TestConfig) -> TestResults {
 async fn test_all_exchange_connectors() {
     println!("🚀 Starting Comprehensive Exchange Connector Integration Tests");
     println!("{}", "=".repeat(80));
-    
+
     let configs = get_test_configs();
     let mut all_results = HashMap::new();
     let mut total_tests = 0;
@@ -584,29 +647,33 @@ async fn test_all_exchange_connectors() {
     for config in configs {
         let exchange_name = format!("{:?}", config.exchange_id);
         let results = test_exchange(config).await;
-        
+
         total_tests += results.total_tests;
         total_passed += results.passed_tests;
-        
+
         all_results.insert(exchange_name, results);
     }
 
     // Print comprehensive summary
     println!("\n\n📊 COMPREHENSIVE TEST SUMMARY");
     println!("{}", "=".repeat(80));
-    
+
     for (exchange, results) in &all_results {
         println!("\n🏢 {} Exchange:", exchange);
-        println!("   Tests: {}/{} passed ({:.1}%)", 
-                 results.passed_tests, 
-                 results.total_tests, 
-                 results.success_rate());
-        
+        println!(
+            "   Tests: {}/{} passed ({:.1}%)",
+            results.passed_tests,
+            results.total_tests,
+            results.success_rate()
+        );
+
         // Show failed tests
-        let failed_tests: Vec<&String> = results.test_details.iter()
+        let failed_tests: Vec<&String> = results
+            .test_details
+            .iter()
             .filter(|detail| detail.starts_with("❌"))
             .collect();
-        
+
         if !failed_tests.is_empty() {
             println!("   Failed tests:");
             for failed in failed_tests {
@@ -615,15 +682,19 @@ async fn test_all_exchange_connectors() {
         }
     }
 
-    let overall_success_rate = if total_tests == 0 { 0.0 } else { (total_passed as f64 / total_tests as f64) * 100.0 };
-    
+    let overall_success_rate = if total_tests == 0 {
+        0.0
+    } else {
+        (total_passed as f64 / total_tests as f64) * 100.0
+    };
+
     println!("\n\n🎯 OVERALL RESULTS");
     println!("{}", "=".repeat(50));
     println!("Total Tests: {}", total_tests);
     println!("Passed: {}", total_passed);
     println!("Failed: {}", total_tests - total_passed);
     println!("Success Rate: {:.1}%", overall_success_rate);
-    
+
     if overall_success_rate >= 80.0 {
         println!("🎉 EXCELLENT! All connectors are working well!");
     } else if overall_success_rate >= 60.0 {
@@ -634,7 +705,7 @@ async fn test_all_exchange_connectors() {
 
     println!("\n\n📋 DETAILED TEST BREAKDOWN");
     println!("{}", "=".repeat(80));
-    
+
     for (exchange, results) in &all_results {
         println!("\n{} - Detailed Results:", exchange);
         for detail in &results.test_details {
@@ -656,7 +727,7 @@ async fn test_all_exchange_connectors() {
 async fn test_individual_okx_connector() {
     let config = TestConfig::new(ExchangeId::OKX, create_test_symbols(), true, 100);
     let results = test_exchange(config).await;
-    
+
     assert!(
         results.success_rate() >= 70.0,
         "OKX connector success rate {:.1}% is below 70%",
@@ -668,7 +739,7 @@ async fn test_individual_okx_connector() {
 async fn test_individual_bybit_connector() {
     let config = TestConfig::new(ExchangeId::ByBit, create_test_symbols(), true, 50);
     let results = test_exchange(config).await;
-    
+
     assert!(
         results.success_rate() >= 70.0,
         "ByBit connector success rate {:.1}% is below 70%",
@@ -680,7 +751,7 @@ async fn test_individual_bybit_connector() {
 async fn test_individual_mexc_connector() {
     let config = TestConfig::new(ExchangeId::MEXC, create_test_symbols(), true, 200);
     let results = test_exchange(config).await;
-    
+
     assert!(
         results.success_rate() >= 70.0,
         "MEXC connector success rate {:.1}% is below 70%",
@@ -692,7 +763,7 @@ async fn test_individual_mexc_connector() {
 async fn test_individual_gateio_connector() {
     let config = TestConfig::new(ExchangeId::GateIo, create_test_symbols(), false, 100);
     let results = test_exchange(config).await;
-    
+
     assert!(
         results.success_rate() >= 70.0,
         "Gate.io connector success rate {:.1}% is below 70%",
@@ -704,7 +775,7 @@ async fn test_individual_gateio_connector() {
 async fn test_individual_bitstamp_connector() {
     let config = TestConfig::new(ExchangeId::Bitstamp, create_test_symbols(), false, 20);
     let results = test_exchange(config).await;
-    
+
     assert!(
         results.success_rate() >= 70.0,
         "Bitstamp connector success rate {:.1}% is below 70%",
@@ -716,7 +787,7 @@ async fn test_individual_bitstamp_connector() {
 async fn test_individual_kraken_connector() {
     let config = TestConfig::new(ExchangeId::Kraken, create_test_symbols(), false, 30);
     let results = test_exchange(config).await;
-    
+
     assert!(
         results.success_rate() >= 70.0,
         "Kraken connector success rate {:.1}% is below 70%",

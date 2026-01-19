@@ -26,7 +26,7 @@ fn test_symbol_from_pair_invalid() {
 #[test]
 fn test_order_book_validity() {
     let symbol = Symbol::new("BTC", "USDT");
-    
+
     // Valid order book
     let valid_book = OrderBook {
         exchange: ExchangeId::ByBit,
@@ -43,7 +43,7 @@ fn test_order_book_validity() {
         sequence: None,
     };
     assert!(valid_book.is_valid());
-    
+
     // Invalid order book (bid > ask)
     let invalid_book = OrderBook {
         exchange: ExchangeId::ByBit,
@@ -73,11 +73,14 @@ fn test_order_book_best_prices() {
         timestamp: Utc::now(),
         sequence: None,
     };
-    
+
     assert_eq!(book.best_bid().unwrap().price, Decimal::from(50000));
     assert_eq!(book.best_ask().unwrap().price, Decimal::from(50001));
     assert_eq!(book.spread().unwrap(), Decimal::from(1));
-    assert_eq!(book.mid_price().unwrap(), Decimal::from_str_exact("50000.5").unwrap());
+    assert_eq!(
+        book.mid_price().unwrap(),
+        Decimal::from_str_exact("50000.5").unwrap()
+    );
 }
 
 #[test]
@@ -89,9 +92,9 @@ fn test_signal_expiry() {
         Decimal::from(50000),
         Decimal::from(50100),
     );
-    
+
     assert!(!signal.is_expired());
-    
+
     // Set expiry to past
     signal.expires_at = Utc::now() - chrono::Duration::minutes(1);
     assert!(signal.is_expired());
@@ -106,7 +109,7 @@ fn test_signal_age() {
         Decimal::from(50000),
         Decimal::from(50100),
     );
-    
+
     assert!(signal.age_seconds() >= 0);
 }
 
@@ -120,7 +123,7 @@ fn test_order_creation() {
         Decimal::from(1),
         Some(Decimal::from(50000)),
     );
-    
+
     assert_eq!(order.exchange, ExchangeId::ByBit);
     assert_eq!(order.side, Side::Buy);
     assert_eq!(order.order_type, OrderType::Limit);
@@ -148,7 +151,7 @@ fn test_execution_instruction_validity() {
         Decimal::from(1),
         Some(Decimal::from(50100)),
     );
-    
+
     let instruction = ExecutionInstruction::new(signal_id, buy_order, sell_order);
     assert!(instruction.is_valid()); // No validation errors initially
     assert_eq!(instruction.signal_id, signal_id);
