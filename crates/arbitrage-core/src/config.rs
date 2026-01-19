@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub server: ServerConfig,
     pub exchanges: HashMap<ExchangeId, ExchangeConfig>,
@@ -13,21 +13,6 @@ pub struct Config {
     pub notifications: NotificationConfig,
     pub storage: StorageConfig,
     pub logging: LoggingConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            exchanges: HashMap::new(),
-            trading: TradingConfig::default(),
-            risk: RiskConfig::default(),
-            inventory: InventoryConfig::default(),
-            notifications: NotificationConfig::default(),
-            storage: StorageConfig::default(),
-            logging: LoggingConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,12 +83,15 @@ pub struct TradingConfig {
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
-            min_profit_threshold_percent: Decimal::from_str_exact("0.1").unwrap(),
-            min_confidence_threshold: Decimal::from_str_exact("0.3").unwrap(),
+            min_profit_threshold_percent: Decimal::from_str_exact("0.1")
+                .expect("Failed to parse default min_profit_threshold_percent: '0.1'"),
+            min_confidence_threshold: Decimal::from_str_exact("0.3")
+                .expect("Failed to parse default min_confidence_threshold: '0.3'"),
             max_signal_age_seconds: 300, // 5 minutes
             signal_deduplication_window_ms: 5000,
             stale_orderbook_threshold_ms: 10000,
-            slippage_buffer_percent: Decimal::from_str_exact("0.05").unwrap(),
+            slippage_buffer_percent: Decimal::from_str_exact("0.05")
+                .expect("Failed to parse default slippage_buffer_percent: '0.05'"),
             default_time_in_force: "IOC".to_string(),
         }
     }
@@ -123,8 +111,10 @@ impl Default for RiskConfig {
     fn default() -> Self {
         Self {
             max_position_size_usd: Decimal::from(10000),
-            max_slippage_percent: Decimal::from_str_exact("0.2").unwrap(),
-            conservative_size_multiplier: Decimal::from_str_exact("0.8").unwrap(),
+            max_slippage_percent: Decimal::from_str_exact("0.2")
+                .expect("Failed to parse default max_slippage_percent: '0.2'"),
+            conservative_size_multiplier: Decimal::from_str_exact("0.8")
+                .expect("Failed to parse default conservative_size_multiplier: '0.8'"),
             min_order_size_usd: Decimal::from(10),
             max_order_size_usd: Decimal::from(50000),
             max_concurrent_signals: 100,
@@ -151,7 +141,7 @@ impl Default for InventoryConfig {
         default_limits.insert("USDT".to_string(), Decimal::from(1000000));
         default_limits.insert("USDC".to_string(), Decimal::from(1000000));
         default_limits.insert("USD".to_string(), Decimal::from(1000000));
-        
+
         Self {
             default_limits,
             exchange_limits: HashMap::new(),
@@ -173,8 +163,10 @@ impl Default for NotificationConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_profit_for_notification: Decimal::from_str_exact("0.5").unwrap(),
-            min_confidence_for_notification: Decimal::from_str_exact("0.7").unwrap(),
+            min_profit_for_notification: Decimal::from_str_exact("0.5")
+                .expect("Failed to parse default min_profit_for_notification: '0.5'"),
+            min_confidence_for_notification: Decimal::from_str_exact("0.7")
+                .expect("Failed to parse default min_confidence_for_notification: '0.7'"),
             desktop_notifications: true,
             sound_enabled: false,
         }
@@ -263,4 +255,3 @@ impl Default for StablecoinGroup {
         }
     }
 }
-

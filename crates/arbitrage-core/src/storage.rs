@@ -74,7 +74,10 @@ impl SignalStatus {
             "executed" => Ok(SignalStatus::Executed),
             "expired" => Ok(SignalStatus::Expired),
             "failed" => Ok(SignalStatus::Failed),
-            _ => Err(ArbitrageError::Storage(format!("Invalid signal status: {}", s))),
+            _ => Err(ArbitrageError::Storage(format!(
+                "Invalid signal status: {}",
+                s
+            ))),
         }
     }
 }
@@ -107,7 +110,10 @@ impl ExecutionStatus {
             "completed" => Ok(ExecutionStatus::Completed),
             "failed" => Ok(ExecutionStatus::Failed),
             "cancelled" => Ok(ExecutionStatus::Cancelled),
-            _ => Err(ArbitrageError::Storage(format!("Invalid execution status: {}", s))),
+            _ => Err(ArbitrageError::Storage(format!(
+                "Invalid execution status: {}",
+                s
+            ))),
         }
     }
 }
@@ -143,32 +149,29 @@ pub struct StorageService {
 }
 
 impl StorageService {
-    pub fn new(config: StorageConfig) -> Result<Self> {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            Self::new_async(config).await
-        })
-    }
-
-    pub async fn new_async(config: StorageConfig) -> Result<Self> {
+    pub async fn new(config: StorageConfig) -> Result<Self> {
         let database_url = format!("sqlite:{}", config.database_path);
-        
-        let pool = SqlitePool::connect(&database_url).await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to connect to database: {}", e)))?;
+
+        let pool = SqlitePool::connect(&database_url).await.map_err(|e| {
+            ArbitrageError::Storage(format!("Failed to connect to database: {}", e))
+        })?;
 
         let service = Self { config, pool };
         service.initialize_database().await?;
-        
+
         Ok(service)
     }
 
     /// Initialize database tables
     pub async fn initialize_database(&self) -> Result<()> {
-        let mut tx = self.pool.begin().await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to begin transaction: {}", e)))?;
+        let mut tx =
+            self.pool.begin().await.map_err(|e| {
+                ArbitrageError::Storage(format!("Failed to begin transaction: {}", e))
+            })?;
 
         // Create signals table
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS signals (
                 id TEXT PRIMARY KEY,
                 symbol_base TEXT NOT NULL,
@@ -190,13 +193,15 @@ impl StorageService {
                 status TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
-        "#)
+        "#,
+        )
         .execute(&mut *tx)
         .await
         .map_err(|e| ArbitrageError::Storage(format!("Failed to create signals table: {}", e)))?;
 
         // Create executions table
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS executions (
                 signal_id TEXT PRIMARY KEY,
                 instruction_data TEXT NOT NULL,
@@ -206,48 +211,45 @@ impl StorageService {
                 execution_time_ms INTEGER,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
-        "#)
+        "#,
+        )
         .execute(&mut *tx)
         .await
-        .map_err(|e| ArbitrageError::Storage(format!("Failed to create executions table: {}", e)))?;
+        .map_err(|e| {
+            ArbitrageError::Storage(format!("Failed to create executions table: {}", e))
+        })?;
 
         // Create indexes for better query performance
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp)")
             .execute(&mut *tx)
             .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to create timestamp index: {}", e)))?;
+            .map_err(|e| {
+                ArbitrageError::Storage(format!("Failed to create timestamp index: {}", e))
+            })?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status)")
             .execute(&mut *tx)
             .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to create status index: {}", e)))?;
+            .map_err(|e| {
+                ArbitrageError::Storage(format!("Failed to create status index: {}", e))
+            })?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol_base, symbol_quote)")
-            .execute(&mut *tx)
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol_base, symbol_quote)",
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ArbitrageError::Storage(format!("Failed to create symbol index: {}", e)))?;
+
+        tx.commit()
             .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to create symbol index: {}", e)))?;
-
-        tx.commit().await
             .map_err(|e| ArbitrageError::Storage(format!("Failed to commit transaction: {}", e)))?;
 
         Ok(())
     }
 
     /// Store a detected signal
-    pub fn store_signal(
-        &self,
-        signal: Signal,
-        confidence_score: Decimal,
-        status: SignalStatus,
-    ) -> Result<()> {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            self.store_signal_async(signal, confidence_score, status).await
-        })
-    }
-
-    /// Store a detected signal (async version)
-    pub async fn store_signal_async(
+    pub async fn store_signal(
         &self,
         signal: Signal,
         confidence_score: Decimal,
@@ -256,14 +258,16 @@ impl StorageService {
         let metadata_json = serde_json::to_string(&signal.metadata)
             .map_err(|e| ArbitrageError::Storage(format!("Failed to serialize metadata: {}", e)))?;
 
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             INSERT OR REPLACE INTO signals (
                 id, symbol_base, symbol_quote, buy_exchange, sell_exchange,
                 buy_price, sell_price, gross_profit_percent, net_profit_percent,
                 confidence, recommended_size, max_size, expected_slippage,
                 expires_at, metadata, timestamp, confidence_score, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#)
+        "#,
+        )
         .bind(signal.id.to_string())
         .bind(&signal.symbol.base)
         .bind(&signal.symbol.quote)
@@ -298,14 +302,17 @@ impl StorageService {
         instruction: ExecutionInstruction,
         status: ExecutionStatus,
     ) -> Result<()> {
-        let instruction_json = serde_json::to_string(&instruction)
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to serialize instruction: {}", e)))?;
+        let instruction_json = serde_json::to_string(&instruction).map_err(|e| {
+            ArbitrageError::Storage(format!("Failed to serialize instruction: {}", e))
+        })?;
 
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             INSERT OR REPLACE INTO executions (
                 signal_id, instruction_data, timestamp, status, actual_profit, execution_time_ms
             ) VALUES (?, ?, ?, ?, ?, ?)
-        "#)
+        "#,
+        )
         .bind(instruction.signal_id.to_string())
         .bind(instruction_json)
         .bind(chrono::Utc::now().to_rfc3339())
@@ -329,7 +336,9 @@ impl StorageService {
             .bind(signal_id.to_string())
             .execute(&self.pool)
             .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to update signal status: {}", e)))?;
+            .map_err(|e| {
+                ArbitrageError::Storage(format!("Failed to update signal status: {}", e))
+            })?;
 
         Ok(())
     }
@@ -342,32 +351,28 @@ impl StorageService {
         actual_profit: Option<Decimal>,
         execution_time_ms: Option<u64>,
     ) -> Result<()> {
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             UPDATE executions 
             SET status = ?, actual_profit = ?, execution_time_ms = ?
             WHERE signal_id = ?
-        "#)
+        "#,
+        )
         .bind(status.to_string())
         .bind(actual_profit.map(|p| p.to_string()))
         .bind(execution_time_ms.map(|t| t as i64))
         .bind(signal_id.to_string())
         .execute(&self.pool)
         .await
-        .map_err(|e| ArbitrageError::Storage(format!("Failed to update execution status: {}", e)))?;
+        .map_err(|e| {
+            ArbitrageError::Storage(format!("Failed to update execution status: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Query signals with filters
-    pub fn query_signals(&self, query: &SignalQuery) -> Result<Vec<StoredSignal>> {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            self.query_signals_async(query).await
-        })
-    }
-
-    /// Query signals with filters (async version)
-    pub async fn query_signals_async(&self, query: &SignalQuery) -> Result<Vec<StoredSignal>> {
+    pub async fn query_signals(&self, query: &SignalQuery) -> Result<Vec<StoredSignal>> {
         let mut sql = "SELECT * FROM signals WHERE 1=1".to_string();
         let mut params: Vec<String> = Vec::new();
 
@@ -412,7 +417,9 @@ impl StorageService {
             query_builder = query_builder.bind(param);
         }
 
-        let rows = query_builder.fetch_all(&self.pool).await
+        let rows = query_builder
+            .fetch_all(&self.pool)
+            .await
             .map_err(|e| ArbitrageError::Storage(format!("Failed to query signals: {}", e)))?;
 
         let mut results = Vec::new();
@@ -452,10 +459,13 @@ impl StorageService {
             .map_err(|e| ArbitrageError::Storage(format!("Failed to count executions: {}", e)))?;
 
         // Get signal status counts
-        let status_rows = sqlx::query("SELECT status, COUNT(*) as count FROM signals GROUP BY status")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to get signal status counts: {}", e)))?;
+        let status_rows =
+            sqlx::query("SELECT status, COUNT(*) as count FROM signals GROUP BY status")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| {
+                    ArbitrageError::Storage(format!("Failed to get signal status counts: {}", e))
+                })?;
 
         let mut signal_status_counts = std::collections::HashMap::new();
         for row in status_rows {
@@ -467,10 +477,13 @@ impl StorageService {
         }
 
         // Get execution status counts
-        let exec_status_rows = sqlx::query("SELECT status, COUNT(*) as count FROM executions GROUP BY status")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to get execution status counts: {}", e)))?;
+        let exec_status_rows =
+            sqlx::query("SELECT status, COUNT(*) as count FROM executions GROUP BY status")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| {
+                    ArbitrageError::Storage(format!("Failed to get execution status counts: {}", e))
+                })?;
 
         let mut execution_status_counts = std::collections::HashMap::new();
         for row in exec_status_rows {
@@ -500,19 +513,23 @@ impl StorageService {
 
         if count as usize > self.config.max_signal_history {
             let to_delete = count as usize - self.config.max_signal_history;
-            
-            sqlx::query(r#"
+
+            sqlx::query(
+                r#"
                 DELETE FROM signals 
                 WHERE id IN (
                     SELECT id FROM signals 
                     ORDER BY timestamp ASC 
                     LIMIT ?
                 )
-            "#)
+            "#,
+            )
             .bind(to_delete as i64)
             .execute(&self.pool)
             .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to cleanup old signals: {}", e)))?;
+            .map_err(|e| {
+                ArbitrageError::Storage(format!("Failed to cleanup old signals: {}", e))
+            })?;
         }
 
         Ok(())
@@ -527,19 +544,23 @@ impl StorageService {
 
         if count as usize > self.config.max_execution_history {
             let to_delete = count as usize - self.config.max_execution_history;
-            
-            sqlx::query(r#"
+
+            sqlx::query(
+                r#"
                 DELETE FROM executions 
                 WHERE signal_id IN (
                     SELECT signal_id FROM executions 
                     ORDER BY timestamp ASC 
                     LIMIT ?
                 )
-            "#)
+            "#,
+            )
             .bind(to_delete as i64)
             .execute(&self.pool)
             .await
-            .map_err(|e| ArbitrageError::Storage(format!("Failed to cleanup old executions: {}", e)))?;
+            .map_err(|e| {
+                ArbitrageError::Storage(format!("Failed to cleanup old executions: {}", e))
+            })?;
         }
 
         Ok(())
@@ -552,13 +573,17 @@ impl StorageService {
             .map_err(|e| ArbitrageError::Storage(format!("Invalid UUID: {}", e)))?;
 
         let symbol = crate::types::Symbol::new(
-            &row.get::<String, _>("symbol_base"),
-            &row.get::<String, _>("symbol_quote"),
+            row.get::<String, _>("symbol_base"),
+            row.get::<String, _>("symbol_quote"),
         );
 
-        let buy_exchange = row.get::<String, _>("buy_exchange").parse()
+        let buy_exchange = row
+            .get::<String, _>("buy_exchange")
+            .parse()
             .map_err(|e| ArbitrageError::Storage(format!("Invalid buy exchange: {}", e)))?;
-        let sell_exchange = row.get::<String, _>("sell_exchange").parse()
+        let sell_exchange = row
+            .get::<String, _>("sell_exchange")
+            .parse()
             .map_err(|e| ArbitrageError::Storage(format!("Invalid sell exchange: {}", e)))?;
 
         let buy_price = Decimal::from_str(&row.get::<String, _>("buy_price"))
@@ -569,8 +594,9 @@ impl StorageService {
         let mut signal = Signal::new(symbol, buy_exchange, sell_exchange, buy_price, sell_price);
         signal.id = id;
 
-        signal.gross_profit_percent = Decimal::from_str(&row.get::<String, _>("gross_profit_percent"))
-            .map_err(|e| ArbitrageError::Storage(format!("Invalid gross profit: {}", e)))?;
+        signal.gross_profit_percent =
+            Decimal::from_str(&row.get::<String, _>("gross_profit_percent"))
+                .map_err(|e| ArbitrageError::Storage(format!("Invalid gross profit: {}", e)))?;
         signal.net_profit_percent = Decimal::from_str(&row.get::<String, _>("net_profit_percent"))
             .map_err(|e| ArbitrageError::Storage(format!("Invalid net profit: {}", e)))?;
         signal.confidence = Decimal::from_str(&row.get::<String, _>("confidence"))
@@ -629,14 +655,18 @@ impl StorageService {
         let status_str: String = row.get("status");
         let status = ExecutionStatus::from_string(&status_str)?;
 
-        let actual_profit = if let Some(profit_str) = row.get::<Option<String>, _>("actual_profit") {
-            Some(Decimal::from_str(&profit_str)
-                .map_err(|e| ArbitrageError::Storage(format!("Invalid actual profit: {}", e)))?)
-        } else {
-            None
-        };
+        let actual_profit =
+            if let Some(profit_str) = row.get::<Option<String>, _>("actual_profit") {
+                Some(Decimal::from_str(&profit_str).map_err(|e| {
+                    ArbitrageError::Storage(format!("Invalid actual profit: {}", e))
+                })?)
+            } else {
+                None
+            };
 
-        let execution_time_ms = row.get::<Option<i64>, _>("execution_time_ms").map(|t| t as u64);
+        let execution_time_ms = row
+            .get::<Option<i64>, _>("execution_time_ms")
+            .map(|t| t as u64);
 
         Ok(StoredExecution {
             instruction,

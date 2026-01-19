@@ -1,17 +1,20 @@
+pub mod connections;
 pub mod connector;
-pub mod exchange_manager;
 pub mod events;
+pub mod exchange_manager;
 pub mod rate_limiter;
 pub mod utils;
-pub mod connections;
 
 // Re-exports
-pub use connector::{ExchangeConnector, ConnectorError};
-pub use exchange_manager::{ExchangeManager, ExchangeManagerConfig};
+pub use connections::{
+    BitstampConnector, BybitConnector, GateioConnector, KrakenConnector, MEXCConnector,
+    OKXConnector,
+};
+pub use connector::ExchangeConnector;
 pub use events::{ConnectionEvent, MarketDataEvent};
-pub use rate_limiter::{RateLimiter, RateLimitConfig, UnifiedRateLimitManager};
+pub use exchange_manager::{ExchangeManager, ExchangeManagerConfig};
+pub use rate_limiter::{RateLimitConfig, RateLimiter, UnifiedRateLimitManager};
 pub use utils::*;
-pub use connections::{OKXConnector, BybitConnector, MEXCConnector, GateioConnector, BitstampConnector, KrakenConnector};
 
 use arbitrage_core::{types::ExchangeId, Result};
 
@@ -24,8 +27,9 @@ pub fn create_connector(exchange_id: ExchangeId) -> Result<Box<dyn ExchangeConne
         ExchangeId::GateIo => Ok(Box::new(GateioConnector::new())),
         ExchangeId::Bitstamp => Ok(Box::new(BitstampConnector::new())),
         ExchangeId::Kraken => Ok(Box::new(KrakenConnector::new())),
-        _ => Err(arbitrage_core::ArbitrageError::Validation(
-            format!("Exchange connector not implemented: {}", exchange_id)
-        )),
+        _ => Err(arbitrage_core::ArbitrageError::Validation(format!(
+            "Exchange connector not implemented: {}",
+            exchange_id
+        ))),
     }
 }

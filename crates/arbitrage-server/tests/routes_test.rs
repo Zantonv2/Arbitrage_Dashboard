@@ -18,7 +18,7 @@ use rust_decimal::Decimal;
 use std::sync::Arc;
 
 /// Helper to create test engine with all components
-fn create_test_engine(
+async fn create_test_engine(
     config: Config,
 ) -> Result<(
     Arc<ArbitrageEngine>,
@@ -29,7 +29,11 @@ fn create_test_engine(
     let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
     let size_calculator = Arc::new(SizeCalculator::new(SizeConfig::default()));
     let execution_preparer = Arc::new(ExecutionPreparer::new(ExecutionConfig::default()));
-    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
+    let storage_config = StorageConfig {
+        database_path: ":memory:".to_string(),
+        ..Default::default()
+    };
+    let storage = Arc::new(StorageService::new(storage_config).await?);
 
     let (engine, receiver) = ArbitrageEngine::new(
         config,
@@ -47,7 +51,7 @@ fn create_test_engine(
 #[tokio::test]
 async fn test_get_signals_empty() -> Result<()> {
     let config = Config::default();
-    let (engine, storage, _receiver) = create_test_engine(config.clone())?;
+    let (engine, storage, _receiver) = create_test_engine(config.clone()).await?;
 
     let mut registry = StrategyRegistry::new();
     registry.register(Arc::new(CexArbitrageStrategy::new()))?;
@@ -62,7 +66,7 @@ async fn test_get_signals_empty() -> Result<()> {
         time_range: None,
     };
 
-    let signals = storage.query_signals(&query)?;
+    let signals = storage.query_signals(&query).await?;
     assert!(signals.is_empty(), "Should have no signals initially");
 
     Ok(())
@@ -72,7 +76,7 @@ async fn test_get_signals_empty() -> Result<()> {
 #[tokio::test]
 async fn test_orderbook_caching() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let symbol = Symbol::new("BTC", "USDT");
 
@@ -103,12 +107,15 @@ async fn test_orderbook_caching() -> Result<()> {
 #[tokio::test]
 async fn test_orderbook_not_found() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let symbol = Symbol::new("NONEXISTENT", "TOKEN");
     let cached = engine.get_order_book(ExchangeId::OKX, &symbol);
 
-    assert!(cached.is_none(), "Should return None for non-existent order book");
+    assert!(
+        cached.is_none(),
+        "Should return None for non-existent order book"
+    );
 
     Ok(())
 }
@@ -117,7 +124,7 @@ async fn test_orderbook_not_found() -> Result<()> {
 #[tokio::test]
 async fn test_engine_stats() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     // Initial stats should be zero
     let stats = engine.get_stats();
@@ -167,7 +174,7 @@ async fn test_signal_detection_integration() -> Result<()> {
     config.trading.min_profit_threshold_percent = Decimal::new(1, 4); // 0.01%
     config.risk.max_position_size_usd = Decimal::from(200000);
 
-    let (engine, storage, _receiver) = create_test_engine(config)?;
+    let (engine, storage, _receiver) = create_test_engine(config).await?;
 
     let mut registry = StrategyRegistry::new();
     registry.register(Arc::new(CexArbitrageStrategy::new()))?;
@@ -210,7 +217,7 @@ async fn test_signal_detection_integration() -> Result<()> {
             min_confidence: None,
             time_range: None,
         };
-        let stored = storage.query_signals(&query)?;
+        let stored = storage.query_signals(&query).await?;
         assert!(!stored.is_empty(), "Signal should be stored");
     }
 
@@ -221,7 +228,7 @@ async fn test_signal_detection_integration() -> Result<()> {
 #[tokio::test]
 async fn test_multiple_orderbook_updates() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     // Add order books for multiple exchanges
     for exchange in [
@@ -243,7 +250,10 @@ async fn test_multiple_orderbook_updates() -> Result<()> {
     }
 
     let stats = engine.get_stats();
-    assert_eq!(stats.order_books_count, 6, "Should have 6 order books cached");
+    assert_eq!(
+        stats.order_books_count, 6,
+        "Should have 6 order books cached"
+    );
 
     Ok(())
 }

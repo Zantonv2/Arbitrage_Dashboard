@@ -1,16 +1,16 @@
-use arbitrage_core::types::{ExchangeId, Symbol, OrderBook, ConnectionStatus};
+use arbitrage_core::types::{ConnectionStatus, ExchangeId, OrderBook, Symbol};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::connector::{TickerData, FundingRate};
+use crate::connector::{FundingRate, TickerData};
 
 /// Events emitted by exchange connectors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConnectionEvent {
     /// Market data update
     MarketData(MarketDataEvent),
-    
+
     /// Connection status change
     StatusChange {
         exchange: ExchangeId,
@@ -18,14 +18,14 @@ pub enum ConnectionEvent {
         new_status: ConnectionStatus,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Error occurred
     Error {
         exchange: ExchangeId,
         error: String,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Subscription confirmed
     SubscriptionConfirmed {
         exchange: ExchangeId,
@@ -33,13 +33,13 @@ pub enum ConnectionEvent {
         data_type: String,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Heartbeat/ping received
     Heartbeat {
         exchange: ExchangeId,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Rate limit warning
     RateLimitWarning {
         exchange: ExchangeId,
@@ -58,14 +58,14 @@ pub enum MarketDataEvent {
         order_book: OrderBook,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Ticker update
     Ticker {
         exchange: ExchangeId,
         ticker: TickerData,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Trade executed
     Trade {
         exchange: ExchangeId,
@@ -76,14 +76,14 @@ pub enum MarketDataEvent {
         trade_id: String,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Funding rate update
     FundingRate {
         exchange: ExchangeId,
         funding_rate: FundingRate,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// 24h statistics update
     Statistics {
         exchange: ExchangeId,
@@ -92,6 +92,13 @@ pub enum MarketDataEvent {
         price_change_24h: Decimal,
         high_24h: Decimal,
         low_24h: Decimal,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Raw market data event
+    Raw {
+        exchange: ExchangeId,
+        data: Vec<u8>,
         timestamp: DateTime<Utc>,
     },
 }
@@ -157,19 +164,18 @@ impl EventStats {
     pub fn update(&mut self, event: &ConnectionEvent) {
         self.total_events += 1;
         self.last_event_time = Some(Utc::now());
-        
+
         match event {
-            ConnectionEvent::MarketData(market_event) => {
-                match market_event {
-                    MarketDataEvent::OrderBook { .. } => self.order_book_updates += 1,
-                    MarketDataEvent::Ticker { .. } => self.ticker_updates += 1,
-                    MarketDataEvent::Trade { .. } => self.trade_updates += 1,
-                    MarketDataEvent::FundingRate { .. } => self.funding_rate_updates += 1,
-                    MarketDataEvent::Statistics { .. } => self.ticker_updates += 1,
-                }
+            ConnectionEvent::MarketData(market_event) => match market_event {
+                MarketDataEvent::OrderBook { .. } => self.order_book_updates += 1,
+                MarketDataEvent::Ticker { .. } => self.ticker_updates += 1,
+                MarketDataEvent::Trade { .. } => self.trade_updates += 1,
+                MarketDataEvent::FundingRate { .. } => self.funding_rate_updates += 1,
+                MarketDataEvent::Statistics { .. } => self.ticker_updates += 1,
+                MarketDataEvent::Raw { .. } => {}
             },
             ConnectionEvent::Error { .. } => self.errors += 1,
-            _ => {},
+            _ => {}
         }
     }
 }

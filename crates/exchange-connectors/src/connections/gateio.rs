@@ -1,19 +1,26 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
+use crate::connector::{
+    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
+    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
+    OrderStatusType, OrderType, TickerData, TimeInForce,
+};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
+use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
+    Result,
+};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::str::FromStr;
-use tokio::sync::{broadcast, RwLock, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{info, warn, error, debug};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, warn};
 
 /// Gate.io WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,8 +105,10 @@ impl ExchangeConnector for GateioConnector {
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let gateio_symbol = self.symbol_to_gateio(symbol);
-        let url = format!("{}/api/v4/spot/order_book?currency_pair={}&limit={}", 
-                         self.config.rest_url, gateio_symbol, self.config.order_book_depth);
+        let url = format!(
+            "{}/api/v4/spot/order_book?currency_pair={}&limit={}",
+            self.config.rest_url, gateio_symbol, self.config.order_book_depth
+        );
 
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
@@ -147,7 +156,10 @@ impl ExchangeConnector for GateioConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, _symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        _symbols: &[Symbol],
+    ) -> Result<HashMap<Symbol, FundingRate>> {
         // Gate.io spot doesn't have funding rates
         Ok(HashMap::new())
     }
@@ -171,7 +183,15 @@ impl ExchangeConnector for GateioConnector {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
+            Self::websocket_task(
+                ws_url,
+                event_sender,
+                status,
+                stats,
+                subscribed_symbols,
+                config,
+            )
+            .await;
         });
 
         *self.ws_handle.lock().await = Some(handle);
@@ -213,7 +233,10 @@ impl ExchangeConnector for GateioConnector {
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!("Subscribing to Gate.io order books for {} symbols", symbols.len());
+        info!(
+            "Subscribing to Gate.io order books for {} symbols",
+            symbols.len()
+        );
         self.subscribe_symbols(symbols).await?;
         Ok(())
     }
@@ -229,7 +252,7 @@ impl ExchangeConnector for GateioConnector {
     async fn health_check(&self) -> Result<HealthStatus> {
         let status = self.status.read().await.clone();
         let stats = self.stats.lock().await;
-        
+
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -284,11 +307,7 @@ impl ExchangeConnector for GateioConnector {
             body["text"] = serde_json::Value::String(client_id.clone());
         }
 
-        let response = self.client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&body).send().await?;
 
         let response_json: Value = response.json().await?;
 
@@ -320,10 +339,7 @@ impl ExchangeConnector for GateioConnector {
     async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/api/v4/spot/orders/{}", self.config.rest_url, order_id);
 
-        let response = self.client
-            .delete(&url)
-            .send()
-            .await?;
+        let response = self.client.delete(&url).send().await?;
 
         let response_json: Value = response.json().await?;
 
@@ -420,12 +436,15 @@ impl ExchangeConnector for GateioConnector {
                         .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                         .unwrap_or_default();
 
-                    balances.insert(currency.to_string(), AssetBalance {
-                        asset: currency.to_string(),
-                        free: available,
-                        locked,
-                        total: available + locked,
-                    });
+                    balances.insert(
+                        currency.to_string(),
+                        AssetBalance {
+                            asset: currency.to_string(),
+                            free: available,
+                            locked,
+                            total: available + locked,
+                        },
+                    );
                 }
             }
         }
@@ -439,7 +458,7 @@ impl ExchangeConnector for GateioConnector {
 
     async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>> {
         let mut url = format!("{}/api/v4/spot/orders?status=open", self.config.rest_url);
-        
+
         if let Some(sym) = symbol {
             let gateio_symbol = self.symbol_to_gateio(sym);
             url.push_str(&format!("&currency_pair={}", gateio_symbol));
@@ -452,10 +471,7 @@ impl ExchangeConnector for GateioConnector {
 
         if let Some(order_array) = response_json.as_array() {
             for order_data in order_array {
-                let order_id = order_data["id"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string();
+                let order_id = order_data["id"].as_str().unwrap_or("unknown").to_string();
 
                 let currency_pair = order_data["currency_pair"].as_str().unwrap_or("BTC_USDT");
                 let order_symbol = self.symbol_from_gateio(currency_pair)?;
@@ -508,7 +524,6 @@ impl ExchangeConnector for GateioConnector {
     }
 }
 
-
 impl GateioConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
@@ -519,19 +534,17 @@ impl GateioConnector {
         subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
         config: ConnectorConfig,
     ) {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(1000),
-            Duration::from_millis(30000),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
                     info!("Gate.io WebSocket connected successfully");
                     backoff.reset();
-                    
+
                     *status.write().await = ConnectionStatus::Connected;
-                    
+
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::GateIo,
                         old_status: ConnectionStatus::Connecting,
@@ -546,13 +559,16 @@ impl GateioConnector {
                         &stats,
                         &subscribed_symbols,
                         &config,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("Gate.io WebSocket connection error: {}", e);
                     }
                 }
                 Err(e) => {
                     error!("Failed to connect to Gate.io WebSocket: {}", e);
-                    *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
+                    *status.write().await =
+                        ConnectionStatus::Error("WebSocket connection failed".to_string());
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::GateIo,
                         error: format!("WebSocket connection failed: {}", e),
@@ -574,14 +590,25 @@ impl GateioConnector {
 
     async fn connect_websocket(
         ws_url: &str,
-    ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
-        let (ws_stream, response) = connect_async(ws_url).await
-            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    )> {
+        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "WebSocket connection failed: {}",
+                e
+            ))
+        })?;
         Ok((ws_stream, response))
     }
 
     async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        mut ws_stream: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         event_sender: &broadcast::Sender<ConnectionEvent>,
         status: &Arc<RwLock<ConnectionStatus>>,
         stats: &Arc<Mutex<ConnectorStats>>,
@@ -596,10 +623,10 @@ impl GateioConnector {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
                 let mut new_params = Vec::new();
-                
+
                 for symbol in symbols.iter() {
                     let gateio_symbol = Self::symbol_to_gateio_static(symbol);
-                    
+
                     if !current_subscriptions.contains(&gateio_symbol) {
                         new_params.push(gateio_symbol.clone());
                         current_subscriptions.push(gateio_symbol);
@@ -614,14 +641,25 @@ impl GateioConnector {
                     };
                     subscription_id += 1;
 
-                    let msg = serde_json::to_string(&subscription)
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize: {}", e)))?;
-                    
+                    let msg = serde_json::to_string(&subscription).map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to serialize: {}",
+                            e
+                        ))
+                    })?;
+
                     debug!("Sending Gate.io subscription: {}", msg);
-                    ws_stream.send(Message::Text(msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send: {}", e)))?;
+                    ws_stream
+                        .send(Message::Text(msg.into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send: {}",
+                                e
+                            ))
+                        })?;
                 }
-                
+
                 last_subscription_check = std::time::Instant::now();
             }
 
@@ -640,8 +678,12 @@ impl GateioConnector {
                             }
                         }
                         Message::Ping(data) => {
-                            ws_stream.send(Message::Pong(data)).await
-                                .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
+                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send pong: {}",
+                                    e
+                                ))
+                            })?;
                         }
                         Message::Close(_) => {
                             info!("Gate.io WebSocket connection closed by server");
@@ -660,8 +702,15 @@ impl GateioConnector {
                 }
                 Err(_) => {
                     warn!("Gate.io WebSocket timeout, sending ping");
-                    ws_stream.send(Message::Ping(vec![].into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                    ws_stream
+                        .send(Message::Ping(vec![].into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send ping: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
 
@@ -699,18 +748,22 @@ impl GateioConnector {
     }
 
     fn parse_orderbook_message(data: &Value) -> Result<OrderBook> {
-        let params = data["params"].as_array()
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing params".to_string()))?;
-        
+        let params = data["params"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing params".to_string())
+        })?;
+
         if params.len() < 3 {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection("Invalid params length".to_string()));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid params length".to_string(),
+            ));
         }
 
-        let currency_pair = params[2].as_str()
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing currency pair".to_string()))?;
-        
+        let currency_pair = params[2].as_str().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing currency pair".to_string())
+        })?;
+
         let symbol = Self::symbol_from_gateio_static(currency_pair)?;
-        
+
         let book_data = &params[1];
         let mut asks = Vec::new();
         let mut bids = Vec::new();
@@ -758,10 +811,12 @@ impl GateioConnector {
     }
 
     fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
-        let asks_data = data["asks"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["asks"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["bids"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -814,4 +869,3 @@ impl GateioConnector {
         })
     }
 }
-

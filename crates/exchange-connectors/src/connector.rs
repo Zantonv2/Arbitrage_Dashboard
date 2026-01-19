@@ -1,74 +1,40 @@
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, ConnectionStatus}, Result};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, Symbol},
+    Result,
+};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use thiserror::Error;
 
 use crate::events::ConnectionEvent;
-
-#[derive(Error, Debug)]
-pub enum ConnectorError {
-    #[error("Connection failed: {0}")]
-    ConnectionFailed(String),
-    
-    #[error("WebSocket error: {0}")]
-    WebSocketError(String),
-    
-    #[error("HTTP request failed: {0}")]
-    HttpError(String),
-    
-    #[error("Rate limit exceeded: {0}")]
-    RateLimitExceeded(String),
-    
-    #[error("Authentication failed: {0}")]
-    AuthenticationFailed(String),
-    
-    #[error("Invalid symbol: {0}")]
-    InvalidSymbol(String),
-    
-    #[error("Parsing error: {0}")]
-    ParsingError(String),
-    
-    #[error("Exchange API error: {code} - {message}")]
-    ExchangeApiError { code: i32, message: String },
-    
-    #[error("Timeout: {0}")]
-    Timeout(String),
-}
-
-impl From<ConnectorError> for arbitrage_core::ArbitrageError {
-    fn from(err: ConnectorError) -> Self {
-        arbitrage_core::ArbitrageError::ExchangeConnection(err.to_string())
-    }
-}
 
 /// Configuration for exchange connector
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectorConfig {
     /// Exchange identifier
     pub exchange_id: ExchangeId,
-    
+
     /// WebSocket URL
     pub ws_url: String,
-    
+
     /// REST API base URL
     pub rest_url: String,
-    
+
     /// API credentials (optional for public data)
     pub api_key: Option<String>,
     pub api_secret: Option<String>,
     pub passphrase: Option<String>,
-    
+
     /// Rate limiting configuration
     pub rate_limit_per_second: u32,
     pub rate_limit_burst: u32,
-    
+
     /// Connection settings
     pub reconnect_interval_ms: u64,
     pub max_reconnect_attempts: u32,
     pub heartbeat_interval_ms: u64,
-    
+
     /// Data settings
     pub order_book_depth: u32,
     pub enable_trades: bool,
@@ -103,78 +69,79 @@ impl Default for ConnectorConfig {
 pub trait ExchangeConnector: Send + Sync {
     /// Get exchange identifier
     fn exchange_id(&self) -> ExchangeId;
-    
+
     /// Get current connection status
     fn status(&self) -> ConnectionStatus;
-    
+
     /// Get event receiver for this connector
     fn event_receiver(&self) -> broadcast::Receiver<ConnectionEvent>;
-    
+
     // === REST API Methods ===
-    
+
     /// Fetch current order book for a symbol
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook>;
-    
+
     /// Fetch all available trading symbols
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>>;
-    
+
     /// Fetch ticker data for symbols
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>>;
-    
+
     /// Fetch funding rates (for perpetual contracts)
-    async fn fetch_funding_rates(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>>;
-    
+    async fn fetch_funding_rates(&self, symbols: &[Symbol])
+        -> Result<HashMap<Symbol, FundingRate>>;
+
     // === WebSocket Methods ===
-    
+
     /// Connect to WebSocket streams
     async fn connect(&mut self) -> Result<()>;
-    
+
     /// Disconnect from WebSocket streams
     async fn disconnect(&mut self) -> Result<()>;
-    
+
     /// Subscribe to symbols for real-time data
     async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()>;
-    
+
     /// Unsubscribe from symbols
     async fn unsubscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()>;
-    
+
     /// Subscribe to ticker updates
     async fn subscribe_tickers(&mut self, symbols: &[Symbol]) -> Result<()>;
-    
+
     /// Subscribe to order book updates
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()>;
-    
+
     /// Subscribe to trade updates
     async fn subscribe_trades(&mut self, symbols: &[Symbol]) -> Result<()>;
-    
+
     /// Subscribe to funding rate updates (for perpetual contracts)
     async fn subscribe_funding_rates(&mut self, symbols: &[Symbol]) -> Result<()>;
-    
+
     // === Health & Monitoring ===
-    
+
     /// Check if connector is healthy
     async fn health_check(&self) -> Result<HealthStatus>;
-    
+
     /// Get connector statistics
     fn get_stats(&self) -> ConnectorStats;
-    
+
     /// Force reconnection
     async fn force_reconnect(&mut self) -> Result<()>;
-    
+
     // === Trading Methods (Phase 4) ===
-    
+
     /// Place a new order
     async fn place_order(&self, order: &OrderRequest) -> Result<OrderResponse>;
-    
+
     /// Cancel an existing order
     async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse>;
-    
+
     /// Get order status
     async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus>;
-    
+
     /// Get account balance
     async fn get_balance(&self) -> Result<Balance>;
-    
+
     /// Get open orders
     async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>>;
 }

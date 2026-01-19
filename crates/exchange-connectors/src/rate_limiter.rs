@@ -1,10 +1,9 @@
+use arbitrage_core::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
-
-use crate::connector::ConnectorError;
 
 /// Rate limiting configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,16 +48,16 @@ impl RateLimiter {
     /// Check if a request can be made (non-blocking)
     pub fn can_proceed(&self) -> bool {
         self.refill_tokens();
-        
+
         let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         *tokens >= 1.0
     }
 
     /// Wait until a request can be made (blocking)
-    pub async fn acquire(&self) -> Result<(), ConnectorError> {
+    pub async fn acquire(&self) -> Result<()> {
         loop {
             self.refill_tokens();
-            
+
             {
                 let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
                 if *tokens >= 1.0 {
@@ -67,7 +66,7 @@ impl RateLimiter {
                     return Ok(());
                 }
             }
-            
+
             // Calculate wait time
             let wait_ms = 1000 / self.config.requests_per_second as u64;
             sleep(Duration::from_millis(wait_ms)).await;
@@ -75,17 +74,17 @@ impl RateLimiter {
     }
 
     /// Try to acquire without waiting
-    pub fn try_acquire(&self) -> Result<(), ConnectorError> {
+    pub fn try_acquire(&self) -> Result<()> {
         self.refill_tokens();
-        
+
         let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         if *tokens >= 1.0 {
             *tokens -= 1.0;
             self.record_request();
             Ok(())
         } else {
-            Err(ConnectorError::RateLimitExceeded(
-                "Rate limit exceeded, try again later".to_string()
+            Err(arbitrage_core::ArbitrageError::RateLimitExceeded(
+                "Rate limit exceeded, try again later".to_string(),
             ))
         }
     }
@@ -93,12 +92,15 @@ impl RateLimiter {
     /// Get current rate limit status
     pub fn get_status(&self) -> RateLimitStatus {
         self.refill_tokens();
-        
+
         let tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
-        let history = self.request_history.lock().unwrap_or_else(|e| e.into_inner());
-        
+        let history = self
+            .request_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         let current_rate = self.calculate_current_rate(&history);
-        
+
         RateLimitStatus {
             available_tokens: *tokens as u32,
             max_tokens: self.config.burst_capacity,
@@ -113,10 +115,10 @@ impl RateLimiter {
         let now = Utc::now();
         let mut last_refill = self.last_refill.lock().unwrap_or_else(|e| e.into_inner());
         let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
-        
+
         let elapsed = (now - *last_refill).num_milliseconds() as f64 / 1000.0;
         let tokens_to_add = elapsed * self.config.requests_per_second as f64;
-        
+
         *tokens = (*tokens + tokens_to_add).min(self.config.burst_capacity as f64);
         *last_refill = now;
     }
@@ -124,11 +126,14 @@ impl RateLimiter {
     /// Record a request in history
     fn record_request(&self) {
         let now = Utc::now();
-        let mut history = self.request_history.lock().unwrap_or_else(|e| e.into_inner());
-        
+        let mut history = self
+            .request_history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
         // Add current request
         history.push_back(now);
-        
+
         // Remove old requests outside the window
         let window_start = now - chrono::Duration::seconds(self.config.window_seconds as i64);
         while let Some(&front_time) = history.front() {
@@ -145,14 +150,12 @@ impl RateLimiter {
         if history.is_empty() {
             return 0.0;
         }
-        
+
         let now = Utc::now();
         let window_start = now - chrono::Duration::seconds(self.config.window_seconds as i64);
-        
-        let requests_in_window = history.iter()
-            .filter(|&&time| time >= window_start)
-            .count();
-            
+
+        let requests_in_window = history.iter().filter(|&&time| time >= window_start).count();
+
         requests_in_window as f64 / self.config.window_seconds as f64
     }
 }
@@ -186,7 +189,7 @@ impl UnifiedRateLimitManager {
     }
 
     /// Acquire rate limit for specific endpoint
-    pub async fn acquire(&self, endpoint: &str) -> Result<(), ConnectorError> {
+    pub async fn acquire(&self, endpoint: &str) -> Result<()> {
         if let Some(limiter) = self.limiters.get(endpoint) {
             limiter.acquire().await
         } else {
@@ -196,7 +199,7 @@ impl UnifiedRateLimitManager {
     }
 
     /// Try to acquire without waiting
-    pub fn try_acquire(&self, endpoint: &str) -> Result<(), ConnectorError> {
+    pub fn try_acquire(&self, endpoint: &str) -> Result<()> {
         if let Some(limiter) = self.limiters.get(endpoint) {
             limiter.try_acquire()
         } else {
@@ -207,7 +210,8 @@ impl UnifiedRateLimitManager {
 
     /// Get status for all endpoints
     pub fn get_all_status(&self) -> std::collections::HashMap<String, RateLimitStatus> {
-        self.limiters.iter()
+        self.limiters
+            .iter()
             .map(|(endpoint, limiter)| (endpoint.clone(), limiter.get_status()))
             .collect()
     }
