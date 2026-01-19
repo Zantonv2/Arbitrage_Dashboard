@@ -320,18 +320,28 @@ impl SpreadCaptureStrategy {
                 }
 
                 // Create signal with both bid and ask orders
-                let mut signal = RawSignal::new(self.id(), symbol.clone());
+                let mut signal = RawSignal::new(self.id(), (*symbol).clone());
 
                 // Add bid leg (buy order)
-                let bid_leg =
-                    TradeLeg::new(exchange, symbol.clone(), Side::Buy, our_bid, position_size)
-                        .with_order_type(OrderType::Limit);
+                let bid_leg = TradeLeg::new(
+                    exchange,
+                    (*symbol).clone(),
+                    Side::Buy,
+                    our_bid,
+                    position_size,
+                )
+                .with_order_type(OrderType::Limit);
                 signal.add_leg(bid_leg);
 
                 // Add ask leg (sell order)
-                let ask_leg =
-                    TradeLeg::new(exchange, symbol.clone(), Side::Sell, our_ask, position_size)
-                        .with_order_type(OrderType::Limit);
+                let ask_leg = TradeLeg::new(
+                    exchange,
+                    (*symbol).clone(),
+                    Side::Sell,
+                    our_ask,
+                    position_size,
+                )
+                .with_order_type(OrderType::Limit);
                 signal.add_leg(ask_leg);
 
                 signal.set_profit_bps(profit_bps);

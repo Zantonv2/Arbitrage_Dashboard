@@ -2,10 +2,11 @@ use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, Symbol},
     Result,
 };
+use dashmap::DashMap;
+use dashmap::DashSet;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use std::collections::HashMap;
+use tokio::sync::broadcast;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
@@ -119,12 +120,12 @@ impl Default for ExchangeManagerConfig {
 /// Manages all exchange connectors and provides unified interface
 pub struct ExchangeManager {
     config: ExchangeManagerConfig,
-    connectors: Arc<RwLock<HashMap<ExchangeId, Box<dyn ExchangeConnector>>>>,
+    connectors: DashMap<ExchangeId, Box<dyn ExchangeConnector>>,
     event_sender: broadcast::Sender<ConnectionEvent>,
     event_receiver: broadcast::Receiver<ConnectionEvent>,
-    subscribed_symbols: Arc<RwLock<HashSet<Symbol>>>,
-    event_stats: Arc<RwLock<HashMap<ExchangeId, EventStats>>>,
-    rate_limiters: Arc<RwLock<HashMap<ExchangeId, UnifiedRateLimitManager>>>,
+    subscribed_symbols: DashSet<Symbol>,
+    event_stats: DashMap<ExchangeId, EventStats>,
+    rate_limiters: DashMap<ExchangeId, UnifiedRateLimitManager>,
 }
 
 impl ExchangeManager {
@@ -134,12 +135,12 @@ impl ExchangeManager {
 
         Self {
             config,
-            connectors: Arc::new(RwLock::new(HashMap::new())),
+            connectors: DashMap::new(),
             event_sender,
             event_receiver,
-            subscribed_symbols: Arc::new(RwLock::new(HashSet::new())),
-            event_stats: Arc::new(RwLock::new(HashMap::new())),
-            rate_limiters: Arc::new(RwLock::new(HashMap::new())),
+            subscribed_symbols: DashSet::new(),
+            event_stats: DashMap::new(),
+            rate_limiters: DashMap::new(),
         }
     }
 
@@ -150,9 +151,9 @@ impl ExchangeManager {
             self.config.enabled_exchanges.len()
         );
 
-        let mut connectors = self.connectors.write().await;
-        let mut rate_limiters = self.rate_limiters.write().await;
-        let mut event_stats = self.event_stats.write().await;
+        let mut connectors = self.connectors.write();
+        let mut rate_limiters = self.rate_limiters.write();
+        let mut event_stats = self.event_stats.write();
 
         for exchange_id in &self.config.enabled_exchanges {
             // Create connector
@@ -192,7 +193,7 @@ impl ExchangeManager {
     pub async fn connect_all(&mut self) -> Result<()> {
         info!("Connecting to all exchanges");
 
-        let mut connectors = self.connectors.write().await;
+        let mut connectors = self.connectors.write();
 
         for (exchange_id, connector) in connectors.iter_mut() {
             let exchange = *exchange_id;
@@ -235,13 +236,13 @@ impl ExchangeManager {
 
         // Update subscribed symbols
         {
-            let mut subscribed = self.subscribed_symbols.write().await;
+            let mut subscribed = self.subscribed_symbols.write();
             for symbol in symbols {
                 subscribed.insert(symbol.clone());
             }
         }
 
-        let mut connectors = self.connectors.write().await;
+        let mut connectors = self.connectors.write();
 
         for (exchange_id, connector) in connectors.iter_mut() {
             let exchange = *exchange_id;
@@ -278,13 +279,13 @@ impl ExchangeManager {
 
         // Update subscribed symbols
         {
-            let mut subscribed = self.subscribed_symbols.write().await;
+            let mut subscribed = self.subscribed_symbols.write();
             for symbol in symbols {
                 subscribed.remove(symbol);
             }
         }
 
-        let mut connectors = self.connectors.write().await;
+        let mut connectors = self.connectors.write();
 
         for (exchange_id, connector) in connectors.iter_mut() {
             let exchange = *exchange_id;
@@ -309,11 +310,11 @@ impl ExchangeManager {
 
     /// Get order book from specific exchange
     pub async fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Result<OrderBook> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
 
         if let Some(connector) = connectors.get(&exchange) {
             // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().await.get(&exchange) {
+            if let Some(rate_limiter) = self.rate_limiters.read().get(&exchange) {
                 rate_limiter.acquire("rest").await?;
             }
 
@@ -331,7 +332,7 @@ impl ExchangeManager {
         &self,
         symbol: &Symbol,
     ) -> HashMap<ExchangeId, Result<OrderBook>> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
         let mut results = HashMap::new();
 
         for (exchange_id, connector) in connectors.iter() {
@@ -339,7 +340,7 @@ impl ExchangeManager {
 
             // Apply rate limiting
             let rate_limit_result =
-                if let Some(rate_limiter) = self.rate_limiters.read().await.get(&exchange) {
+                if let Some(rate_limiter) = self.rate_limiters.read().get(&exchange) {
                     rate_limiter.try_acquire("rest")
                 } else {
                     Ok(())
@@ -358,7 +359,7 @@ impl ExchangeManager {
 
     /// Get health status of all exchanges
     pub async fn get_health_status(&self) -> HashMap<ExchangeId, HealthStatus> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
         let mut status_map = HashMap::new();
 
         for (exchange_id, connector) in connectors.iter() {
@@ -388,7 +389,7 @@ impl ExchangeManager {
 
     /// Get statistics for all exchanges
     pub async fn get_stats(&self) -> HashMap<ExchangeId, ConnectorStats> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
         let mut stats_map = HashMap::new();
 
         for (exchange_id, connector) in connectors.iter() {
@@ -401,12 +402,12 @@ impl ExchangeManager {
 
     /// Get event statistics
     pub async fn get_event_stats(&self) -> HashMap<ExchangeId, EventStats> {
-        self.event_stats.read().await.clone()
+        self.event_stats.read().clone()
     }
 
     /// Force reconnection for specific exchange
     pub async fn force_reconnect(&mut self, exchange: ExchangeId) -> Result<()> {
-        let mut connectors = self.connectors.write().await;
+        let mut connectors = self.connectors.write();
 
         if let Some(connector) = connectors.get_mut(&exchange) {
             info!("Force reconnecting to {}", exchange);
@@ -421,7 +422,7 @@ impl ExchangeManager {
 
     /// Start health monitoring background task
     async fn start_health_monitor(&self) {
-        let connectors = Arc::clone(&self.connectors);
+        let connectors = self.connectors.clone();
         let event_sender = self.event_sender.clone();
         let interval_seconds = self.config.health_check_interval_seconds;
 
@@ -431,7 +432,7 @@ impl ExchangeManager {
             loop {
                 interval.tick().await;
 
-                let connectors_read = connectors.read().await;
+                let connectors_read = connectors.read();
                 for (exchange_id, connector) in connectors_read.iter() {
                     let exchange = *exchange_id;
 
@@ -465,7 +466,7 @@ impl ExchangeManager {
 
     /// Start event processing background task
     async fn start_event_processor(&self) {
-        let event_stats = Arc::clone(&self.event_stats);
+        let event_stats = self.event_stats.clone();
         let mut event_receiver = self.event_receiver.resubscribe();
 
         tokio::spawn(async move {
@@ -481,7 +482,7 @@ impl ExchangeManager {
                         MarketDataEvent::Raw { exchange, .. } => *exchange,
                     };
 
-                    if let Ok(mut stats) = event_stats.try_write() {
+                    if let Ok(stats) = event_stats.write() {
                         if let Some(exchange_stats) = stats.get_mut(&exchange) {
                             exchange_stats.update(&event);
                         }
@@ -496,7 +497,7 @@ impl ExchangeManager {
     /// Add a connector to the manager
     pub async fn add_connector(&mut self, connector: Box<dyn ExchangeConnector>) -> Result<()> {
         let exchange_id = connector.exchange_id();
-        let mut connectors = self.connectors.write().await;
+        let mut connectors = self.connectors.write();
         connectors.insert(exchange_id, connector);
 
         info!("Added connector for {}", exchange_id);
@@ -515,7 +516,7 @@ impl ExchangeManager {
 
     /// Check if an exchange is connected
     pub async fn is_exchange_connected(&self, exchange: &ExchangeId) -> bool {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
         if let Some(connector) = connectors.get(exchange) {
             match connector.health_check().await {
                 Ok(health) => health.is_connected,
@@ -532,11 +533,11 @@ impl ExchangeManager {
         exchange: &ExchangeId,
         order: &crate::connector::OrderRequest,
     ) -> Result<crate::connector::OrderResponse> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
 
         if let Some(connector) = connectors.get(exchange) {
             // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
                 rate_limiter.acquire("rest").await?;
             }
 
@@ -555,11 +556,11 @@ impl ExchangeManager {
         exchange: &ExchangeId,
         order_id: &str,
     ) -> Result<crate::connector::CancelResponse> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
 
         if let Some(connector) = connectors.get(exchange) {
             // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
                 rate_limiter.acquire("rest").await?;
             }
 
@@ -578,11 +579,11 @@ impl ExchangeManager {
         exchange: &ExchangeId,
         order_id: &str,
     ) -> Result<crate::connector::OrderStatus> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
 
         if let Some(connector) = connectors.get(exchange) {
             // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
                 rate_limiter.acquire("rest").await?;
             }
 
@@ -597,11 +598,11 @@ impl ExchangeManager {
 
     /// Get balance from specific exchange
     pub async fn get_balance(&self, exchange: &ExchangeId) -> Result<crate::connector::Balance> {
-        let connectors = self.connectors.read().await;
+        let connectors = self.connectors.read();
 
         if let Some(connector) = connectors.get(exchange) {
             // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().await.get(exchange) {
+            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
                 rate_limiter.acquire("rest").await?;
             }
 

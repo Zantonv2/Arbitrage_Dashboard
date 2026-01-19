@@ -4,8 +4,8 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use tokio::sync::broadcast;
 
 /// Market data for a trading pair with order book depth
@@ -45,7 +45,7 @@ pub struct SymbolSelectionCriteria {
     /// Minimum number of exchanges that must list the symbol
     pub min_exchanges: usize,
     /// Quote currencies to consider (e.g., USDT, USDC, BTC)
-    pub allowed_quotes: HashSet<String>,
+    pub allowed_quotes: FxHashSet<String>,
     /// Maximum number of symbols to monitor (resource limit)
     pub max_symbols: usize,
     // NEW: Liquidity requirements
@@ -61,7 +61,7 @@ pub struct SymbolSelectionCriteria {
 
 impl Default for SymbolSelectionCriteria {
     fn default() -> Self {
-        let mut allowed_quotes = HashSet::new();
+        let mut allowed_quotes = FxHashSet::default();
         allowed_quotes.insert("USDT".to_string());
         allowed_quotes.insert("USDC".to_string());
         allowed_quotes.insert("BUSD".to_string());
@@ -103,14 +103,11 @@ pub enum DiscoveryEvent {
 /// Enhanced symbol discovery service with real-time updates and liquidity analysis
 pub struct SymbolDiscoveryService {
     criteria: SymbolSelectionCriteria,
-    market_data: HashMap<(ExchangeId, Symbol), MarketInfo>,
-    qualified_symbols: HashSet<Symbol>,
-    // NEW: Event broadcasting
+    market_data: FxHashMap<(ExchangeId, Symbol), MarketInfo>,
+    qualified_symbols: FxHashSet<Symbol>,
+    symbol_scores: FxHashMap<Symbol, SymbolScore>,
+    symbol_history: FxHashMap<Symbol, Vec<HistoricalPoint>>,
     event_sender: broadcast::Sender<DiscoveryEvent>,
-    // NEW: Symbol scoring for prioritization
-    symbol_scores: HashMap<Symbol, SymbolScore>,
-    // NEW: Historical tracking
-    symbol_history: HashMap<Symbol, Vec<HistoricalPoint>>,
 }
 
 /// Scoring system for symbol prioritization
@@ -140,11 +137,11 @@ impl SymbolDiscoveryService {
 
         let service = Self {
             criteria,
-            market_data: HashMap::new(),
-            qualified_symbols: HashSet::new(),
+            market_data: FxHashMap::default(),
+            qualified_symbols: FxHashSet::default(),
+            symbol_scores: FxHashMap::default(),
+            symbol_history: FxHashMap::default(),
             event_sender,
-            symbol_scores: HashMap::new(),
-            symbol_history: HashMap::new(),
         };
 
         (service, event_receiver)
@@ -454,7 +451,7 @@ impl SymbolDiscoveryService {
             .market_data
             .values()
             .map(|m| m.symbol.clone())
-            .collect::<HashSet<_>>()
+            .collect::<FxHashSet<_>>()
             .into_iter()
             .collect();
 

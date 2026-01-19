@@ -3,8 +3,8 @@ use crate::{
     types::{ExchangeId, Symbol},
     Result,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use tokio::time::{Duration, Instant};
 
 /// Configuration for symbol management
@@ -41,14 +41,14 @@ impl Default for SymbolManagerConfig {
 pub struct SymbolManager {
     config: SymbolManagerConfig,
     discovery_service: SymbolDiscoveryService,
-    active_symbols: HashSet<Symbol>,
+    active_symbols: FxHashSet<Symbol>,
     last_discovery_update: Option<Instant>,
 }
 
 impl SymbolManager {
     pub fn new(config: SymbolManagerConfig) -> Self {
         let (discovery_service, _) = SymbolDiscoveryService::new(config.discovery_criteria.clone());
-        let mut active_symbols = HashSet::new();
+        let mut active_symbols = FxHashSet::default();
 
         // Add core symbols
         for symbol in &config.core_symbols {
@@ -91,7 +91,7 @@ impl SymbolManager {
         let discovered_symbols = self.discovery_service.get_arbitrage_symbols()?;
 
         // Start with core symbols
-        let mut new_active_symbols = HashSet::new();
+        let mut new_active_symbols = FxHashSet::default();
         for symbol in &self.config.core_symbols {
             new_active_symbols.insert(symbol.clone());
         }
@@ -141,8 +141,8 @@ impl SymbolManager {
     /// Get statistics for all active symbols
     pub fn get_symbol_statistics(
         &self,
-    ) -> HashMap<Symbol, crate::symbol_discovery::EnhancedSymbolStats> {
-        let mut stats = HashMap::new();
+    ) -> FxHashMap<Symbol, crate::symbol_discovery::EnhancedSymbolStats> {
+        let mut stats = FxHashMap::default();
 
         for symbol in &self.active_symbols {
             if let Some(symbol_stats) = self.discovery_service.get_market_stats(symbol) {

@@ -80,7 +80,7 @@ impl HedgedFundingStrategy {
         let current_time = market_data.timestamp;
 
         for ((exchange, symbol), funding_rate) in &market_data.funding_rates {
-            let key = (*exchange, symbol.clone());
+            let key = (*exchange, (**symbol).clone());
             let history = self.funding_history.entry(key).or_default();
 
             // Keep only recent history (last 7 days)
@@ -403,12 +403,12 @@ impl HedgedFundingStrategy {
             }
 
             // Create hedged funding signal
-            let mut signal = RawSignal::new(self.id(), symbol.clone());
+            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
 
             // Perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                symbol.clone(),
+                (**symbol).clone(),
                 perp_side,
                 perp_price,
                 position_size,
@@ -418,7 +418,7 @@ impl HedgedFundingStrategy {
             // Spot hedge leg
             let spot_leg = TradeLeg::new(
                 hedge_exchange,
-                symbol.clone(),
+                (**symbol).clone(),
                 spot_side,
                 spot_price,
                 hedge_size,
@@ -570,12 +570,12 @@ impl Strategy for HedgedFundingStrategy {
             }
 
             // Create hedged funding signal
-            let mut signal = RawSignal::new(self.id(), symbol.clone());
+            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
 
             // Perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                symbol.clone(),
+                (**symbol).clone(),
                 perp_side,
                 perp_price,
                 position_size,
@@ -585,7 +585,7 @@ impl Strategy for HedgedFundingStrategy {
             // Spot hedge leg
             let spot_leg = TradeLeg::new(
                 hedge_exchange,
-                symbol.clone(),
+                (**symbol).clone(),
                 spot_side,
                 spot_price,
                 position_size, // 1:1 hedge ratio for simplicity

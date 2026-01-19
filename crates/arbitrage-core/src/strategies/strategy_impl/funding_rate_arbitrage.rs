@@ -285,7 +285,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             }
 
             // Create signal
-            let mut signal = RawSignal::new(self.id(), symbol.clone());
+            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
 
             // Determine position side based on funding rate sign
             let (perp_side, spot_side) = if funding_rate.rate > Decimal::ZERO {
@@ -301,7 +301,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             // Add perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                symbol.clone(),
+                (**symbol).clone(),
                 perp_side,
                 spot_price, // Use spot price as approximation for perp price
                 position_quantity,
@@ -316,7 +316,7 @@ impl Strategy for FundingRateArbitrageStrategy {
 
             let spot_leg = TradeLeg::new(
                 *exchange,
-                symbol.clone(),
+                (**symbol).clone(),
                 spot_side,
                 spot_price,
                 hedge_quantity,

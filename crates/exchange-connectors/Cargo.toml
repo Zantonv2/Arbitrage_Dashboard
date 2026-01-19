@@ -28,6 +28,7 @@ rust_decimal = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
+rustc-hash = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
