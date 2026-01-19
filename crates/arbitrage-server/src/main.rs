@@ -1,6 +1,6 @@
 use arbitrage_server::ArbitrageServer;
 use clap::{Arg, Command};
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -50,9 +50,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .get_matches();
 
-    let config_path = matches.get_one::<String>("config").unwrap();
-    let host = matches.get_one::<String>("host").unwrap();
-    let port = matches.get_one::<String>("port").unwrap().parse::<u16>()?;
+    let config_path = matches
+        .get_one::<String>("config")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("Config path is required"))?;
+    let host = matches
+        .get_one::<String>("host")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("Host is required"))?;
+    let port = matches
+        .get_one::<String>("port")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("Port is required"))?
+        .parse::<u16>()?;
     let setup_db = matches.get_flag("setup-db");
 
     info!("Starting Arbitrage Dashboard Server v0.1.0");
@@ -70,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match ArbitrageServer::new(config_path, host, port).await {
         Ok(server) => {
             info!("Server initialized successfully");
-            
+
             // Start server
             if let Err(e) = server.run().await {
                 error!("Server error: {}", e);

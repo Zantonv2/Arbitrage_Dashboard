@@ -1,19 +1,28 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
+use crate::connector::{
+    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
+    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
+    OrderStatusType, OrderType, TickerData, TimeInForce,
+};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_timestamp, parse_decimal, SymbolFormat, ExponentialBackoff};
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
+use crate::utils::{
+    format_symbol, parse_decimal, parse_symbol, parse_timestamp, ExponentialBackoff, SymbolFormat,
+};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
+    Result,
+};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::str::FromStr;
-use tokio::sync::{broadcast, RwLock, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{info, warn, error, debug};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, warn};
 
 /// OKX WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,8 +130,10 @@ impl ExchangeConnector for OKXConnector {
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let okx_symbol = self.symbol_to_okx(symbol);
-        let url = format!("{}/api/v5/market/books?instId={}&sz={}", 
-                         self.config.rest_url, okx_symbol, self.config.order_book_depth);
+        let url = format!(
+            "{}/api/v5/market/books?instId={}&sz={}",
+            self.config.rest_url, okx_symbol, self.config.order_book_depth
+        );
 
         let response = self.client.get(&url).send().await?;
         let data: serde_json::Value = response.json().await?;
@@ -133,11 +144,16 @@ impl ExchangeConnector for OKXConnector {
             }
         }
 
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection("No order book data".to_string()))
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "No order book data".to_string(),
+        ))
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
-        let url = format!("{}/api/v5/public/instruments?instType=SPOT", self.config.rest_url);
+        let url = format!(
+            "{}/api/v5/public/instruments?instType=SPOT",
+            self.config.rest_url
+        );
         let response = self.client.get(&url).send().await?;
         let data: serde_json::Value = response.json().await?;
 
@@ -162,8 +178,11 @@ impl ExchangeConnector for OKXConnector {
         let mut tickers = HashMap::new();
         for symbol in symbols {
             let okx_symbol = self.symbol_to_okx(symbol);
-            let url = format!("{}/api/v5/market/ticker?instId={}", self.config.rest_url, okx_symbol);
-            
+            let url = format!(
+                "{}/api/v5/market/ticker?instId={}",
+                self.config.rest_url, okx_symbol
+            );
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<serde_json::Value>().await {
                     if let Some(data_array) = data["data"].as_array() {
@@ -179,18 +198,24 @@ impl ExchangeConnector for OKXConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        symbols: &[Symbol],
+    ) -> Result<HashMap<Symbol, FundingRate>> {
         let mut funding_rates = HashMap::new();
         for symbol in symbols {
             let okx_symbol = format!("{}-SWAP", self.symbol_to_okx(symbol));
-            let url = format!("{}/api/v5/public/funding-rate?instId={}", 
-                             self.config.rest_url, okx_symbol);
-            
+            let url = format!(
+                "{}/api/v5/public/funding-rate?instId={}",
+                self.config.rest_url, okx_symbol
+            );
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<serde_json::Value>().await {
                     if let Some(data_array) = data["data"].as_array() {
                         if let Some(funding_data) = data_array.first() {
-                            if let Ok(funding_rate) = self.parse_funding_rate(funding_data, symbol) {
+                            if let Ok(funding_rate) = self.parse_funding_rate(funding_data, symbol)
+                            {
                                 funding_rates.insert(symbol.clone(), funding_rate);
                             }
                         }
@@ -210,7 +235,7 @@ impl ExchangeConnector for OKXConnector {
         }
 
         info!("Connecting to OKX WebSocket: {}", self.config.ws_url);
-        
+
         *self.status.write().await = ConnectionStatus::Connecting;
 
         let ws_url = self.config.ws_url.clone();
@@ -221,11 +246,19 @@ impl ExchangeConnector for OKXConnector {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
+            Self::websocket_task(
+                ws_url,
+                event_sender,
+                status,
+                stats,
+                subscribed_symbols,
+                config,
+            )
+            .await;
         });
 
         *self.ws_handle.lock().await = Some(handle);
-        
+
         // Wait for connection to establish (increased from 100ms for reliability)
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -234,7 +267,7 @@ impl ExchangeConnector for OKXConnector {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("Disconnecting from OKX WebSocket");
-        
+
         *self.status.write().await = ConnectionStatus::Disconnected;
 
         if let Some(handle) = self.ws_handle.lock().await.take() {
@@ -267,7 +300,10 @@ impl ExchangeConnector for OKXConnector {
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!("Subscribing to OKX order books for {} symbols", symbols.len());
+        info!(
+            "Subscribing to OKX order books for {} symbols",
+            symbols.len()
+        );
         self.subscribe_symbols(symbols).await?;
         Ok(())
     }
@@ -283,7 +319,7 @@ impl ExchangeConnector for OKXConnector {
     async fn health_check(&self) -> Result<HealthStatus> {
         let status = self.status.read().await.clone();
         let stats = self.stats.lock().await;
-        
+
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -308,12 +344,15 @@ impl ExchangeConnector for OKXConnector {
 
     // === Trading Methods ===
 
-    async fn place_order(&self, order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+    async fn place_order(
+        &self,
+        order: &crate::connector::OrderRequest,
+    ) -> Result<crate::connector::OrderResponse> {
         use crate::connector::{OrderResponse, OrderStatusType};
-        
+
         // OKX API endpoint for placing orders
         let url = format!("{}/api/v5/trade/order", self.config.rest_url);
-        
+
         // Convert our order request to OKX format
         let okx_order = serde_json::json!({
             "instId": format!("{}-{}", order.symbol.base, order.symbol.quote),
@@ -333,25 +372,38 @@ impl ExchangeConnector for OKXConnector {
         });
 
         // Make authenticated request to OKX
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&okx_order)
             .send()
             .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX place order request failed: {}", e)))?;
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "OKX place order request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("OKX place order failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "OKX place order failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         // Parse OKX response
-        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()).and_then(|arr| arr.first()) {
-            let order_id = data.get("ordId")
+        if let Some(data) = response_json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+        {
+            let order_id = data
+                .get("ordId")
                 .and_then(|id| id.as_str())
                 .unwrap_or("unknown")
                 .to_string();
@@ -374,36 +426,44 @@ impl ExchangeConnector for OKXConnector {
             })
         } else {
             Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                "Invalid response format from OKX".to_string()
+                "Invalid response format from OKX".to_string(),
             ))
         }
     }
 
     async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
         use crate::connector::{CancelResponse, OrderStatusType};
-        
+
         let url = format!("{}/api/v5/trade/cancel-order", self.config.rest_url);
-        
+
         let cancel_request = serde_json::json!({
             "instId": "BTC-USDT", // This should be dynamic based on the order
             "ordId": order_id,
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&cancel_request)
             .send()
             .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX cancel order request failed: {}", e)))?;
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "OKX cancel order request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("OKX cancel order failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "OKX cancel order failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let status = if response_json.get("code").and_then(|c| c.as_str()) == Some("0") {
             OrderStatusType::Cancelled
@@ -420,27 +480,40 @@ impl ExchangeConnector for OKXConnector {
     }
 
     async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
-        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
-        
-        let url = format!("{}/api/v5/trade/order?ordId={}", self.config.rest_url, order_id);
+        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX get order status request failed: {}", e)))?;
+        let url = format!(
+            "{}/api/v5/trade/order?ordId={}",
+            self.config.rest_url, order_id
+        );
+
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "OKX get order status request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("OKX get order status failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "OKX get order status failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
-        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()).and_then(|arr| arr.first()) {
-            let symbol_str = data.get("instId").and_then(|s| s.as_str()).unwrap_or("BTC-USDT");
+        if let Some(data) = response_json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+        {
+            let symbol_str = data
+                .get("instId")
+                .and_then(|s| s.as_str())
+                .unwrap_or("BTC-USDT");
             let parts: Vec<&str> = symbol_str.split('-').collect();
             let symbol = if parts.len() >= 2 {
                 arbitrage_core::types::Symbol::new(parts[0], parts[1])
@@ -460,16 +533,19 @@ impl ExchangeConnector for OKXConnector {
                 _ => OrderType::Limit,
             };
 
-            let quantity = data.get("sz")
+            let quantity = data
+                .get("sz")
                 .and_then(|q| q.as_str())
                 .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                 .unwrap_or_default();
 
-            let price = data.get("px")
+            let price = data
+                .get("px")
                 .and_then(|p| p.as_str())
                 .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
 
-            let filled_quantity = data.get("fillSz")
+            let filled_quantity = data
+                .get("fillSz")
                 .and_then(|f| f.as_str())
                 .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                 .unwrap_or_default();
@@ -484,7 +560,10 @@ impl ExchangeConnector for OKXConnector {
 
             Ok(OrderStatus {
                 order_id: order_id.to_string(),
-                client_order_id: data.get("clOrdId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                client_order_id: data
+                    .get("clOrdId")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string()),
                 symbol,
                 side,
                 order_type,
@@ -499,53 +578,65 @@ impl ExchangeConnector for OKXConnector {
             })
         } else {
             Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                "Invalid response format from OKX".to_string()
+                "Invalid response format from OKX".to_string(),
             ))
         }
     }
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        use crate::connector::{Balance, AssetBalance};
-        
+        use crate::connector::{AssetBalance, Balance};
+
         let url = format!("{}/api/v5/account/balance", self.config.rest_url);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX get balance request failed: {}", e)))?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "OKX get balance request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("OKX get balance failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "OKX get balance failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let mut balances = std::collections::HashMap::new();
 
-        if let Some(data) = response_json.get("data").and_then(|d| d.as_array()).and_then(|arr| arr.first()) {
+        if let Some(data) = response_json
+            .get("data")
+            .and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+        {
             if let Some(details) = data.get("details").and_then(|d| d.as_array()) {
                 for detail in details {
                     if let Some(currency) = detail.get("ccy").and_then(|c| c.as_str()) {
-                        let available = detail.get("availBal")
+                        let available = detail
+                            .get("availBal")
                             .and_then(|a| a.as_str())
                             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                             .unwrap_or_default();
 
-                        let frozen = detail.get("frozenBal")
+                        let frozen = detail
+                            .get("frozenBal")
                             .and_then(|f| f.as_str())
                             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                             .unwrap_or_default();
 
-                        balances.insert(currency.to_string(), AssetBalance {
-                            asset: currency.to_string(),
-                            free: available,
-                            locked: frozen,
-                            total: available + frozen,
-                        });
+                        balances.insert(
+                            currency.to_string(),
+                            AssetBalance {
+                                asset: currency.to_string(),
+                                free: available,
+                                locked: frozen,
+                                total: available + frozen,
+                            },
+                        );
                     }
                 }
             }
@@ -558,40 +649,50 @@ impl ExchangeConnector for OKXConnector {
         })
     }
 
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
-        
+    async fn get_open_orders(
+        &self,
+        symbol: Option<&Symbol>,
+    ) -> Result<Vec<crate::connector::OrderStatus>> {
+        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
+
         let mut url = format!("{}/api/v5/trade/orders-pending", self.config.rest_url);
-        
+
         if let Some(sym) = symbol {
             url.push_str(&format!("?instId={}-{}", sym.base, sym.quote));
         }
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("OKX get open orders request failed: {}", e)))?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "OKX get open orders request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("OKX get open orders failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "OKX get open orders failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let mut orders = Vec::new();
 
         if let Some(data) = response_json.get("data").and_then(|d| d.as_array()) {
             for order_data in data {
-                let order_id = order_data.get("ordId")
+                let order_id = order_data
+                    .get("ordId")
                     .and_then(|id| id.as_str())
                     .unwrap_or("unknown")
                     .to_string();
 
-                let symbol_str = order_data.get("instId").and_then(|s| s.as_str()).unwrap_or("BTC-USDT");
+                let symbol_str = order_data
+                    .get("instId")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("BTC-USDT");
                 let parts: Vec<&str> = symbol_str.split('-').collect();
                 let order_symbol = if parts.len() >= 2 {
                     arbitrage_core::types::Symbol::new(parts[0], parts[1])
@@ -611,23 +712,29 @@ impl ExchangeConnector for OKXConnector {
                     _ => OrderType::Limit,
                 };
 
-                let quantity = order_data.get("sz")
+                let quantity = order_data
+                    .get("sz")
                     .and_then(|q| q.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
-                let price = order_data.get("px")
+                let price = order_data
+                    .get("px")
                     .and_then(|p| p.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
 
-                let filled_quantity = order_data.get("fillSz")
+                let filled_quantity = order_data
+                    .get("fillSz")
                     .and_then(|f| f.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
                 orders.push(OrderStatus {
                     order_id,
-                    client_order_id: order_data.get("clOrdId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                    client_order_id: order_data
+                        .get("clOrdId")
+                        .and_then(|c| c.as_str())
+                        .map(|s| s.to_string()),
                     symbol: order_symbol,
                     side,
                     order_type,
@@ -647,7 +754,6 @@ impl ExchangeConnector for OKXConnector {
     }
 }
 
-
 impl OKXConnector {
     async fn websocket_task(
         ws_url: String,
@@ -657,19 +763,17 @@ impl OKXConnector {
         subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
         config: ConnectorConfig,
     ) {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(1000),
-            Duration::from_millis(30000),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
                     info!("OKX WebSocket connected successfully");
                     backoff.reset();
-                    
+
                     *status.write().await = ConnectionStatus::Connected;
-                    
+
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::OKX,
                         old_status: ConnectionStatus::Connecting,
@@ -684,13 +788,16 @@ impl OKXConnector {
                         &stats,
                         &subscribed_symbols,
                         &config,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("OKX WebSocket connection error: {}", e);
                     }
                 }
                 Err(e) => {
                     error!("Failed to connect to OKX WebSocket: {}", e);
-                    *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
+                    *status.write().await =
+                        ConnectionStatus::Error("WebSocket connection failed".to_string());
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::OKX,
                         error: format!("WebSocket connection failed: {}", e),
@@ -712,14 +819,25 @@ impl OKXConnector {
 
     async fn connect_websocket(
         ws_url: &str,
-    ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
-        let (ws_stream, response) = connect_async(ws_url).await
-            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    )> {
+        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "WebSocket connection failed: {}",
+                e
+            ))
+        })?;
         Ok((ws_stream, response))
     }
 
     async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        mut ws_stream: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         event_sender: &broadcast::Sender<ConnectionEvent>,
         status: &Arc<RwLock<ConnectionStatus>>,
         stats: &Arc<Mutex<ConnectorStats>>,
@@ -734,10 +852,10 @@ impl OKXConnector {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
                 let mut new_args = Vec::new();
-                
+
                 for symbol in symbols.iter() {
                     let okx_symbol = Self::symbol_to_okx_static(symbol);
-                    
+
                     if !current_subscriptions.contains(&okx_symbol) {
                         new_args.push(OkxSubscriptionArg {
                             channel: "books5".to_string(),
@@ -753,20 +871,38 @@ impl OKXConnector {
                         args: new_args,
                     };
 
-                    let msg = serde_json::to_string(&subscription)
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize: {}", e)))?;
-                    
+                    let msg = serde_json::to_string(&subscription).map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to serialize: {}",
+                            e
+                        ))
+                    })?;
+
                     debug!("Sending OKX subscription: {}", msg);
-                    ws_stream.send(Message::Text(msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send: {}", e)))?;
+                    ws_stream
+                        .send(Message::Text(msg.into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send: {}",
+                                e
+                            ))
+                        })?;
                 }
-                
+
                 last_subscription_check = std::time::Instant::now();
             }
 
             if last_ping.elapsed() > Duration::from_secs(25) {
-                ws_stream.send(Message::Text("ping".into())).await
-                    .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                ws_stream
+                    .send(Message::Text("ping".into()))
+                    .await
+                    .map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to send ping: {}",
+                            e
+                        ))
+                    })?;
                 last_ping = std::time::Instant::now();
             }
 
@@ -785,8 +921,12 @@ impl OKXConnector {
                             }
                         }
                         Message::Ping(data) => {
-                            ws_stream.send(Message::Pong(data)).await
-                                .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
+                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send pong: {}",
+                                    e
+                                ))
+                            })?;
                         }
                         Message::Close(_) => {
                             info!("OKX WebSocket connection closed by server");
@@ -805,8 +945,15 @@ impl OKXConnector {
                 }
                 Err(_) => {
                     warn!("OKX WebSocket timeout, sending ping");
-                    ws_stream.send(Message::Text("ping".into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                    ws_stream
+                        .send(Message::Text("ping".into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send ping: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
 
@@ -834,7 +981,10 @@ impl OKXConnector {
                 if event == "subscribe" {
                     debug!("OKX subscription confirmed: {:?}", response);
                 } else if event == "error" {
-                    warn!("OKX error: code={:?}, msg={:?}", response.code, response.msg);
+                    warn!(
+                        "OKX error: code={:?}, msg={:?}",
+                        response.code, response.msg
+                    );
                 }
             }
             return Ok(());
@@ -857,15 +1007,18 @@ impl OKXConnector {
     }
 
     fn parse_orderbook_message(market_data: &OkxMarketData) -> Result<OrderBook> {
-        let data = market_data.data.first().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("No data in message".to_string()))?;
-        
+        let data = market_data.data.first().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("No data in message".to_string())
+        })?;
+
         let symbol = Self::symbol_from_okx_static(&market_data.arg.inst_id)?;
 
-        let asks_data = data["asks"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["asks"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["bids"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(50) {
@@ -918,10 +1071,12 @@ impl OKXConnector {
     }
 
     fn parse_order_book(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<OrderBook> {
-        let asks_data = data["asks"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["asks"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["bids"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -982,7 +1137,7 @@ impl OKXConnector {
         let funding_rate = parse_decimal(&data["fundingRate"])?;
         let funding_time = parse_timestamp(&data["fundingTime"])?;
         let predicted_rate = parse_decimal(&data["nextFundingRate"]).ok();
-        
+
         Ok(FundingRate {
             symbol: symbol.clone(),
             exchange: ExchangeId::OKX,
