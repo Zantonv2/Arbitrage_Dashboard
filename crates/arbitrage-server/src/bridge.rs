@@ -218,6 +218,10 @@ impl ArbitrageBridge {
                 engine.update_funding_rate(engine_funding).await?;
             }
 
+            MarketDataEvent::Raw { .. } => {
+                debug!("📦 Raw market data received");
+            }
+
             _ => {}
         }
 
@@ -237,7 +241,11 @@ impl ArbitrageBridge {
                 let health = exchange_manager.lock().await.get_health_status().await;
                 let connected = health.values().filter(|h| h.is_connected).count();
 
-                info!("💓 Health: {}/{} exchanges connected", connected, health.len());
+                info!(
+                    "💓 Health: {}/{} exchanges connected",
+                    connected,
+                    health.len()
+                );
 
                 if connected == 0 {
                     error!("🚨 No exchanges connected!");

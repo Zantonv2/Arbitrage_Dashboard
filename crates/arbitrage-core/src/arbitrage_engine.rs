@@ -1,7 +1,7 @@
 //! # Arbitrage Engine
 //!
 //! Core orchestration engine for the arbitrage detection and execution pipeline.
-//! 
+//!
 //! ## Pipeline Flow
 //! ```text
 //! Market Data → Cache → Strategy Detection → Deduplicate → Fee Calculation →
@@ -29,12 +29,11 @@ use crate::{
 };
 use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 // ============================================================================
 // Types
@@ -50,6 +49,7 @@ pub enum ExecutionMode {
 }
 
 impl Default for ExecutionMode {
+    #[inline]
     fn default() -> Self {
         Self::Manual
     }
@@ -67,7 +67,6 @@ pub struct OpportunityKey {
 /// Cached signal entry for deduplication
 #[derive(Debug, Clone)]
 struct CachedSignal {
-    signal: Signal,
     last_updated: DateTime<Utc>,
     profit_bps: i32,
 }
@@ -91,7 +90,7 @@ pub struct EngineStats {
 // ============================================================================
 
 /// Core arbitrage computation and orchestration engine
-/// 
+///
 /// The engine is responsible for:
 /// 1. Caching market data (order books, tickers, funding rates)
 /// 2. Running strategy detection when market data updates
@@ -102,28 +101,30 @@ pub struct ArbitrageEngine {
     order_books: Arc<DashMap<(ExchangeId, Symbol), OrderBook>>,
     tickers: Arc<DashMap<(ExchangeId, Symbol), Ticker>>,
     funding_rates: Arc<DashMap<(ExchangeId, Symbol), FundingRate>>,
-    
+
     // Signal deduplication cache
     signal_cache: Arc<DashMap<OpportunityKey, CachedSignal>>,
-    
+
     // Signal broadcasting
     signal_sender: broadcast::Sender<Signal>,
-    
+
     // Core modules
+    #[allow(dead_code)]
     normalizer: Arc<Normalizer>,
     confidence_scorer: Arc<ConfidenceScorer>,
     size_calculator: Arc<SizeCalculator>,
+    #[allow(dead_code)]
     execution_preparer: Arc<ExecutionPreparer>,
     storage: Arc<StorageService>,
-    
+
     // Configuration
     config: Config,
     execution_mode: ExecutionMode,
-    
+
     // Deduplication settings
     profit_change_threshold_bps: i32,
     signal_ttl: Duration,
-    
+
     // Statistics
     stats: Arc<DashMap<&'static str, u64>>,
 }
@@ -139,7 +140,7 @@ impl ArbitrageEngine {
         storage: Arc<StorageService>,
     ) -> Result<(Self, broadcast::Receiver<Signal>)> {
         let (signal_sender, signal_receiver) = broadcast::channel(1000);
-        
+
         let engine = Self {
             order_books: Arc::new(DashMap::new()),
             tickers: Arc::new(DashMap::new()),
@@ -157,21 +158,21 @@ impl ArbitrageEngine {
             signal_ttl: Duration::seconds(300), // 5 minute TTL
             stats: Arc::new(DashMap::new()),
         };
-        
+
         Ok((engine, signal_receiver))
     }
-    
+
     /// Subscribe to signal broadcasts
     pub fn subscribe(&self) -> broadcast::Receiver<Signal> {
         self.signal_sender.subscribe()
     }
-    
+
     /// Set execution mode (Manual or Auto)
     pub fn set_execution_mode(&mut self, mode: ExecutionMode) {
         self.execution_mode = mode;
         info!("Execution mode set to {:?}", mode);
     }
-    
+
     /// Get current execution mode
     pub fn get_execution_mode(&self) -> ExecutionMode {
         self.execution_mode
@@ -180,100 +181,100 @@ impl ArbitrageEngine {
     // ========================================================================
     // Market Data Updates
     // ========================================================================
-    
+
     /// Update order book cache
     pub async fn update_order_book(&self, order_book: OrderBook) -> Result<()> {
         let key = (order_book.exchange, order_book.symbol.clone());
-        
+
         debug!(
             "Updating order book: {} on {} ({} bids, {} asks)",
-            order_book.symbol, order_book.exchange,
-            order_book.bids.len(), order_book.asks.len()
+            order_book.symbol,
+            order_book.exchange,
+            order_book.bids.len(),
+            order_book.asks.len()
         );
-        
+
         // Validate order book before caching
         if !order_book.is_valid() {
-            return Err(ArbitrageError::Validation(
-                format!("Invalid order book for {} on {}", order_book.symbol, order_book.exchange)
-            ));
+            return Err(ArbitrageError::Validation(format!(
+                "Invalid order book for {} on {}",
+                order_book.symbol, order_book.exchange
+            )));
         }
-        
+
         self.order_books.insert(key, order_book);
         self.increment_stat("order_book_updates");
-        
+
         Ok(())
     }
-    
+
     /// Update ticker cache
     pub async fn update_ticker(&self, ticker: Ticker) -> Result<()> {
         let key = (ticker.exchange, ticker.symbol.clone());
-        
+
         debug!(
             "Updating ticker: {} on {} (bid={}, ask={})",
             ticker.symbol, ticker.exchange, ticker.bid, ticker.ask
         );
-        
+
         self.tickers.insert(key, ticker);
         self.increment_stat("ticker_updates");
-        
+
         Ok(())
     }
-    
+
     /// Update funding rate cache
     pub async fn update_funding_rate(&self, funding_rate: FundingRate) -> Result<()> {
         let key = (funding_rate.exchange, funding_rate.symbol.clone());
-        
+
         debug!(
             "Updating funding rate: {} on {} (rate={})",
             funding_rate.symbol, funding_rate.exchange, funding_rate.rate
         );
-        
+
         self.funding_rates.insert(key, funding_rate);
         self.increment_stat("funding_rate_updates");
-        
+
         Ok(())
     }
 
     // ========================================================================
     // Strategy Detection Pipeline
     // ========================================================================
-    
+
     /// Run strategy detection across all registered strategies
-    /// 
+    ///
     /// This is the main entry point for the detection pipeline:
     /// 1. Build market bundle from cached data
     /// 2. Run each enabled strategy's detect() method
     /// 3. Process each raw signal through the validation pipeline
     /// 4. Emit validated signals
-    pub async fn detect_opportunities(
-        &self,
-        registry: &StrategyRegistry,
-    ) -> Result<Vec<Signal>> {
+    pub async fn detect_opportunities(&self, registry: &StrategyRegistry) -> Result<Vec<Signal>> {
         let start_time = std::time::Instant::now();
-        
+
         // Build market bundle from cached data
         let market_bundle = self.build_market_bundle();
         let filter_context = self.build_filter_context()?;
-        
+
         debug!(
             "Running detection with {} order books, {} tickers, {} funding rates",
             market_bundle.order_books.len(),
             market_bundle.tickers.len(),
             market_bundle.funding_rates.len()
         );
-        
+
         // Skip if no market data
         if market_bundle.order_books.is_empty() && market_bundle.tickers.is_empty() {
             debug!("No market data available, skipping detection");
             return Ok(Vec::new());
         }
-        
+
         let mut validated_signals = Vec::new();
         let strategies = registry.get_enabled();
-        
+
         for strategy in strategies {
             let strategy_id = strategy.id();
-            
+
             // Run strategy detection
             let raw_signals = match strategy.detect(&market_bundle) {
                 Ok(signals) => signals,
@@ -282,18 +283,25 @@ impl ArbitrageEngine {
                     continue;
                 }
             };
-            
-            debug!("Strategy {} detected {} raw signals", strategy_id, raw_signals.len());
+
+            debug!(
+                "Strategy {} detected {} raw signals",
+                strategy_id,
+                raw_signals.len()
+            );
             self.increment_stat("signals_detected");
-            
+
             // Process each raw signal through the pipeline
             for raw_signal in raw_signals {
-                match self.process_signal_pipeline(
-                    raw_signal,
-                    &filter_context,
-                    &market_bundle,
-                    strategy.as_ref(),
-                ).await {
+                match self
+                    .process_signal_pipeline(
+                        raw_signal,
+                        &filter_context,
+                        &market_bundle,
+                        strategy.as_ref(),
+                    )
+                    .await
+                {
                     Ok(Some(signal)) => {
                         validated_signals.push(signal);
                     }
@@ -307,18 +315,19 @@ impl ArbitrageEngine {
                 }
             }
         }
-        
+
         let elapsed = start_time.elapsed();
         debug!(
             "Detection completed in {:?}: {} signals validated",
-            elapsed, validated_signals.len()
+            elapsed,
+            validated_signals.len()
         );
-        
+
         Ok(validated_signals)
     }
-    
+
     /// Process a raw signal through the complete validation pipeline
-    /// 
+    ///
     /// Pipeline stages:
     /// 1. Strategy filtering (strategy-specific rules)
     /// 2. Deduplication check
@@ -340,10 +349,10 @@ impl ArbitrageEngine {
             debug!("Signal filtered by strategy {}", raw_signal.strategy_id);
             return Ok(None);
         }
-        
+
         // Extract buy/sell legs
         let (buy_leg, sell_leg) = self.extract_legs(&raw_signal)?;
-        
+
         // Stage 2: Deduplication check
         let opportunity_key = OpportunityKey {
             symbol: raw_signal.symbol.clone(),
@@ -351,12 +360,12 @@ impl ArbitrageEngine {
             sell_exchange: sell_leg.exchange,
             strategy_id: raw_signal.strategy_id.clone(),
         };
-        
+
         if !self.should_emit_signal(&opportunity_key, raw_signal.expected_profit_bps) {
             debug!("Signal deduplicated for {:?}", opportunity_key);
             return Ok(None);
         }
-        
+
         // Stage 3: Fee calculation
         let net_spread_bps = self.confidence_scorer.calculate_net_spread_bps(
             buy_leg.price,
@@ -364,27 +373,30 @@ impl ArbitrageEngine {
             buy_leg.exchange,
             sell_leg.exchange,
         )?;
-        
+
         if net_spread_bps < 0 {
             debug!("Signal unprofitable after fees: {} bps", net_spread_bps);
             return Ok(None);
         }
-        
+
         // Stage 4: Risk validation
         if !self.validate_risk(&raw_signal, filter_context)? {
             debug!("Signal failed risk validation");
             return Ok(None);
         }
-        
+
         // Stage 5: Build initial signal for size calculation
         let mut signal = self.build_signal(&raw_signal, &buy_leg, &sell_leg, net_spread_bps)?;
-        
+
         // Stage 6: Size calculation (requires order books)
         let buy_book = market_bundle.get_order_book(buy_leg.exchange, &raw_signal.symbol);
         let sell_book = market_bundle.get_order_book(sell_leg.exchange, &raw_signal.symbol);
-        
+
         if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
-            match self.size_calculator.calculate_size(&signal, buy_ob, sell_ob) {
+            match self
+                .size_calculator
+                .calculate_size(&signal, buy_ob, sell_ob)
+            {
                 Ok(size_rec) => {
                     signal.recommended_size = size_rec.recommended_size;
                     signal.max_size = size_rec.max_size;
@@ -396,28 +408,28 @@ impl ArbitrageEngine {
                 }
             }
         }
-        
+
         // Stage 7: Confidence scoring
         if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
             let target_qty = signal.recommended_size.max(Decimal::new(1, 2)); // Min 0.01
-            
-            if let (Some(buy_vwap), Some(sell_vwap)) = (
-                buy_ob.vwap_buy(target_qty),
-                sell_ob.vwap_sell(target_qty),
-            ) {
-                let factors = self.confidence_scorer.calculate_confidence_factors(
-                    &buy_vwap, &sell_vwap, buy_ob, sell_ob
-                );
+
+            if let (Some(buy_vwap), Some(sell_vwap)) =
+                (buy_ob.vwap_buy(target_qty), sell_ob.vwap_sell(target_qty))
+            {
+                let factors = self
+                    .confidence_scorer
+                    .calculate_confidence_factors(&buy_vwap, &sell_vwap, buy_ob, sell_ob);
                 signal.confidence = self.confidence_scorer.calculate_confidence(&factors);
             }
         }
-        
+
         // Stage 8: Threshold check
-        let min_profit_bps = (self.config.trading.min_profit_threshold_percent * Decimal::from(10000))
-            .to_i32()
-            .unwrap_or(10);
+        let min_profit_bps = (self.config.trading.min_profit_threshold_percent
+            * Decimal::from(10000))
+        .to_i32()
+        .unwrap_or(10);
         let min_confidence = self.config.trading.min_confidence_threshold;
-        
+
         if net_spread_bps < min_profit_bps {
             debug!(
                 "Signal below profit threshold: {} < {} bps",
@@ -425,7 +437,7 @@ impl ArbitrageEngine {
             );
             return Ok(None);
         }
-        
+
         if signal.confidence < min_confidence {
             debug!(
                 "Signal below confidence threshold: {} < {}",
@@ -433,21 +445,19 @@ impl ArbitrageEngine {
             );
             return Ok(None);
         }
-        
+
         // Stage 9: Store signal
-        self.storage.store_signal(
-            signal.clone(),
-            signal.confidence,
-            SignalStatus::Detected,
-        )?;
-        
+        self.storage
+            .store_signal(signal.clone(), signal.confidence, SignalStatus::Detected)
+            .await?;
+
         // Stage 10: Update deduplication cache
         self.update_signal_cache(&opportunity_key, &signal, net_spread_bps);
-        
+
         // Stage 11: Emit signal
         self.emit_signal(&signal);
         self.increment_stat("signals_emitted");
-        
+
         info!(
             "🎯 Signal emitted: {} {} → {} | profit={:.2}% | confidence={:.0}%",
             signal.symbol,
@@ -456,41 +466,42 @@ impl ArbitrageEngine {
             signal.net_profit_percent * Decimal::from(100),
             signal.confidence
         );
-        
+
         Ok(Some(signal))
     }
 
     // ========================================================================
     // Helper Methods
     // ========================================================================
-    
+
     /// Build market bundle from cached data
     fn build_market_bundle(&self) -> MarketBundle {
         let mut bundle = MarketBundle::new();
-        
+
         for entry in self.order_books.iter() {
             bundle.add_order_book(entry.value().clone());
         }
-        
+
         for entry in self.tickers.iter() {
             bundle.add_ticker(entry.value().clone());
         }
-        
+
         for entry in self.funding_rates.iter() {
             bundle.add_funding_rate(entry.value().clone());
         }
-        
+
         bundle
     }
-    
+
     /// Build filter context from configuration
     fn build_filter_context(&self) -> Result<FilterContext> {
-        let min_profit_bps = (self.config.trading.min_profit_threshold_percent * Decimal::from(10000))
-            .to_i32()
-            .ok_or_else(|| ArbitrageError::Calculation("Invalid min profit threshold".to_string()))?;
-        
+        let min_profit_bps = (self.config.trading.min_profit_threshold_percent
+            * Decimal::from(10000))
+        .to_i32()
+        .ok_or_else(|| ArbitrageError::Calculation("Invalid min profit threshold".to_string()))?;
+
         let mut context = FilterContext::new(min_profit_bps);
-        
+
         // Set allowed exchanges from config
         context.allowed_exchanges = vec![
             ExchangeId::OKX,
@@ -500,10 +511,10 @@ impl ArbitrageEngine {
             ExchangeId::Kraken,
             ExchangeId::Bitstamp,
         ];
-        
+
         // Set max exposure from risk config
         context.max_exposure = self.config.risk.max_position_size_usd;
-        
+
         // Set inventory limits from config
         if self.config.inventory.enable_inventory_checks {
             for exchange in &context.allowed_exchanges.clone() {
@@ -512,25 +523,32 @@ impl ArbitrageEngine {
                 }
             }
         }
-        
+
         Ok(context)
     }
-    
+
     /// Extract buy and sell legs from raw signal
-    fn extract_legs(&self, raw_signal: &RawSignal) -> Result<(crate::strategies::TradeLeg, crate::strategies::TradeLeg)> {
-        let buy_leg = raw_signal.legs.iter()
+    fn extract_legs(
+        &self,
+        raw_signal: &RawSignal,
+    ) -> Result<(crate::strategies::TradeLeg, crate::strategies::TradeLeg)> {
+        let buy_leg = raw_signal
+            .legs
+            .iter()
             .find(|leg| leg.side == crate::types::Side::Buy)
             .ok_or_else(|| ArbitrageError::Validation("No buy leg in signal".to_string()))?
             .clone();
-        
-        let sell_leg = raw_signal.legs.iter()
+
+        let sell_leg = raw_signal
+            .legs
+            .iter()
             .find(|leg| leg.side == crate::types::Side::Sell)
             .ok_or_else(|| ArbitrageError::Validation("No sell leg in signal".to_string()))?
             .clone();
-        
+
         Ok((buy_leg, sell_leg))
     }
-    
+
     /// Build Signal from RawSignal and calculated values
     fn build_signal(
         &self,
@@ -544,9 +562,9 @@ impl ArbitrageEngine {
         } else {
             Decimal::ZERO
         };
-        
+
         let net_profit_percent = Decimal::from(net_spread_bps) / Decimal::from(10000);
-        
+
         let mut signal = Signal::new(
             raw_signal.symbol.clone(),
             buy_leg.exchange,
@@ -554,22 +572,21 @@ impl ArbitrageEngine {
             buy_leg.price,
             sell_leg.price,
         );
-        
+
         signal.gross_profit_percent = gross_profit_percent;
         signal.net_profit_percent = net_profit_percent;
         signal.metadata.insert(
             "strategy_id".to_string(),
             serde_json::Value::String(raw_signal.strategy_id.clone()),
         );
-        
+
         // Set expiry based on config
-        signal.expires_at = Utc::now() + Duration::seconds(
-            self.config.trading.max_signal_age_seconds as i64
-        );
-        
+        signal.expires_at =
+            Utc::now() + Duration::seconds(self.config.trading.max_signal_age_seconds as i64);
+
         Ok(signal)
     }
-    
+
     /// Validate risk constraints
     fn validate_risk(&self, raw_signal: &RawSignal, context: &FilterContext) -> Result<bool> {
         // Check exchange allowlist
@@ -578,20 +595,20 @@ impl ArbitrageEngine {
                 return Ok(false);
             }
         }
-        
+
         // Check notional value
         let total_notional = raw_signal.total_notional();
         if total_notional > context.max_exposure {
             return Ok(false);
         }
-        
+
         if total_notional < context.min_notional_usd {
             return Ok(false);
         }
-        
+
         Ok(true)
     }
-    
+
     /// Check if signal should be emitted (deduplication)
     fn should_emit_signal(&self, key: &OpportunityKey, profit_bps: i32) -> bool {
         if let Some(cached) = self.signal_cache.get(key) {
@@ -599,44 +616,46 @@ impl ArbitrageEngine {
             if Utc::now() - cached.last_updated > self.signal_ttl {
                 return true;
             }
-            
+
             // Check if profit changed significantly
             let profit_change = (profit_bps - cached.profit_bps).abs();
             if profit_change < self.profit_change_threshold_bps {
                 return false;
             }
         }
-        
+
         true
     }
-    
+
     /// Update signal cache for deduplication
-    fn update_signal_cache(&self, key: &OpportunityKey, signal: &Signal, profit_bps: i32) {
-        self.signal_cache.insert(key.clone(), CachedSignal {
-            signal: signal.clone(),
-            last_updated: Utc::now(),
-            profit_bps,
-        });
+    fn update_signal_cache(&self, key: &OpportunityKey, _signal: &Signal, profit_bps: i32) {
+        self.signal_cache.insert(
+            key.clone(),
+            CachedSignal {
+                last_updated: Utc::now(),
+                profit_bps,
+            },
+        );
     }
-    
+
     /// Emit signal to subscribers
     fn emit_signal(&self, signal: &Signal) {
         // Broadcast to all subscribers (ignore send errors - no receivers is OK)
         let _ = self.signal_sender.send(signal.clone());
     }
-    
+
     /// Increment a statistics counter
     fn increment_stat(&self, key: &'static str) {
         self.stats.entry(key).and_modify(|v| *v += 1).or_insert(1);
     }
-    
+
     /// Get engine statistics
     pub fn get_stats(&self) -> EngineStats {
         let mut unique_symbols = std::collections::HashSet::new();
         for entry in self.order_books.iter() {
             unique_symbols.insert(entry.key().1.clone());
         }
-        
+
         EngineStats {
             order_books_count: self.order_books.len(),
             tickers_count: self.tickers.len(),
@@ -649,49 +668,52 @@ impl ArbitrageEngine {
             last_detection_time: Some(Utc::now()),
         }
     }
-    
+
     /// Clear stale data from caches
     pub fn cleanup_stale_data(&self) {
         let now = Utc::now();
-        let stale_threshold = Duration::milliseconds(
-            self.config.trading.stale_orderbook_threshold_ms as i64
-        );
-        
+        let stale_threshold =
+            Duration::milliseconds(self.config.trading.stale_orderbook_threshold_ms as i64);
+
         // Clean stale order books
-        self.order_books.retain(|_, ob| {
-            now - ob.timestamp < stale_threshold
-        });
-        
+        self.order_books
+            .retain(|_, ob| now - ob.timestamp < stale_threshold);
+
         // Clean stale tickers
-        self.tickers.retain(|_, ticker| {
-            now - ticker.timestamp < stale_threshold
-        });
-        
+        self.tickers
+            .retain(|_, ticker| now - ticker.timestamp < stale_threshold);
+
         // Clean expired signals from cache
-        self.signal_cache.retain(|_, cached| {
-            now - cached.last_updated < self.signal_ttl
-        });
+        self.signal_cache
+            .retain(|_, cached| now - cached.last_updated < self.signal_ttl);
     }
-    
+
     /// Get order book from cache
     pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<OrderBook> {
-        self.order_books.get(&(exchange, symbol.clone())).map(|v| v.clone())
+        self.order_books
+            .get(&(exchange, symbol.clone()))
+            .map(|v| v.clone())
     }
-    
+
     /// Get all cached order books
     pub fn get_all_order_books(&self) -> Vec<OrderBook> {
-        self.order_books.iter().map(|entry| entry.value().clone()).collect()
+        self.order_books
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect()
     }
-    
+
     /// Get ticker from cache
     pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Ticker> {
-        self.tickers.get(&(exchange, symbol.clone())).map(|v| v.clone())
+        self.tickers
+            .get(&(exchange, symbol.clone()))
+            .map(|v| v.clone())
     }
-    
+
     /// Get funding rate from cache
     pub fn get_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<FundingRate> {
-        self.funding_rates.get(&(exchange, symbol.clone())).map(|v| v.clone())
+        self.funding_rates
+            .get(&(exchange, symbol.clone()))
+            .map(|v| v.clone())
     }
 }
-
-

@@ -18,7 +18,7 @@ use rust_decimal::Decimal;
 use std::sync::Arc;
 
 /// Helper to create test engine
-fn create_test_engine(
+async fn create_test_engine(
     config: Config,
 ) -> Result<(
     Arc<ArbitrageEngine>,
@@ -29,7 +29,11 @@ fn create_test_engine(
     let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
     let size_calculator = Arc::new(SizeCalculator::new(SizeConfig::default()));
     let execution_preparer = Arc::new(ExecutionPreparer::new(ExecutionConfig::default()));
-    let storage = Arc::new(StorageService::new(StorageConfig::default())?);
+    let storage_config = StorageConfig {
+        database_path: ":memory:".to_string(),
+        ..Default::default()
+    };
+    let storage = Arc::new(StorageService::new(storage_config).await?);
 
     let (engine, receiver) = ArbitrageEngine::new(
         config,
@@ -47,7 +51,7 @@ fn create_test_engine(
 #[tokio::test]
 async fn test_ticker_update() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let symbol = Symbol::new("BTC", "USDT");
     let ticker = Ticker::new(
@@ -74,7 +78,7 @@ async fn test_ticker_update() -> Result<()> {
 #[tokio::test]
 async fn test_funding_rate_update() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let symbol = Symbol::new("BTC", "USDT");
     let funding_rate = FundingRate::new(
@@ -102,7 +106,7 @@ async fn test_signal_broadcasting() -> Result<()> {
     config.trading.min_profit_threshold_percent = Decimal::new(1, 4);
     config.risk.max_position_size_usd = Decimal::from(200000);
 
-    let (engine, _storage, mut receiver) = create_test_engine(config)?;
+    let (engine, _storage, mut receiver) = create_test_engine(config).await?;
 
     let mut registry = StrategyRegistry::new();
     registry.register(Arc::new(CexArbitrageStrategy::new()))?;
@@ -150,7 +154,7 @@ async fn test_signal_broadcasting() -> Result<()> {
 #[tokio::test]
 async fn test_multiple_subscribers() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver1) = create_test_engine(config)?;
+    let (engine, _storage, _receiver1) = create_test_engine(config).await?;
 
     // Create additional subscribers
     let _receiver2 = engine.subscribe();
@@ -166,7 +170,7 @@ async fn test_multiple_subscribers() -> Result<()> {
 #[tokio::test]
 async fn test_stale_data_cleanup() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let symbol = Symbol::new("BTC", "USDT");
 
@@ -196,7 +200,7 @@ async fn test_stale_data_cleanup() -> Result<()> {
 #[tokio::test]
 async fn test_concurrent_updates() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let engine_clone = Arc::clone(&engine);
 
@@ -209,8 +213,14 @@ async fn test_concurrent_updates() -> Result<()> {
                 let order_book = OrderBook::new(
                     ExchangeId::OKX,
                     symbol,
-                    vec![OrderBookLevel::new(Decimal::from(100 + i), Decimal::from(1))],
-                    vec![OrderBookLevel::new(Decimal::from(101 + i), Decimal::from(1))],
+                    vec![OrderBookLevel::new(
+                        Decimal::from(100 + i),
+                        Decimal::from(1),
+                    )],
+                    vec![OrderBookLevel::new(
+                        Decimal::from(101 + i),
+                        Decimal::from(1),
+                    )],
                 );
                 engine.update_order_book(order_book).await
             })
@@ -223,7 +233,10 @@ async fn test_concurrent_updates() -> Result<()> {
     }
 
     let stats = engine.get_stats();
-    assert_eq!(stats.order_books_count, 10, "All order books should be cached");
+    assert_eq!(
+        stats.order_books_count, 10,
+        "All order books should be cached"
+    );
 
     Ok(())
 }
@@ -232,7 +245,7 @@ async fn test_concurrent_updates() -> Result<()> {
 #[tokio::test]
 async fn test_all_exchanges() -> Result<()> {
     let config = Config::default();
-    let (engine, _storage, _receiver) = create_test_engine(config)?;
+    let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let exchanges = [
         ExchangeId::OKX,
@@ -255,7 +268,11 @@ async fn test_all_exchanges() -> Result<()> {
 
         // Verify it was cached
         let cached = engine.get_order_book(exchange, &symbol);
-        assert!(cached.is_some(), "Order book for {} should be cached", exchange);
+        assert!(
+            cached.is_some(),
+            "Order book for {} should be cached",
+            exchange
+        );
     }
 
     let stats = engine.get_stats();

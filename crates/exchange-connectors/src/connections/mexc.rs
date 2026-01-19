@@ -1,19 +1,26 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
+use crate::connector::{
+    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
+    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
+    OrderStatusType, OrderType, TickerData, TimeInForce,
+};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
+use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
+    Result,
+};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::str::FromStr;
-use tokio::sync::{broadcast, RwLock, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{info, warn, error, debug};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, warn};
 
 /// MEXC WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,8 +113,10 @@ impl ExchangeConnector for MEXCConnector {
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let mexc_symbol = self.symbol_to_mexc(symbol);
-        let url = format!("{}/api/v3/depth?symbol={}&limit={}", 
-                         self.config.rest_url, mexc_symbol, self.config.order_book_depth);
+        let url = format!(
+            "{}/api/v3/depth?symbol={}&limit={}",
+            self.config.rest_url, mexc_symbol, self.config.order_book_depth
+        );
 
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
@@ -128,7 +137,7 @@ impl ExchangeConnector for MEXCConnector {
                     // Also check isSpotTradingAllowed for spot trading
                     let status = item["status"].as_str().unwrap_or("");
                     let is_spot_allowed = item["isSpotTradingAllowed"].as_bool().unwrap_or(false);
-                    
+
                     // Accept status "1" (enabled) or "TRADING" for compatibility
                     if (status == "1" || status == "TRADING") && is_spot_allowed {
                         if let Ok(symbol) = self.symbol_from_mexc(symbol_str) {
@@ -163,12 +172,18 @@ impl ExchangeConnector for MEXCConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        symbols: &[Symbol],
+    ) -> Result<HashMap<Symbol, FundingRate>> {
         let mut funding_rates = HashMap::new();
         for symbol in symbols {
             let mexc_symbol = format!("{}_USDT", symbol.base.to_uppercase());
-            let url = format!("{}/api/v1/contract/funding_rate/{}", self.config.rest_url, mexc_symbol);
-            
+            let url = format!(
+                "{}/api/v1/contract/funding_rate/{}",
+                self.config.rest_url, mexc_symbol
+            );
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<Value>().await {
                     if let Ok(funding_rate) = self.parse_funding_rate(&data, symbol) {
@@ -190,7 +205,7 @@ impl ExchangeConnector for MEXCConnector {
         }
 
         info!("Connecting to MEXC WebSocket: {}", self.config.ws_url);
-        
+
         // Update status to connecting
         *self.status.write().await = ConnectionStatus::Connecting;
 
@@ -203,7 +218,15 @@ impl ExchangeConnector for MEXCConnector {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
+            Self::websocket_task(
+                ws_url,
+                event_sender,
+                status,
+                stats,
+                subscribed_symbols,
+                config,
+            )
+            .await;
         });
 
         // Store the handle
@@ -217,7 +240,7 @@ impl ExchangeConnector for MEXCConnector {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("Disconnecting from MEXC WebSocket");
-        
+
         // Update status
         *self.status.write().await = ConnectionStatus::Disconnected;
 
@@ -228,7 +251,7 @@ impl ExchangeConnector for MEXCConnector {
 
         // Clear subscribed symbols
         self.subscribed_symbols.write().await.clear();
-        
+
         Ok(())
     }
 
@@ -256,8 +279,11 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!("Subscribing to MEXC order books for {} symbols", symbols.len());
-        
+        info!(
+            "Subscribing to MEXC order books for {} symbols",
+            symbols.len()
+        );
+
         // Add symbols to subscription list
         self.subscribe_symbols(symbols).await?;
 
@@ -282,7 +308,7 @@ impl ExchangeConnector for MEXCConnector {
     async fn health_check(&self) -> Result<HealthStatus> {
         let status = self.status.read().await.clone();
         let stats = self.stats.lock().await;
-        
+
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -306,12 +332,15 @@ impl ExchangeConnector for MEXCConnector {
     }
     // === Trading Methods ===
 
-    async fn place_order(&self, order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+    async fn place_order(
+        &self,
+        order: &crate::connector::OrderRequest,
+    ) -> Result<crate::connector::OrderResponse> {
         use crate::connector::{OrderResponse, OrderStatusType};
-        
+
         // MEXC API endpoint for placing orders
         let url = format!("{}/api/v3/order", self.config.rest_url);
-        
+
         // Convert our order request to MEXC format
         let mexc_order = serde_json::json!({
             "symbol": format!("{}{}", order.symbol.base, order.symbol.quote),
@@ -330,24 +359,33 @@ impl ExchangeConnector for MEXCConnector {
         });
 
         // Make authenticated request to MEXC
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&mexc_order)
             .send()
             .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC place order request failed: {}", e)))?;
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "MEXC place order request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("MEXC place order failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "MEXC place order failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         // Parse MEXC response
-        let order_id = response_json.get("orderId")
+        let order_id = response_json
+            .get("orderId")
             .and_then(|id| id.as_u64())
             .map(|id| id.to_string())
             .unwrap_or("unknown".to_string());
@@ -367,20 +405,26 @@ impl ExchangeConnector for MEXCConnector {
 
     async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
         use crate::connector::{CancelResponse, OrderStatusType};
-        
+
         let url = format!("{}/api/v3/order", self.config.rest_url);
-        
+
         let cancel_request = serde_json::json!({
             "symbol": "BTCUSDT", // This should be dynamic
             "orderId": order_id,
         });
 
-        let response = self.client
+        let response = self
+            .client
             .delete(&url)
             .json(&cancel_request)
             .send()
             .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC cancel order request failed: {}", e)))?;
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "MEXC cancel order request failed: {}",
+                    e
+                ))
+            })?;
 
         let status = if response.status().is_success() {
             OrderStatusType::Cancelled
@@ -397,24 +441,30 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
-        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
-        
-        let url = format!("{}/api/v3/order?symbol=BTCUSDT&orderId={}", self.config.rest_url, order_id);
+        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC get order status request failed: {}", e)))?;
+        let url = format!(
+            "{}/api/v3/order?symbol=BTCUSDT&orderId={}",
+            self.config.rest_url, order_id
+        );
+
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "MEXC get order status request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("MEXC get order status failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "MEXC get order status failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         // Parse response and create OrderStatus
         let symbol = arbitrage_core::types::Symbol::new("BTC", "USDT");
@@ -424,24 +474,32 @@ impl ExchangeConnector for MEXCConnector {
             _ => OrderSide::Buy,
         };
 
-        let quantity = response_json.get("origQty")
+        let quantity = response_json
+            .get("origQty")
             .and_then(|q| q.as_str())
             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
             .unwrap_or_default();
 
-        let filled_quantity = response_json.get("executedQty")
+        let filled_quantity = response_json
+            .get("executedQty")
             .and_then(|f| f.as_str())
             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
             .unwrap_or_default();
 
         Ok(OrderStatus {
             order_id: order_id.to_string(),
-            client_order_id: response_json.get("clientOrderId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+            client_order_id: response_json
+                .get("clientOrderId")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string()),
             symbol,
             side,
             order_type: OrderType::Limit,
             quantity,
-            price: response_json.get("price").and_then(|p| p.as_str()).and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
+            price: response_json
+                .get("price")
+                .and_then(|p| p.as_str())
+                .and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
             filled_quantity,
             remaining_quantity: quantity - filled_quantity,
             average_price: None,
@@ -452,46 +510,54 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        use crate::connector::{Balance, AssetBalance};
-        
+        use crate::connector::{AssetBalance, Balance};
+
         let url = format!("{}/api/v3/account", self.config.rest_url);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC get balance request failed: {}", e)))?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "MEXC get balance request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("MEXC get balance failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "MEXC get balance failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let mut balances = std::collections::HashMap::new();
 
         if let Some(balance_array) = response_json.get("balances").and_then(|b| b.as_array()) {
             for balance in balance_array {
                 if let Some(asset) = balance.get("asset").and_then(|a| a.as_str()) {
-                    let free = balance.get("free")
+                    let free = balance
+                        .get("free")
                         .and_then(|f| f.as_str())
                         .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                         .unwrap_or_default();
 
-                    let locked = balance.get("locked")
+                    let locked = balance
+                        .get("locked")
                         .and_then(|l| l.as_str())
                         .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                         .unwrap_or_default();
 
-                    balances.insert(asset.to_string(), AssetBalance {
-                        asset: asset.to_string(),
-                        free,
-                        locked,
-                        total: free + locked,
-                    });
+                    balances.insert(
+                        asset.to_string(),
+                        AssetBalance {
+                            asset: asset.to_string(),
+                            free,
+                            locked,
+                            total: free + locked,
+                        },
+                    );
                 }
             }
         }
@@ -503,40 +569,50 @@ impl ExchangeConnector for MEXCConnector {
         })
     }
 
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
-        
+    async fn get_open_orders(
+        &self,
+        symbol: Option<&Symbol>,
+    ) -> Result<Vec<crate::connector::OrderStatus>> {
+        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
+
         let mut url = format!("{}/api/v3/openOrders", self.config.rest_url);
-        
+
         if let Some(sym) = symbol {
             url.push_str(&format!("?symbol={}{}", sym.base, sym.quote));
         }
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("MEXC get open orders request failed: {}", e)))?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "MEXC get open orders request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("MEXC get open orders failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "MEXC get open orders failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let mut orders = Vec::new();
 
         if let Some(order_array) = response_json.as_array() {
             for order_data in order_array {
-                let order_id = order_data.get("orderId")
+                let order_id = order_data
+                    .get("orderId")
                     .and_then(|id| id.as_u64())
                     .map(|id| id.to_string())
                     .unwrap_or("unknown".to_string());
 
-                let symbol_str = order_data.get("symbol").and_then(|s| s.as_str()).unwrap_or("BTCUSDT");
+                let symbol_str = order_data
+                    .get("symbol")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("BTCUSDT");
                 let order_symbol = if symbol_str.ends_with("USDT") {
                     let base = &symbol_str[..symbol_str.len() - 4];
                     arbitrage_core::types::Symbol::new(base, "USDT")
@@ -550,24 +626,32 @@ impl ExchangeConnector for MEXCConnector {
                     _ => OrderSide::Buy,
                 };
 
-                let quantity = order_data.get("origQty")
+                let quantity = order_data
+                    .get("origQty")
                     .and_then(|q| q.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
-                let filled_quantity = order_data.get("executedQty")
+                let filled_quantity = order_data
+                    .get("executedQty")
                     .and_then(|f| f.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
                 orders.push(OrderStatus {
                     order_id,
-                    client_order_id: order_data.get("clientOrderId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                    client_order_id: order_data
+                        .get("clientOrderId")
+                        .and_then(|c| c.as_str())
+                        .map(|s| s.to_string()),
                     symbol: order_symbol,
                     side,
                     order_type: OrderType::Limit,
                     quantity,
-                    price: order_data.get("price").and_then(|p| p.as_str()).and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
+                    price: order_data
+                        .get("price")
+                        .and_then(|p| p.as_str())
+                        .and_then(|s| rust_decimal::Decimal::from_str(s).ok()),
                     filled_quantity,
                     remaining_quantity: quantity - filled_quantity,
                     average_price: None,
@@ -582,7 +666,6 @@ impl ExchangeConnector for MEXCConnector {
     }
 }
 
-
 impl MEXCConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
@@ -593,20 +676,18 @@ impl MEXCConnector {
         subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
         config: ConnectorConfig,
     ) {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(1000),
-            Duration::from_millis(30000),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
                     info!("MEXC WebSocket connected successfully");
                     backoff.reset();
-                    
+
                     // Update status to connected
                     *status.write().await = ConnectionStatus::Connected;
-                    
+
                     // Send status change event
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::MEXC,
@@ -623,16 +704,19 @@ impl MEXCConnector {
                         &stats,
                         &subscribed_symbols,
                         &config,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("MEXC WebSocket connection error: {}", e);
                     }
                 }
                 Err(e) => {
                     error!("Failed to connect to MEXC WebSocket: {}", e);
-                    
+
                     // Update status to error
-                    *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
-                    
+                    *status.write().await =
+                        ConnectionStatus::Error("WebSocket connection failed".to_string());
+
                     // Send error event
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::MEXC,
@@ -658,16 +742,27 @@ impl MEXCConnector {
     /// Establish WebSocket connection
     async fn connect_websocket(
         ws_url: &str,
-    ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
-        let (ws_stream, response) = connect_async(ws_url).await
-            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
-        
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    )> {
+        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "WebSocket connection failed: {}",
+                e
+            ))
+        })?;
+
         Ok((ws_stream, response))
     }
 
     /// Handle WebSocket connection and messages
     async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        mut ws_stream: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         event_sender: &broadcast::Sender<ConnectionEvent>,
         status: &Arc<RwLock<ConnectionStatus>>,
         stats: &Arc<Mutex<ConnectorStats>>,
@@ -682,11 +777,11 @@ impl MEXCConnector {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
                 let mut new_params = Vec::new();
-                
+
                 for symbol in symbols.iter() {
                     let mexc_symbol = Self::symbol_to_mexc_static(symbol);
                     let channel = format!("spot@public.bookTicker.v3.api@{}", mexc_symbol);
-                    
+
                     if !current_subscriptions.contains(&channel) {
                         new_params.push(channel.clone());
                         current_subscriptions.push(channel);
@@ -699,21 +794,39 @@ impl MEXCConnector {
                         params: new_params,
                     };
 
-                    let msg = serde_json::to_string(&subscription)
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize: {}", e)))?;
-                    
+                    let msg = serde_json::to_string(&subscription).map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to serialize: {}",
+                            e
+                        ))
+                    })?;
+
                     debug!("Sending MEXC subscription: {}", msg);
-                    ws_stream.send(Message::Text(msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send: {}", e)))?;
+                    ws_stream
+                        .send(Message::Text(msg.into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send: {}",
+                                e
+                            ))
+                        })?;
                 }
-                
+
                 last_subscription_check = std::time::Instant::now();
             }
 
             if last_ping.elapsed() > Duration::from_secs(25) {
                 let ping_msg = r#"{"method":"PING"}"#;
-                ws_stream.send(Message::Text(ping_msg.into())).await
-                    .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                ws_stream
+                    .send(Message::Text(ping_msg.into()))
+                    .await
+                    .map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to send ping: {}",
+                            e
+                        ))
+                    })?;
                 last_ping = std::time::Instant::now();
             }
 
@@ -732,8 +845,12 @@ impl MEXCConnector {
                             }
                         }
                         Message::Ping(data) => {
-                            ws_stream.send(Message::Pong(data)).await
-                                .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
+                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send pong: {}",
+                                    e
+                                ))
+                            })?;
                         }
                         Message::Close(_) => {
                             info!("MEXC WebSocket connection closed by server");
@@ -753,8 +870,15 @@ impl MEXCConnector {
                 Err(_) => {
                     warn!("MEXC WebSocket timeout, sending ping");
                     let ping_msg = r#"{"method":"PING"}"#;
-                    ws_stream.send(Message::Text(ping_msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                    ws_stream
+                        .send(Message::Text(ping_msg.into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send ping: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
 
@@ -815,12 +939,14 @@ impl MEXCConnector {
 
     /// Parse MEXC book ticker message into OrderBook
     fn parse_bookticker_message(data: &Value) -> Result<OrderBook> {
-        let d = data.get("d").ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing data".to_string()))?;
-        
-        let symbol_str = data.get("s").and_then(|s| s.as_str()).ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing symbol".to_string()))?;
-        
+        let d = data.get("d").ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing data".to_string())
+        })?;
+
+        let symbol_str = data.get("s").and_then(|s| s.as_str()).ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing symbol".to_string())
+        })?;
+
         let symbol = Self::symbol_from_mexc_static(symbol_str)?;
 
         let bid_price = parse_decimal(&d["b"])?;
@@ -829,8 +955,7 @@ impl MEXCConnector {
         let ask_qty = parse_decimal(&d["A"])?;
 
         let timestamp = if let Some(t) = data.get("t").and_then(|t| t.as_i64()) {
-            chrono::DateTime::from_timestamp_millis(t)
-                .unwrap_or_else(|| chrono::Utc::now())
+            chrono::DateTime::from_timestamp_millis(t).unwrap_or_else(|| chrono::Utc::now())
         } else {
             chrono::Utc::now()
         };
@@ -838,8 +963,14 @@ impl MEXCConnector {
         Ok(OrderBook {
             exchange: ExchangeId::MEXC,
             symbol,
-            bids: vec![OrderBookLevel { price: bid_price, quantity: bid_qty }],
-            asks: vec![OrderBookLevel { price: ask_price, quantity: ask_qty }],
+            bids: vec![OrderBookLevel {
+                price: bid_price,
+                quantity: bid_qty,
+            }],
+            asks: vec![OrderBookLevel {
+                price: ask_price,
+                quantity: ask_qty,
+            }],
             timestamp,
             sequence: None,
         })
@@ -856,10 +987,12 @@ impl MEXCConnector {
     }
 
     fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
-        let asks_data = data["asks"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["asks"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["bids"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -908,7 +1041,7 @@ impl MEXCConnector {
 
     fn parse_funding_rate(&self, data: &Value, symbol: &Symbol) -> Result<FundingRate> {
         let funding_rate = parse_decimal(&data["data"]["fundingRate"])?;
-        
+
         Ok(FundingRate {
             symbol: symbol.clone(),
             exchange: ExchangeId::MEXC,
@@ -919,4 +1052,3 @@ impl MEXCConnector {
         })
     }
 }
-

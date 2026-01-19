@@ -1,19 +1,28 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
+use crate::connector::{
+    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
+    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
+    OrderStatusType, OrderType, TickerData, TimeInForce,
+};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_timestamp, parse_decimal, SymbolFormat, ExponentialBackoff};
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
+use crate::utils::{
+    format_symbol, parse_decimal, parse_symbol, parse_timestamp, ExponentialBackoff, SymbolFormat,
+};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
+    Result,
+};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::str::FromStr;
-use tokio::sync::{broadcast, RwLock, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{info, warn, error, debug};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, warn};
 
 /// ByBit WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,8 +116,10 @@ impl ExchangeConnector for BybitConnector {
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let bybit_symbol = self.symbol_to_bybit(symbol);
-        let url = format!("{}/v5/market/orderbook?category=spot&symbol={}&limit={}", 
-                         self.config.rest_url, bybit_symbol, self.config.order_book_depth);
+        let url = format!(
+            "{}/v5/market/orderbook?category=spot&symbol={}&limit={}",
+            self.config.rest_url, bybit_symbol, self.config.order_book_depth
+        );
 
         let response = self.client.get(&url).send().await?;
         let data: serde_json::Value = response.json().await?;
@@ -117,11 +128,16 @@ impl ExchangeConnector for BybitConnector {
             return self.parse_order_book(result, symbol);
         }
 
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection("No order book data".to_string()))
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "No order book data".to_string(),
+        ))
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
-        let url = format!("{}/v5/market/instruments-info?category=spot", self.config.rest_url);
+        let url = format!(
+            "{}/v5/market/instruments-info?category=spot",
+            self.config.rest_url
+        );
         let response = self.client.get(&url).send().await?;
         let data: serde_json::Value = response.json().await?;
 
@@ -144,8 +160,11 @@ impl ExchangeConnector for BybitConnector {
         let mut tickers = HashMap::new();
         for symbol in symbols {
             let bybit_symbol = self.symbol_to_bybit(symbol);
-            let url = format!("{}/v5/market/tickers?category=spot&symbol={}", self.config.rest_url, bybit_symbol);
-            
+            let url = format!(
+                "{}/v5/market/tickers?category=spot&symbol={}",
+                self.config.rest_url, bybit_symbol
+            );
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<serde_json::Value>().await {
                     if let Some(result) = data["result"].as_object() {
@@ -163,19 +182,26 @@ impl ExchangeConnector for BybitConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        symbols: &[Symbol],
+    ) -> Result<HashMap<Symbol, FundingRate>> {
         let mut funding_rates = HashMap::new();
         for symbol in symbols {
             let bybit_symbol = self.symbol_to_bybit(symbol);
-            let url = format!("{}/v5/market/funding/history?category=linear&symbol={}&limit=1", 
-                             self.config.rest_url, bybit_symbol);
-            
+            let url = format!(
+                "{}/v5/market/funding/history?category=linear&symbol={}&limit=1",
+                self.config.rest_url, bybit_symbol
+            );
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<serde_json::Value>().await {
                     if let Some(result) = data["result"].as_object() {
                         if let Some(list) = result["list"].as_array() {
                             if let Some(funding_data) = list.first() {
-                                if let Ok(funding_rate) = self.parse_funding_rate(funding_data, symbol) {
+                                if let Ok(funding_rate) =
+                                    self.parse_funding_rate(funding_data, symbol)
+                                {
                                     funding_rates.insert(symbol.clone(), funding_rate);
                                 }
                             }
@@ -197,7 +223,7 @@ impl ExchangeConnector for BybitConnector {
         }
 
         info!("Connecting to ByBit WebSocket: {}", self.config.ws_url);
-        
+
         // Update status to connecting
         *self.status.write().await = ConnectionStatus::Connecting;
 
@@ -210,7 +236,15 @@ impl ExchangeConnector for BybitConnector {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
+            Self::websocket_task(
+                ws_url,
+                event_sender,
+                status,
+                stats,
+                subscribed_symbols,
+                config,
+            )
+            .await;
         });
 
         // Store the handle
@@ -224,7 +258,7 @@ impl ExchangeConnector for BybitConnector {
 
     async fn disconnect(&mut self) -> Result<()> {
         info!("Disconnecting from ByBit WebSocket");
-        
+
         // Update status
         *self.status.write().await = ConnectionStatus::Disconnected;
 
@@ -263,8 +297,11 @@ impl ExchangeConnector for BybitConnector {
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!("Subscribing to ByBit order books for {} symbols", symbols.len());
-        
+        info!(
+            "Subscribing to ByBit order books for {} symbols",
+            symbols.len()
+        );
+
         // Add symbols to subscription list
         self.subscribe_symbols(symbols).await?;
 
@@ -289,7 +326,7 @@ impl ExchangeConnector for BybitConnector {
     async fn health_check(&self) -> Result<HealthStatus> {
         let status = self.status.read().await.clone();
         let stats = self.stats.lock().await;
-        
+
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -314,12 +351,15 @@ impl ExchangeConnector for BybitConnector {
 
     // === Trading Methods ===
 
-    async fn place_order(&self, order: &crate::connector::OrderRequest) -> Result<crate::connector::OrderResponse> {
+    async fn place_order(
+        &self,
+        order: &crate::connector::OrderRequest,
+    ) -> Result<crate::connector::OrderResponse> {
         use crate::connector::{OrderResponse, OrderStatusType};
-        
+
         // ByBit API endpoint for placing orders
         let url = format!("{}/v5/order/create", self.config.rest_url);
-        
+
         // Convert our order request to ByBit format
         let bybit_order = serde_json::json!({
             "category": "spot", // Trading category: spot for spot trading
@@ -339,25 +379,34 @@ impl ExchangeConnector for BybitConnector {
         });
 
         // Make authenticated request to ByBit
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&bybit_order)
             .send()
             .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit place order request failed: {}", e)))?;
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "ByBit place order request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("ByBit place order failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "ByBit place order failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         // Parse ByBit response
         if let Some(result) = response_json.get("result") {
-            let order_id = result.get("orderId")
+            let order_id = result
+                .get("orderId")
                 .and_then(|id| id.as_str())
                 .unwrap_or("unknown")
                 .to_string();
@@ -380,37 +429,45 @@ impl ExchangeConnector for BybitConnector {
             })
         } else {
             Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                "Invalid response format from ByBit".to_string()
+                "Invalid response format from ByBit".to_string(),
             ))
         }
     }
 
     async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
         use crate::connector::{CancelResponse, OrderStatusType};
-        
+
         let url = format!("{}/v5/order/cancel", self.config.rest_url);
-        
+
         let cancel_request = serde_json::json!({
             "category": "spot",
             "symbol": "BTCUSDT", // This should be dynamic based on the order
             "orderId": order_id,
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&cancel_request)
             .send()
             .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit cancel order request failed: {}", e)))?;
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "ByBit cancel order request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("ByBit cancel order failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "ByBit cancel order failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let status = if response_json.get("retCode").and_then(|c| c.as_u64()) == Some(0) {
             OrderStatusType::Cancelled
@@ -427,31 +484,41 @@ impl ExchangeConnector for BybitConnector {
     }
 
     async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
-        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
-        
-        let url = format!("{}/v5/order/realtime?category=spot&orderId={}", self.config.rest_url, order_id);
+        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit get order status request failed: {}", e)))?;
+        let url = format!(
+            "{}/v5/order/realtime?category=spot&orderId={}",
+            self.config.rest_url, order_id
+        );
+
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "ByBit get order status request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("ByBit get order status failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "ByBit get order status failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
-        if let Some(result) = response_json.get("result")
+        if let Some(result) = response_json
+            .get("result")
             .and_then(|r| r.get("list"))
             .and_then(|l| l.as_array())
-            .and_then(|arr| arr.first()) {
-            
-            let symbol_str = result.get("symbol").and_then(|s| s.as_str()).unwrap_or("BTCUSDT");
+            .and_then(|arr| arr.first())
+        {
+            let symbol_str = result
+                .get("symbol")
+                .and_then(|s| s.as_str())
+                .unwrap_or("BTCUSDT");
             // ByBit uses concatenated symbols like BTCUSDT, need to parse
             let symbol = if symbol_str.ends_with("USDT") {
                 let base = &symbol_str[..symbol_str.len() - 4];
@@ -472,16 +539,19 @@ impl ExchangeConnector for BybitConnector {
                 _ => OrderType::Limit,
             };
 
-            let quantity = result.get("qty")
+            let quantity = result
+                .get("qty")
                 .and_then(|q| q.as_str())
                 .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                 .unwrap_or_default();
 
-            let price = result.get("price")
+            let price = result
+                .get("price")
                 .and_then(|p| p.as_str())
                 .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
 
-            let filled_quantity = result.get("cumExecQty")
+            let filled_quantity = result
+                .get("cumExecQty")
                 .and_then(|f| f.as_str())
                 .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                 .unwrap_or_default();
@@ -496,7 +566,10 @@ impl ExchangeConnector for BybitConnector {
 
             Ok(OrderStatus {
                 order_id: order_id.to_string(),
-                client_order_id: result.get("orderLinkId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                client_order_id: result
+                    .get("orderLinkId")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string()),
                 symbol,
                 side,
                 order_type,
@@ -511,57 +584,69 @@ impl ExchangeConnector for BybitConnector {
             })
         } else {
             Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                "Invalid response format from ByBit".to_string()
+                "Invalid response format from ByBit".to_string(),
             ))
         }
     }
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
-        use crate::connector::{Balance, AssetBalance};
-        
-        let url = format!("{}/v5/account/wallet-balance?accountType=SPOT", self.config.rest_url);
+        use crate::connector::{AssetBalance, Balance};
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit get balance request failed: {}", e)))?;
+        let url = format!(
+            "{}/v5/account/wallet-balance?accountType=SPOT",
+            self.config.rest_url
+        );
+
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "ByBit get balance request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("ByBit get balance failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "ByBit get balance failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let mut balances = std::collections::HashMap::new();
 
-        if let Some(result) = response_json.get("result")
+        if let Some(result) = response_json
+            .get("result")
             .and_then(|r| r.get("list"))
             .and_then(|l| l.as_array())
-            .and_then(|arr| arr.first()) {
-            
+            .and_then(|arr| arr.first())
+        {
             if let Some(coins) = result.get("coin").and_then(|c| c.as_array()) {
                 for coin in coins {
                     if let Some(currency) = coin.get("coin").and_then(|c| c.as_str()) {
-                        let available = coin.get("walletBalance")
+                        let available = coin
+                            .get("walletBalance")
                             .and_then(|a| a.as_str())
                             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                             .unwrap_or_default();
 
-                        let locked = coin.get("locked")
+                        let locked = coin
+                            .get("locked")
                             .and_then(|f| f.as_str())
                             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                             .unwrap_or_default();
 
-                        balances.insert(currency.to_string(), AssetBalance {
-                            asset: currency.to_string(),
-                            free: available - locked,
-                            locked,
-                            total: available,
-                        });
+                        balances.insert(
+                            currency.to_string(),
+                            AssetBalance {
+                                asset: currency.to_string(),
+                                free: available - locked,
+                                locked,
+                                total: available,
+                            },
+                        );
                     }
                 }
             }
@@ -574,43 +659,54 @@ impl ExchangeConnector for BybitConnector {
         })
     }
 
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<crate::connector::OrderStatus>> {
-        use crate::connector::{OrderStatus, OrderStatusType, OrderSide, OrderType};
-        
+    async fn get_open_orders(
+        &self,
+        symbol: Option<&Symbol>,
+    ) -> Result<Vec<crate::connector::OrderStatus>> {
+        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
+
         let mut url = format!("{}/v5/order/realtime?category=spot", self.config.rest_url);
-        
+
         if let Some(sym) = symbol {
             url.push_str(&format!("&symbol={}{}", sym.base, sym.quote));
         }
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("ByBit get open orders request failed: {}", e)))?;
+        let response = self.client.get(&url).send().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!(
+                "ByBit get open orders request failed: {}",
+                e
+            ))
+        })?;
 
         if !response.status().is_success() {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
-                format!("ByBit get open orders failed with status: {}", response.status())
-            ));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "ByBit get open orders failed with status: {}",
+                response.status()
+            )));
         }
 
-        let response_json: serde_json::Value = response.json().await
-            .map_err(|e| arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e)))?;
+        let response_json: serde_json::Value = response.json().await.map_err(|e| {
+            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
+        })?;
 
         let mut orders = Vec::new();
 
-        if let Some(list) = response_json.get("result")
+        if let Some(list) = response_json
+            .get("result")
             .and_then(|r| r.get("list"))
-            .and_then(|l| l.as_array()) {
-            
+            .and_then(|l| l.as_array())
+        {
             for order_data in list {
-                let order_id = order_data.get("orderId")
+                let order_id = order_data
+                    .get("orderId")
                     .and_then(|id| id.as_str())
                     .unwrap_or("unknown")
                     .to_string();
 
-                let symbol_str = order_data.get("symbol").and_then(|s| s.as_str()).unwrap_or("BTCUSDT");
+                let symbol_str = order_data
+                    .get("symbol")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("BTCUSDT");
                 let order_symbol = if symbol_str.ends_with("USDT") {
                     let base = &symbol_str[..symbol_str.len() - 4];
                     arbitrage_core::types::Symbol::new(base, "USDT")
@@ -630,23 +726,29 @@ impl ExchangeConnector for BybitConnector {
                     _ => OrderType::Limit,
                 };
 
-                let quantity = order_data.get("qty")
+                let quantity = order_data
+                    .get("qty")
                     .and_then(|q| q.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
-                let price = order_data.get("price")
+                let price = order_data
+                    .get("price")
                     .and_then(|p| p.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok());
 
-                let filled_quantity = order_data.get("cumExecQty")
+                let filled_quantity = order_data
+                    .get("cumExecQty")
                     .and_then(|f| f.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
                 orders.push(OrderStatus {
                     order_id,
-                    client_order_id: order_data.get("orderLinkId").and_then(|c| c.as_str()).map(|s| s.to_string()),
+                    client_order_id: order_data
+                        .get("orderLinkId")
+                        .and_then(|c| c.as_str())
+                        .map(|s| s.to_string()),
                     symbol: order_symbol,
                     side,
                     order_type,
@@ -676,20 +778,18 @@ impl BybitConnector {
         subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
         config: ConnectorConfig,
     ) {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(1000),
-            Duration::from_millis(30000),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
                     info!("ByBit WebSocket connected successfully");
                     backoff.reset();
-                    
+
                     // Update status to connected
                     *status.write().await = ConnectionStatus::Connected;
-                    
+
                     // Send status change event
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::ByBit,
@@ -706,16 +806,19 @@ impl BybitConnector {
                         &stats,
                         &subscribed_symbols,
                         &config,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("ByBit WebSocket connection error: {}", e);
                     }
                 }
                 Err(e) => {
                     error!("Failed to connect to ByBit WebSocket: {}", e);
-                    
+
                     // Update status to error
-                    *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
-                    
+                    *status.write().await =
+                        ConnectionStatus::Error("WebSocket connection failed".to_string());
+
                     // Send error event
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::ByBit,
@@ -741,16 +844,27 @@ impl BybitConnector {
     /// Establish WebSocket connection
     async fn connect_websocket(
         ws_url: &str,
-    ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
-        let (ws_stream, response) = connect_async(ws_url).await
-            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
-        
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    )> {
+        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "WebSocket connection failed: {}",
+                e
+            ))
+        })?;
+
         Ok((ws_stream, response))
     }
 
     /// Handle WebSocket connection and messages
     async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        mut ws_stream: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         event_sender: &broadcast::Sender<ConnectionEvent>,
         status: &Arc<RwLock<ConnectionStatus>>,
         stats: &Arc<Mutex<ConnectorStats>>,
@@ -765,11 +879,11 @@ impl BybitConnector {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
                 let mut new_topics = Vec::new();
-                
+
                 for symbol in symbols.iter() {
                     let bybit_symbol = Self::symbol_to_bybit_static(symbol);
                     let topic = format!("orderbook.1.{}", bybit_symbol);
-                    
+
                     if !current_subscriptions.contains(&topic) {
                         new_topics.push(topic.clone());
                         current_subscriptions.push(topic);
@@ -782,15 +896,26 @@ impl BybitConnector {
                         args: new_topics.clone(),
                     };
 
-                    let msg = serde_json::to_string(&subscription)
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize subscription: {}", e)))?;
-                    
+                    let msg = serde_json::to_string(&subscription).map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to serialize subscription: {}",
+                            e
+                        ))
+                    })?;
+
                     debug!("Sending ByBit subscription: {}", msg);
-                    
-                    ws_stream.send(Message::Text(msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send subscription: {}", e)))?;
+
+                    ws_stream
+                        .send(Message::Text(msg.into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send subscription: {}",
+                                e
+                            ))
+                        })?;
                 }
-                
+
                 last_subscription_check = std::time::Instant::now();
             }
 
@@ -812,8 +937,12 @@ impl BybitConnector {
                         }
                         Message::Ping(data) => {
                             // Respond to ping with pong
-                            ws_stream.send(Message::Pong(data)).await
-                                .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
+                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send pong: {}",
+                                    e
+                                ))
+                            })?;
                         }
                         Message::Close(_) => {
                             info!("ByBit WebSocket connection closed by server");
@@ -833,8 +962,15 @@ impl BybitConnector {
                 Err(_) => {
                     warn!("ByBit WebSocket timeout, sending ping");
                     // Send ping to keep connection alive
-                    ws_stream.send(Message::Ping(vec![].into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                    ws_stream
+                        .send(Message::Ping(vec![].into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send ping: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
 
@@ -888,19 +1024,23 @@ impl BybitConnector {
     /// Parse ByBit orderbook message into OrderBook
     fn parse_orderbook_message(market_data: &BybitMarketData) -> Result<OrderBook> {
         let data = &market_data.data;
-        
+
         // Extract symbol from topic (e.g., "orderbook.50.BTCUSDT" -> "BTCUSDT")
         let topic_parts: Vec<&str> = market_data.topic.split('.').collect();
         if topic_parts.len() < 3 {
-            return Err(arbitrage_core::ArbitrageError::ExchangeConnection("Invalid topic format".to_string()));
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid topic format".to_string(),
+            ));
         }
         let bybit_symbol = topic_parts[2];
         let symbol = Self::symbol_from_bybit_static(bybit_symbol)?;
 
-        let asks_data = data["a"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["b"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["a"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["b"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(50) {
@@ -952,11 +1092,17 @@ impl BybitConnector {
         parse_symbol(bybit_symbol, SymbolFormat::NoSeparator)
     }
 
-    fn parse_order_book(&self, data: &serde_json::Map<String, serde_json::Value>, symbol: &Symbol) -> Result<OrderBook> {
-        let asks_data = data["a"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["b"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+    fn parse_order_book(
+        &self,
+        data: &serde_json::Map<String, serde_json::Value>,
+        symbol: &Symbol,
+    ) -> Result<OrderBook> {
+        let asks_data = data["a"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["b"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -991,10 +1137,11 @@ impl BybitConnector {
     }
 
     fn parse_ticker(&self, data: &serde_json::Value) -> Result<TickerData> {
-        let symbol_str = data["symbol"].as_str().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing symbol".to_string()))?;
+        let symbol_str = data["symbol"].as_str().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing symbol".to_string())
+        })?;
         let symbol = self.symbol_from_bybit(symbol_str)?;
-        
+
         Ok(TickerData {
             symbol,
             exchange: ExchangeId::ByBit,
@@ -1010,7 +1157,7 @@ impl BybitConnector {
     fn parse_funding_rate(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<FundingRate> {
         let funding_rate = parse_decimal(&data["fundingRate"])?;
         let funding_time = parse_timestamp(&data["fundingRateTimestamp"])?;
-        
+
         Ok(FundingRate {
             symbol: symbol.clone(),
             exchange: ExchangeId::ByBit,

@@ -1,19 +1,26 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
+use crate::connector::{
+    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
+    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
+    OrderStatusType, OrderType, TickerData, TimeInForce,
+};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
+use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
+    Result,
+};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::str::FromStr;
-use tokio::sync::{broadcast, RwLock, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{info, warn, error, debug};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, warn};
 
 /// Bitstamp WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,7 +82,11 @@ impl BitstampConnector {
     }
 
     fn symbol_to_bitstamp(&self, symbol: &Symbol) -> String {
-        format!("{}{}", symbol.base.to_lowercase(), symbol.quote.to_lowercase())
+        format!(
+            "{}{}",
+            symbol.base.to_lowercase(),
+            symbol.quote.to_lowercase()
+        )
     }
 
     fn symbol_from_bitstamp(&self, bitstamp_symbol: &str) -> Result<Symbol> {
@@ -147,7 +158,7 @@ impl ExchangeConnector for BitstampConnector {
         for symbol in symbols {
             let bitstamp_symbol = self.symbol_to_bitstamp(symbol);
             let url = format!("{}/ticker/{}/", self.config.rest_url, bitstamp_symbol);
-            
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<Value>().await {
                     if let Ok(ticker) = self.parse_ticker(&data, symbol) {
@@ -159,7 +170,10 @@ impl ExchangeConnector for BitstampConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, _symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        _symbols: &[Symbol],
+    ) -> Result<HashMap<Symbol, FundingRate>> {
         // Bitstamp spot doesn't have funding rates
         Ok(HashMap::new())
     }
@@ -183,7 +197,15 @@ impl ExchangeConnector for BitstampConnector {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
+            Self::websocket_task(
+                ws_url,
+                event_sender,
+                status,
+                stats,
+                subscribed_symbols,
+                config,
+            )
+            .await;
         });
 
         *self.ws_handle.lock().await = Some(handle);
@@ -225,7 +247,10 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!("Subscribing to Bitstamp order books for {} symbols", symbols.len());
+        info!(
+            "Subscribing to Bitstamp order books for {} symbols",
+            symbols.len()
+        );
         self.subscribe_symbols(symbols).await?;
         Ok(())
     }
@@ -241,7 +266,7 @@ impl ExchangeConnector for BitstampConnector {
     async fn health_check(&self) -> Result<HealthStatus> {
         let status = self.status.read().await.clone();
         let stats = self.stats.lock().await;
-        
+
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -299,11 +324,7 @@ impl ExchangeConnector for BitstampConnector {
             body["client_order_id"] = serde_json::Value::String(client_id.clone());
         }
 
-        let response = self.client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&body).send().await?;
 
         let response_json: Value = response.json().await?;
 
@@ -339,11 +360,7 @@ impl ExchangeConnector for BitstampConnector {
             "id": order_id,
         });
 
-        let response = self.client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&body).send().await?;
 
         let response_json: Value = response.json().await?;
 
@@ -355,7 +372,9 @@ impl ExchangeConnector for BitstampConnector {
 
         Ok(CancelResponse {
             order_id: order_id.to_string(),
-            client_order_id: response_json["client_order_id"].as_str().map(|s| s.to_string()),
+            client_order_id: response_json["client_order_id"]
+                .as_str()
+                .map(|s| s.to_string()),
             status,
             timestamp: chrono::Utc::now(),
         })
@@ -416,7 +435,9 @@ impl ExchangeConnector for BitstampConnector {
 
         Ok(OrderStatus {
             order_id: order_id.to_string(),
-            client_order_id: order_data["client_order_id"].as_str().map(|s| s.to_string()),
+            client_order_id: order_data["client_order_id"]
+                .as_str()
+                .map(|s| s.to_string()),
             symbol: order_symbol,
             side,
             order_type: OrderType::Limit, // Bitstamp doesn't specify order type in status
@@ -442,7 +463,7 @@ impl ExchangeConnector for BitstampConnector {
         // Bitstamp returns balance data with _balance, _reserved, _available suffixes
         if let Some(balance_obj) = balance_data.as_object() {
             let mut assets: std::collections::HashSet<String> = std::collections::HashSet::new();
-            
+
             // Collect all unique asset names
             for key in balance_obj.keys() {
                 if let Some(asset) = key.strip_suffix("_balance") {
@@ -458,22 +479,27 @@ impl ExchangeConnector for BitstampConnector {
                 let available_key = format!("{}_available", asset.to_lowercase());
                 let reserved_key = format!("{}_reserved", asset.to_lowercase());
 
-                let available = balance_obj.get(&available_key)
+                let available = balance_obj
+                    .get(&available_key)
                     .and_then(|v| v.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
-                let locked = balance_obj.get(&reserved_key)
+                let locked = balance_obj
+                    .get(&reserved_key)
                     .and_then(|v| v.as_str())
                     .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
                     .unwrap_or_default();
 
-                balances.insert(asset.clone(), AssetBalance {
-                    asset: asset.clone(),
-                    free: available,
-                    locked,
-                    total: available + locked,
-                });
+                balances.insert(
+                    asset.clone(),
+                    AssetBalance {
+                        asset: asset.clone(),
+                        free: available,
+                        locked,
+                        total: available + locked,
+                    },
+                );
             }
         }
 
@@ -487,7 +513,10 @@ impl ExchangeConnector for BitstampConnector {
     async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>> {
         let url = if let Some(sym) = symbol {
             let bitstamp_symbol = self.symbol_to_bitstamp(sym);
-            format!("{}/v2/open_orders/{}/", self.config.rest_url, bitstamp_symbol)
+            format!(
+                "{}/v2/open_orders/{}/",
+                self.config.rest_url, bitstamp_symbol
+            )
         } else {
             format!("{}/v2/open_orders/all/", self.config.rest_url)
         };
@@ -499,10 +528,7 @@ impl ExchangeConnector for BitstampConnector {
 
         if let Some(order_array) = response_json.as_array() {
             for order_data in order_array {
-                let order_id = order_data["id"]
-                    .as_str()
-                    .unwrap_or("unknown")
-                    .to_string();
+                let order_id = order_data["id"].as_str().unwrap_or("unknown").to_string();
 
                 // Try to determine symbol from currency_pair or default
                 let order_symbol = if let Some(pair) = order_data["currency_pair"].as_str() {
@@ -534,7 +560,9 @@ impl ExchangeConnector for BitstampConnector {
 
                 orders.push(OrderStatus {
                     order_id,
-                    client_order_id: order_data["client_order_id"].as_str().map(|s| s.to_string()),
+                    client_order_id: order_data["client_order_id"]
+                        .as_str()
+                        .map(|s| s.to_string()),
                     symbol: order_symbol,
                     side,
                     order_type: OrderType::Limit, // Bitstamp doesn't specify order type
@@ -564,19 +592,17 @@ impl BitstampConnector {
         subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
         config: ConnectorConfig,
     ) {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(1000),
-            Duration::from_millis(30000),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
                     info!("Bitstamp WebSocket connected successfully");
                     backoff.reset();
-                    
+
                     *status.write().await = ConnectionStatus::Connected;
-                    
+
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::Bitstamp,
                         old_status: ConnectionStatus::Connecting,
@@ -591,13 +617,16 @@ impl BitstampConnector {
                         &stats,
                         &subscribed_symbols,
                         &config,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("Bitstamp WebSocket connection error: {}", e);
                     }
                 }
                 Err(e) => {
                     error!("Failed to connect to Bitstamp WebSocket: {}", e);
-                    *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
+                    *status.write().await =
+                        ConnectionStatus::Error("WebSocket connection failed".to_string());
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::Bitstamp,
                         error: format!("WebSocket connection failed: {}", e),
@@ -619,14 +648,25 @@ impl BitstampConnector {
 
     async fn connect_websocket(
         ws_url: &str,
-    ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
-        let (ws_stream, response) = connect_async(ws_url).await
-            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    )> {
+        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "WebSocket connection failed: {}",
+                e
+            ))
+        })?;
         Ok((ws_stream, response))
     }
 
     async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        mut ws_stream: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         event_sender: &broadcast::Sender<ConnectionEvent>,
         status: &Arc<RwLock<ConnectionStatus>>,
         stats: &Arc<Mutex<ConnectorStats>>,
@@ -639,11 +679,11 @@ impl BitstampConnector {
         loop {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                
+
                 for symbol in symbols.iter() {
                     let bitstamp_symbol = Self::symbol_to_bitstamp_static(symbol);
                     let channel = format!("order_book_{}", bitstamp_symbol);
-                    
+
                     if !current_subscriptions.contains(&channel) {
                         let subscription = BitstampSubscription {
                             event: "bts:subscribe".to_string(),
@@ -652,17 +692,28 @@ impl BitstampConnector {
                             },
                         };
 
-                        let msg = serde_json::to_string(&subscription)
-                            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize: {}", e)))?;
-                        
+                        let msg = serde_json::to_string(&subscription).map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to serialize: {}",
+                                e
+                            ))
+                        })?;
+
                         debug!("Sending Bitstamp subscription: {}", msg);
-                        ws_stream.send(Message::Text(msg.into())).await
-                            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send: {}", e)))?;
-                        
+                        ws_stream
+                            .send(Message::Text(msg.into()))
+                            .await
+                            .map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send: {}",
+                                    e
+                                ))
+                            })?;
+
                         current_subscriptions.push(channel);
                     }
                 }
-                
+
                 last_subscription_check = std::time::Instant::now();
             }
 
@@ -681,8 +732,12 @@ impl BitstampConnector {
                             }
                         }
                         Message::Ping(data) => {
-                            ws_stream.send(Message::Pong(data)).await
-                                .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
+                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send pong: {}",
+                                    e
+                                ))
+                            })?;
                         }
                         Message::Close(_) => {
                             info!("Bitstamp WebSocket connection closed by server");
@@ -701,8 +756,15 @@ impl BitstampConnector {
                 }
                 Err(_) => {
                     warn!("Bitstamp WebSocket timeout, sending ping");
-                    ws_stream.send(Message::Ping(vec![].into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                    ws_stream
+                        .send(Message::Ping(vec![].into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send ping: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
 
@@ -727,11 +789,12 @@ impl BitstampConnector {
                     if let Some(channel) = &response.channel {
                         if channel.starts_with("order_book_") {
                             if let Ok(order_book) = Self::parse_orderbook_message(&response) {
-                                let event = ConnectionEvent::MarketData(MarketDataEvent::OrderBook {
-                                    exchange: ExchangeId::Bitstamp,
-                                    order_book,
-                                    timestamp: chrono::Utc::now(),
-                                });
+                                let event =
+                                    ConnectionEvent::MarketData(MarketDataEvent::OrderBook {
+                                        exchange: ExchangeId::Bitstamp,
+                                        order_book,
+                                        timestamp: chrono::Utc::now(),
+                                    });
                                 let _ = event_sender.send(event);
                             }
                         }
@@ -744,17 +807,20 @@ impl BitstampConnector {
     }
 
     fn parse_orderbook_message(response: &BitstampWsResponse) -> Result<OrderBook> {
-        let channel = response.channel.as_ref()
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing channel".to_string()))?;
-        
-        let bitstamp_symbol = channel.strip_prefix("order_book_")
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Invalid channel format".to_string()))?;
-        
+        let channel = response.channel.as_ref().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing channel".to_string())
+        })?;
+
+        let bitstamp_symbol = channel.strip_prefix("order_book_").ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Invalid channel format".to_string())
+        })?;
+
         let symbol = Self::symbol_from_bitstamp_static(bitstamp_symbol)?;
-        
-        let data = response.data.as_ref()
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing data".to_string()))?;
-        
+
+        let data = response.data.as_ref().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing data".to_string())
+        })?;
+
         let mut asks = Vec::new();
         let mut bids = Vec::new();
 
@@ -793,7 +859,11 @@ impl BitstampConnector {
     }
 
     fn symbol_to_bitstamp_static(symbol: &Symbol) -> String {
-        format!("{}{}", symbol.base.to_lowercase(), symbol.quote.to_lowercase())
+        format!(
+            "{}{}",
+            symbol.base.to_lowercase(),
+            symbol.quote.to_lowercase()
+        )
     }
 
     fn symbol_from_bitstamp_static(bitstamp_symbol: &str) -> Result<Symbol> {
@@ -812,10 +882,12 @@ impl BitstampConnector {
     }
 
     fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
-        let asks_data = data["asks"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["asks"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["bids"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -854,7 +926,7 @@ impl BitstampConnector {
         let bid_price = parse_decimal(&data["bid"])?;
         let ask_price = parse_decimal(&data["ask"])?;
         let volume_24h = parse_decimal(&data["volume"])?;
-        
+
         // Bitstamp doesn't provide 24h change directly, calculate from open if available
         let price_change_24h = if let Ok(open) = parse_decimal(&data["open"]) {
             last_price - open
@@ -874,4 +946,3 @@ impl BitstampConnector {
         })
     }
 }
-

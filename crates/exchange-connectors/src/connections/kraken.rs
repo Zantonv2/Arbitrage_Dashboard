@@ -1,19 +1,26 @@
-use crate::connector::{ExchangeConnector, ConnectorConfig, ConnectorStats, HealthStatus, TickerData, FundingRate, OrderRequest, OrderResponse, CancelResponse, OrderStatus, Balance, AssetBalance, OrderSide, OrderType, OrderStatusType, TimeInForce};
+use crate::connector::{
+    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
+    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
+    OrderStatusType, OrderType, TickerData, TimeInForce,
+};
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_symbol, parse_decimal, SymbolFormat, ExponentialBackoff};
-use arbitrage_core::{types::{ExchangeId, Symbol, OrderBook, OrderBookLevel, ConnectionStatus}, Result};
+use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+use arbitrage_core::{
+    types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
+    Result,
+};
 use async_trait::async_trait;
-use reqwest::Client;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use std::str::FromStr;
-use tokio::sync::{broadcast, RwLock, Mutex};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{SinkExt, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{info, warn, error, debug};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tracing::{debug, error, info, warn};
 
 /// Kraken WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,22 +118,24 @@ impl ExchangeConnector for KrakenConnector {
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let kraken_symbol = self.symbol_to_kraken(symbol);
-        let url = format!("{}/0/public/Depth?pair={}&count={}", 
-                         self.config.rest_url, kraken_symbol, self.config.order_book_depth);
+        let url = format!(
+            "{}/0/public/Depth?pair={}&count={}",
+            self.config.rest_url, kraken_symbol, self.config.order_book_depth
+        );
 
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
         if let Some(result) = data["result"].as_object() {
-            // Kraken returns data under the pair name key
-            for (_key, book_data) in result {
+            if let Some((_, book_data)) = result.into_iter().next() {
                 return self.parse_order_book(book_data, symbol);
             }
         }
 
-        Err(arbitrage_core::ArbitrageError::ExchangeConnection("No order book data".to_string()))
+        Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+            "No order book data".to_string(),
+        ))
     }
-
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
         let url = format!("{}/0/public/AssetPairs", self.config.rest_url);
@@ -154,8 +163,11 @@ impl ExchangeConnector for KrakenConnector {
         let mut tickers = HashMap::new();
         for symbol in symbols {
             let kraken_symbol = self.symbol_to_kraken(symbol);
-            let url = format!("{}/0/public/Ticker?pair={}", self.config.rest_url, kraken_symbol);
-            
+            let url = format!(
+                "{}/0/public/Ticker?pair={}",
+                self.config.rest_url, kraken_symbol
+            );
+
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<Value>().await {
                     if let Some(result) = data["result"].as_object() {
@@ -171,7 +183,10 @@ impl ExchangeConnector for KrakenConnector {
         Ok(tickers)
     }
 
-    async fn fetch_funding_rates(&self, _symbols: &[Symbol]) -> Result<HashMap<Symbol, FundingRate>> {
+    async fn fetch_funding_rates(
+        &self,
+        _symbols: &[Symbol],
+    ) -> Result<HashMap<Symbol, FundingRate>> {
         // Kraken spot doesn't have funding rates, only futures
         Ok(HashMap::new())
     }
@@ -186,7 +201,7 @@ impl ExchangeConnector for KrakenConnector {
         }
 
         info!("Connecting to Kraken WebSocket: {}", self.config.ws_url);
-        
+
         // Update status to connecting
         *self.status.write().await = ConnectionStatus::Connecting;
 
@@ -199,7 +214,15 @@ impl ExchangeConnector for KrakenConnector {
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
-            Self::websocket_task(ws_url, event_sender, status, stats, subscribed_symbols, config).await;
+            Self::websocket_task(
+                ws_url,
+                event_sender,
+                status,
+                stats,
+                subscribed_symbols,
+                config,
+            )
+            .await;
         });
 
         // Store the handle
@@ -211,10 +234,9 @@ impl ExchangeConnector for KrakenConnector {
         Ok(())
     }
 
-
     async fn disconnect(&mut self) -> Result<()> {
         info!("Disconnecting from Kraken WebSocket");
-        
+
         // Update status
         *self.status.write().await = ConnectionStatus::Disconnected;
 
@@ -253,8 +275,11 @@ impl ExchangeConnector for KrakenConnector {
     }
 
     async fn subscribe_order_books(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!("Subscribing to Kraken order books for {} symbols", symbols.len());
-        
+        info!(
+            "Subscribing to Kraken order books for {} symbols",
+            symbols.len()
+        );
+
         // Add symbols to subscription list
         self.subscribe_symbols(symbols).await?;
 
@@ -279,7 +304,7 @@ impl ExchangeConnector for KrakenConnector {
     async fn health_check(&self) -> Result<HealthStatus> {
         let status = self.status.read().await.clone();
         let stats = self.stats.lock().await;
-        
+
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -333,11 +358,7 @@ impl ExchangeConnector for KrakenConnector {
             body["userref"] = serde_json::Value::String(client_id.clone());
         }
 
-        let response = self.client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&body).send().await?;
 
         let response_json: Value = response.json().await?;
 
@@ -368,15 +389,14 @@ impl ExchangeConnector for KrakenConnector {
             "txid": order_id,
         });
 
-        let response = self.client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.client.post(&url).json(&body).send().await?;
 
         let response_json: Value = response.json().await?;
 
-        let status = if response_json["error"].as_array().map_or(true, |arr| arr.is_empty()) {
+        let status = if response_json["error"]
+            .as_array()
+            .map_or(true, |arr| arr.is_empty())
+        {
             OrderStatusType::Cancelled
         } else {
             OrderStatusType::Rejected
@@ -400,7 +420,8 @@ impl ExchangeConnector for KrakenConnector {
         let response = self.client.post(&url).json(&body).send().await?;
         let response_json: Value = response.json().await?;
 
-        if let Some(order_data) = response_json["result"].as_object()
+        if let Some(order_data) = response_json["result"]
+            .as_object()
             .and_then(|result| result.get(order_id))
         {
             let pair = order_data["descr"]["pair"].as_str().unwrap_or("XBTUSD");
@@ -457,7 +478,9 @@ impl ExchangeConnector for KrakenConnector {
                 updated_at: chrono::Utc::now(),
             })
         } else {
-            Err(arbitrage_core::ArbitrageError::ExchangeConnection("Order not found".to_string()))
+            Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Order not found".to_string(),
+            ))
         }
     }
 
@@ -473,12 +496,15 @@ impl ExchangeConnector for KrakenConnector {
             for (asset, balance_value) in result {
                 if let Some(balance_str) = balance_value.as_str() {
                     if let Ok(balance) = rust_decimal::Decimal::from_str(balance_str) {
-                        balances.insert(asset.clone(), AssetBalance {
-                            asset: asset.clone(),
-                            free: balance,
-                            locked: rust_decimal::Decimal::ZERO,
-                            total: balance,
-                        });
+                        balances.insert(
+                            asset.clone(),
+                            AssetBalance {
+                                asset: asset.clone(),
+                                free: balance,
+                                locked: rust_decimal::Decimal::ZERO,
+                                total: balance,
+                            },
+                        );
                     }
                 }
             }
@@ -559,7 +585,6 @@ impl ExchangeConnector for KrakenConnector {
     }
 }
 
-
 impl KrakenConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
@@ -570,20 +595,18 @@ impl KrakenConnector {
         subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
         config: ConnectorConfig,
     ) {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(1000),
-            Duration::from_millis(30000),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
                     info!("Kraken WebSocket connected successfully");
                     backoff.reset();
-                    
+
                     // Update status to connected
                     *status.write().await = ConnectionStatus::Connected;
-                    
+
                     // Send status change event
                     let _ = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::Kraken,
@@ -600,16 +623,19 @@ impl KrakenConnector {
                         &stats,
                         &subscribed_symbols,
                         &config,
-                    ).await {
+                    )
+                    .await
+                    {
                         error!("Kraken WebSocket connection error: {}", e);
                     }
                 }
                 Err(e) => {
                     error!("Failed to connect to Kraken WebSocket: {}", e);
-                    
+
                     // Update status to error
-                    *status.write().await = ConnectionStatus::Error("WebSocket connection failed".to_string());
-                    
+                    *status.write().await =
+                        ConnectionStatus::Error("WebSocket connection failed".to_string());
+
                     // Send error event
                     let _ = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::Kraken,
@@ -632,20 +658,30 @@ impl KrakenConnector {
         }
     }
 
-
     /// Establish WebSocket connection
     async fn connect_websocket(
         ws_url: &str,
-    ) -> Result<(tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>)> {
-        let (ws_stream, response) = connect_async(ws_url).await
-            .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("WebSocket connection failed: {}", e)))?;
-        
+    ) -> Result<(
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    )> {
+        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "WebSocket connection failed: {}",
+                e
+            ))
+        })?;
+
         Ok((ws_stream, response))
     }
 
     /// Handle WebSocket connection and messages
     async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        mut ws_stream: tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         event_sender: &broadcast::Sender<ConnectionEvent>,
         status: &Arc<RwLock<ConnectionStatus>>,
         stats: &Arc<Mutex<ConnectorStats>>,
@@ -660,10 +696,10 @@ impl KrakenConnector {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
                 let mut new_pairs = Vec::new();
-                
+
                 for symbol in symbols.iter() {
                     let kraken_symbol = Self::symbol_to_kraken_static(symbol);
-                    
+
                     if !current_subscriptions.contains(&kraken_symbol) {
                         new_pairs.push(kraken_symbol.clone());
                         current_subscriptions.push(kraken_symbol);
@@ -680,18 +716,28 @@ impl KrakenConnector {
                         },
                     };
 
-                    let msg = serde_json::to_string(&subscription)
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to serialize subscription: {}", e)))?;
-                    
+                    let msg = serde_json::to_string(&subscription).map_err(|e| {
+                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                            "Failed to serialize subscription: {}",
+                            e
+                        ))
+                    })?;
+
                     debug!("Sending Kraken subscription: {}", msg);
-                    
-                    ws_stream.send(Message::Text(msg.into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send subscription: {}", e)))?;
+
+                    ws_stream
+                        .send(Message::Text(msg.into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send subscription: {}",
+                                e
+                            ))
+                        })?;
                 }
-                
+
                 last_subscription_check = std::time::Instant::now();
             }
-
 
             // Handle incoming messages with timeout
             match tokio::time::timeout(Duration::from_secs(30), ws_stream.next()).await {
@@ -711,8 +757,12 @@ impl KrakenConnector {
                         }
                         Message::Ping(data) => {
                             // Respond to ping with pong
-                            ws_stream.send(Message::Pong(data)).await
-                                .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send pong: {}", e)))?;
+                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
+                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                    "Failed to send pong: {}",
+                                    e
+                                ))
+                            })?;
                         }
                         Message::Close(_) => {
                             info!("Kraken WebSocket connection closed by server");
@@ -732,8 +782,15 @@ impl KrakenConnector {
                 Err(_) => {
                     warn!("Kraken WebSocket timeout, sending ping");
                     // Send ping to keep connection alive
-                    ws_stream.send(Message::Ping(vec![].into())).await
-                        .map_err(|e| arbitrage_core::ArbitrageError::ExchangeConnection(format!("Failed to send ping: {}", e)))?;
+                    ws_stream
+                        .send(Message::Ping(vec![].into()))
+                        .await
+                        .map_err(|e| {
+                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                                "Failed to send ping: {}",
+                                e
+                            ))
+                        })?;
                 }
             }
 
@@ -746,7 +803,6 @@ impl KrakenConnector {
 
         Ok(())
     }
-
 
     /// Handle incoming text messages
     async fn handle_text_message(
@@ -800,20 +856,19 @@ impl KrakenConnector {
         Ok(())
     }
 
-
     /// Parse Kraken orderbook message into OrderBook
     fn parse_orderbook_message(arr: &[Value]) -> Result<OrderBook> {
         // Kraken format: [channelID, {"as":[[price,vol,ts],...], "bs":[[price,vol,ts],...]}, "book-10", "XBT/USD"]
         // or update: [channelID, {"a":[[price,vol,ts,updateType],...], "b":...}, "book-10", "XBT/USD"]
-        
-        let pair = arr.last()
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing pair".to_string()))?;
-        
+
+        let pair = arr.last().and_then(|v| v.as_str()).ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing pair".to_string())
+        })?;
+
         let symbol = Self::symbol_from_kraken_static(pair)?;
-        
+
         let data = &arr[1];
-        
+
         let mut asks = Vec::new();
         let mut bids = Vec::new();
 
@@ -855,7 +910,6 @@ impl KrakenConnector {
         })
     }
 
-
     /// Static version of symbol conversion for use in async contexts
     fn symbol_to_kraken_static(symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::Slash)
@@ -867,10 +921,12 @@ impl KrakenConnector {
     }
 
     fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
-        let asks_data = data["asks"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string()))?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| 
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string()))?;
+        let asks_data = data["asks"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
+        })?;
+        let bids_data = data["bids"].as_array().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
+        })?;
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -906,25 +962,35 @@ impl KrakenConnector {
 
     fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         // Kraken ticker format: c=[price, lot_volume], v=[today, 24h], ...
-        let last_price = data["c"].as_array()
+        let last_price = data["c"]
+            .as_array()
             .and_then(|arr| arr.first())
             .map(|v| parse_decimal(v))
             .transpose()?
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing last price".to_string()))?;
-        
-        let bid_price = data["b"].as_array()
-            .and_then(|arr| arr.first())
-            .map(|v| parse_decimal(v))
-            .transpose()?
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing bid price".to_string()))?;
-        
-        let ask_price = data["a"].as_array()
-            .and_then(|arr| arr.first())
-            .map(|v| parse_decimal(v))
-            .transpose()?
-            .ok_or_else(|| arbitrage_core::ArbitrageError::ExchangeConnection("Missing ask price".to_string()))?;
+            .ok_or_else(|| {
+                arbitrage_core::ArbitrageError::ExchangeConnection("Missing last price".to_string())
+            })?;
 
-        let volume_24h = data["v"].as_array()
+        let bid_price = data["b"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .map(|v| parse_decimal(v))
+            .transpose()?
+            .ok_or_else(|| {
+                arbitrage_core::ArbitrageError::ExchangeConnection("Missing bid price".to_string())
+            })?;
+
+        let ask_price = data["a"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .map(|v| parse_decimal(v))
+            .transpose()?
+            .ok_or_else(|| {
+                arbitrage_core::ArbitrageError::ExchangeConnection("Missing ask price".to_string())
+            })?;
+
+        let volume_24h = data["v"]
+            .as_array()
             .and_then(|arr| arr.get(1))
             .map(|v| parse_decimal(v))
             .transpose()?
@@ -942,4 +1008,3 @@ impl KrakenConnector {
         })
     }
 }
-
