@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Core strategy trait that all arbitrage strategies must implement
 pub trait Strategy: Send + Sync {
@@ -42,9 +43,9 @@ pub trait Strategy: Send + Sync {
 /// Bundle of market data for strategy analysis
 #[derive(Debug, Clone)]
 pub struct MarketBundle {
-    pub order_books: HashMap<(ExchangeId, Symbol), OrderBook>,
-    pub funding_rates: HashMap<(ExchangeId, Symbol), FundingRate>,
-    pub tickers: HashMap<(ExchangeId, Symbol), Ticker>,
+    pub order_books: HashMap<(ExchangeId, Arc<Symbol>), Arc<OrderBook>>,
+    pub funding_rates: HashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>,
+    pub tickers: HashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -58,87 +59,98 @@ impl MarketBundle {
         }
     }
 
-    pub fn add_order_book(&mut self, order_book: OrderBook) {
-        self.order_books
-            .insert((order_book.exchange, order_book.symbol.clone()), order_book);
-    }
-
-    pub fn add_funding_rate(&mut self, funding_rate: FundingRate) {
-        self.funding_rates.insert(
-            (funding_rate.exchange, funding_rate.symbol.clone()),
-            funding_rate,
+    pub fn add_order_book(&mut self, order_book: Arc<OrderBook>) {
+        self.order_books.insert(
+            (order_book.exchange, Arc::new(order_book.symbol.clone())),
+            Arc::clone(&order_book),
         );
     }
 
-    pub fn add_ticker(&mut self, ticker: Ticker) {
-        self.tickers
-            .insert((ticker.exchange, ticker.symbol.clone()), ticker);
+    pub fn add_funding_rate(&mut self, funding_rate: Arc<FundingRate>) {
+        self.funding_rates.insert(
+            (funding_rate.exchange, Arc::new(funding_rate.symbol.clone())),
+            Arc::clone(&funding_rate),
+        );
     }
 
-    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<&OrderBook> {
-        self.order_books.get(&(exchange, symbol.clone()))
+    pub fn add_ticker(&mut self, ticker: Arc<Ticker>) {
+        self.tickers.insert(
+            (ticker.exchange, Arc::new(ticker.symbol.clone())),
+            Arc::clone(&ticker),
+        );
     }
 
-    pub fn get_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<&FundingRate> {
-        self.funding_rates.get(&(exchange, symbol.clone()))
+    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<&Arc<OrderBook>> {
+        self.order_books.get(&(exchange, Arc::new(symbol.clone())))
     }
 
-    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<&Ticker> {
-        self.tickers.get(&(exchange, symbol.clone()))
+    pub fn get_funding_rate(
+        &self,
+        exchange: ExchangeId,
+        symbol: &Symbol,
+    ) -> Option<&Arc<FundingRate>> {
+        self.funding_rates
+            .get(&(exchange, Arc::new(symbol.clone())))
     }
 
-    /// Get all exchanges that have order books for a specific symbol
+    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<&Arc<Ticker>> {
+        self.tickers.get(&(exchange, Arc::new(symbol.clone())))
+    }
+
     pub fn get_exchanges_for_symbol(&self, symbol: &Symbol) -> Vec<ExchangeId> {
         self.order_books
             .keys()
-            .filter(|(_, s)| s == symbol)
+            .filter(|(_, s)| *s == Arc::new(symbol.clone()))
             .map(|(exchange, _)| *exchange)
             .collect()
     }
 
-    /// Get all unique symbols in the market bundle
-    pub fn get_all_symbols(&self) -> Vec<Symbol> {
-        let mut symbols: Vec<Symbol> = Vec::new();
+    pub fn get_all_symbols(&self) -> Vec<Arc<Symbol>> {
+        let mut symbols: Vec<Arc<Symbol>> = Vec::new();
 
-        // Get symbols from order books
-        symbols.extend(self.order_books.keys().map(|(_, symbol)| symbol.clone()));
+        symbols.extend(
+            self.order_books
+                .keys()
+                .map(|(_, symbol)| Arc::clone(symbol)),
+        );
 
-        // Get symbols from tickers
-        symbols.extend(self.tickers.keys().map(|(_, symbol)| symbol.clone()));
+        symbols.extend(self.tickers.keys().map(|(_, symbol)| Arc::clone(symbol)));
 
-        // Get symbols from funding rates
-        symbols.extend(self.funding_rates.keys().map(|(_, symbol)| symbol.clone()));
+        symbols.extend(
+            self.funding_rates
+                .keys()
+                .map(|(_, symbol)| Arc::clone(symbol)),
+        );
 
         symbols.sort_by_key(|a| a.to_pair());
         symbols.dedup();
         symbols
     }
 
-    /// Check if market data is available for a symbol on an exchange
     pub fn has_data(&self, exchange: ExchangeId, symbol: &Symbol) -> bool {
-        self.order_books.contains_key(&(exchange, symbol.clone()))
+        self.order_books
+            .contains_key(&(exchange, Arc::new(symbol.clone())))
     }
 
-    /// Get market data age for a symbol on an exchange
     pub fn get_data_age(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<chrono::Duration> {
         self.get_order_book(exchange, symbol)
             .map(|ob| self.timestamp - ob.timestamp)
     }
 
-    /// Get all order books for a specific symbol across all exchanges
-    pub fn get_order_books_for_symbol(&self, symbol: &Symbol) -> Vec<&OrderBook> {
+    pub fn get_order_books_for_symbol(&self, symbol: &Symbol) -> Vec<&Arc<OrderBook>> {
+        let target_symbol = Arc::new(symbol.clone());
         self.order_books
             .iter()
-            .filter(|((_, s), _)| s == symbol)
+            .filter(|((_, s), _)| *s == target_symbol)
             .map(|(_, ob)| ob)
             .collect()
     }
 
-    /// Get all tickers for a specific symbol across all exchanges
-    pub fn get_tickers_for_symbol(&self, symbol: &Symbol) -> Vec<&Ticker> {
+    pub fn get_tickers_for_symbol(&self, symbol: &Symbol) -> Vec<&Arc<Ticker>> {
+        let target_symbol = Arc::new(symbol.clone());
         self.tickers
             .iter()
-            .filter(|((_, s), _)| s == symbol)
+            .filter(|((_, s), _)| *s == target_symbol)
             .map(|(_, t)| t)
             .collect()
     }

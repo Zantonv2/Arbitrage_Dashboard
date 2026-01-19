@@ -24,6 +24,7 @@ statrs = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 sqlx = { workspace = true }
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
