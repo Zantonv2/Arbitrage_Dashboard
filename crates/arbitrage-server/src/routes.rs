@@ -83,31 +83,34 @@ pub async fn get_signals(
         status_filter: Some(arbitrage_core::storage::SignalStatus::Detected),
         symbol_filter: params.symbol.clone(),
         exchange_filter: None, // TODO: Parse exchange string to ExchangeId
-        min_confidence: params.min_confidence.map(|c| {
-            rust_decimal::Decimal::try_from(c).unwrap_or_default()
-        }),
+        min_confidence: params
+            .min_confidence
+            .map(|c| rust_decimal::Decimal::try_from(c).unwrap_or_default()),
         time_range: None,
     };
 
     // Query storage directly from state
-    match state.storage.query_signals(&query) {
+    match state.storage.query_signals(&query).await {
         Ok(stored_signals) => {
-            let signals: Vec<Value> = stored_signals.iter().map(|stored| {
-                json!({
-                    "id": stored.signal.id.to_string(),
-                    "symbol": stored.signal.symbol.to_pair(),
-                    "buy_exchange": stored.signal.buy_exchange.to_string(),
-                    "sell_exchange": stored.signal.sell_exchange.to_string(),
-                    "buy_price": stored.signal.buy_price.to_string(),
-                    "sell_price": stored.signal.sell_price.to_string(),
-                    "gross_profit_percent": stored.signal.gross_profit_percent.to_string(),
-                    "net_profit_percent": stored.signal.net_profit_percent.to_string(),
-                    "confidence": stored.confidence_score.to_string(),
-                    "recommended_size": stored.signal.recommended_size.to_string(),
-                    "detected_at": stored.timestamp.to_rfc3339(),
-                    "status": format!("{:?}", stored.status)
+            let signals: Vec<Value> = stored_signals
+                .iter()
+                .map(|stored| {
+                    json!({
+                        "id": stored.signal.id.to_string(),
+                        "symbol": stored.signal.symbol.to_pair(),
+                        "buy_exchange": stored.signal.buy_exchange.to_string(),
+                        "sell_exchange": stored.signal.sell_exchange.to_string(),
+                        "buy_price": stored.signal.buy_price.to_string(),
+                        "sell_price": stored.signal.sell_price.to_string(),
+                        "gross_profit_percent": stored.signal.gross_profit_percent.to_string(),
+                        "net_profit_percent": stored.signal.net_profit_percent.to_string(),
+                        "confidence": stored.confidence_score.to_string(),
+                        "recommended_size": stored.signal.recommended_size.to_string(),
+                        "detected_at": stored.timestamp.to_rfc3339(),
+                        "status": format!("{:?}", stored.status)
+                    })
                 })
-            }).collect();
+                .collect();
 
             let response = json!({
                 "signals": signals,
@@ -148,7 +151,7 @@ pub async fn get_signal(
         time_range: None,
     };
 
-    match state.storage.query_signals(&query) {
+    match state.storage.query_signals(&query).await {
         Ok(stored_signals) => {
             if let Some(stored) = stored_signals.iter().find(|s| s.signal.id == signal_uuid) {
                 let signal = json!({
@@ -206,15 +209,24 @@ pub async fn get_orderbook(
     };
 
     // Get order book from engine cache
-    match state.arbitrage_engine.get_order_book(exchange_id, &parsed_symbol) {
+    match state
+        .arbitrage_engine
+        .get_order_book(exchange_id, &parsed_symbol)
+    {
         Some(ob) => {
-            let bids: Vec<Value> = ob.bids.iter().take(20).map(|level| {
-                json!([level.price.to_string(), level.quantity.to_string()])
-            }).collect();
-            
-            let asks: Vec<Value> = ob.asks.iter().take(20).map(|level| {
-                json!([level.price.to_string(), level.quantity.to_string()])
-            }).collect();
+            let bids: Vec<Value> = ob
+                .bids
+                .iter()
+                .take(20)
+                .map(|level| json!([level.price.to_string(), level.quantity.to_string()]))
+                .collect();
+
+            let asks: Vec<Value> = ob
+                .asks
+                .iter()
+                .take(20)
+                .map(|level| json!([level.price.to_string(), level.quantity.to_string()]))
+                .collect();
 
             let orderbook = json!({
                 "exchange": exchange,
@@ -267,7 +279,7 @@ pub async fn prepare_execution(
         time_range: None,
     };
 
-    let stored_signals = match state.storage.query_signals(&query) {
+    let stored_signals = match state.storage.query_signals(&query).await {
         Ok(signals) => signals,
         Err(e) => {
             warn!("Failed to query signals: {}", e);
@@ -281,13 +293,14 @@ pub async fn prepare_execution(
     };
 
     // Use provided quantity or signal's recommended size
-    let quantity = request.quantity
+    let quantity = request
+        .quantity
         .map(|q| rust_decimal::Decimal::try_from(q).unwrap_or_default())
         .unwrap_or(stored_signal.signal.recommended_size);
 
     // Use ExecutionPreparer to create instruction
     let execution_preparer = arbitrage_core::execution_preparer::ExecutionPreparer::default();
-    
+
     match execution_preparer.prepare_execution(&stored_signal.signal, quantity) {
         Ok(instruction) => {
             let response = PrepareExecutionResponse {
@@ -297,8 +310,13 @@ pub async fn prepare_execution(
                     symbol: instruction.buy_order.symbol.to_pair(),
                     side: "buy".to_string(),
                     quantity: instruction.buy_order.quantity.to_f64().unwrap_or(0.0),
-                    price: instruction.buy_order.price.map(|p| p.to_f64().unwrap_or(0.0)),
-                    estimated_cost: instruction.buy_order.price
+                    price: instruction
+                        .buy_order
+                        .price
+                        .map(|p| p.to_f64().unwrap_or(0.0)),
+                    estimated_cost: instruction
+                        .buy_order
+                        .price
                         .map(|p| (p * instruction.buy_order.quantity).to_f64().unwrap_or(0.0))
                         .unwrap_or(0.0),
                     estimated_fee: instruction.buy_order.expected_fee.to_f64().unwrap_or(0.0),
@@ -308,9 +326,18 @@ pub async fn prepare_execution(
                     symbol: instruction.sell_order.symbol.to_pair(),
                     side: "sell".to_string(),
                     quantity: instruction.sell_order.quantity.to_f64().unwrap_or(0.0),
-                    price: instruction.sell_order.price.map(|p| p.to_f64().unwrap_or(0.0)),
-                    estimated_cost: instruction.sell_order.price
-                        .map(|p| (p * instruction.sell_order.quantity).to_f64().unwrap_or(0.0))
+                    price: instruction
+                        .sell_order
+                        .price
+                        .map(|p| p.to_f64().unwrap_or(0.0)),
+                    estimated_cost: instruction
+                        .sell_order
+                        .price
+                        .map(|p| {
+                            (p * instruction.sell_order.quantity)
+                                .to_f64()
+                                .unwrap_or(0.0)
+                        })
                         .unwrap_or(0.0),
                     estimated_fee: instruction.sell_order.expected_fee.to_f64().unwrap_or(0.0),
                 },
@@ -358,14 +385,14 @@ pub async fn get_analytics(
     debug!("GET /api/analytics with params: {:?}", params);
 
     let engine_stats = state.arbitrage_engine.get_stats();
-    
+
     let analytics = json!({
         "total_signals_detected": engine_stats.signals_detected,
         "total_signals_filtered": engine_stats.signals_filtered,
         "total_signals_emitted": engine_stats.signals_emitted,
         "active_symbols": engine_stats.active_symbols_count,
         "cached_order_books": engine_stats.order_books_count,
-        "period": params.get("period").unwrap_or(&"24h".to_string())
+        "period": params.get("period").cloned().unwrap_or_else(|| "24h".to_string())
     });
 
     Ok(Json(analytics))
@@ -376,13 +403,11 @@ pub async fn get_analytics(
 // ============================================================================
 
 /// Get exchange connection status
-pub async fn get_exchange_status(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+pub async fn get_exchange_status(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
     debug!("GET /api/status/exchanges");
 
     let bridge_stats = state.bridge.lock().await.get_stats().await;
-    
+
     let status = json!({
         "connected_exchanges": bridge_stats.connected_exchanges,
         "total_exchanges": bridge_stats.total_exchanges,
@@ -396,14 +421,12 @@ pub async fn get_exchange_status(
 }
 
 /// Get bridge service status
-pub async fn get_bridge_status(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+pub async fn get_bridge_status(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
     debug!("GET /api/status/bridge");
 
     let bridge_stats = state.bridge.lock().await.get_stats().await;
     let engine_stats = state.arbitrage_engine.get_stats();
-    
+
     let status = json!({
         "bridge": {
             "connected_exchanges": bridge_stats.connected_exchanges,
@@ -431,9 +454,7 @@ pub async fn get_bridge_status(
 // ============================================================================
 
 /// Get current configuration
-pub async fn get_config(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+pub async fn get_config(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
     debug!("GET /api/config");
 
     let config = json!({

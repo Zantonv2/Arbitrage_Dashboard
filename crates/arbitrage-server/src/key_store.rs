@@ -3,25 +3,25 @@
 //! Secure storage and management of API keys and credentials for exchange connections.
 //! Uses encryption at rest and secure memory handling.
 
+use arbitrage_core::types::ExchangeId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use arbitrage_core::types::ExchangeId;
 
 #[derive(Error, Debug)]
 pub enum KeyStoreError {
     #[error("Encryption error: {0}")]
     Encryption(String),
-    
+
     #[error("Authentication error: {0}")]
     Authentication(String),
-    
+
     #[error("Storage error: {0}")]
     Storage(String),
-    
+
     #[error("Key not found: {0}")]
     KeyNotFound(String),
-    
+
     #[error("Invalid key format: {0}")]
     InvalidKeyFormat(String),
 }
@@ -70,12 +70,15 @@ impl KeyStore {
 
         // Store credentials (in production, these would be encrypted)
         self.credentials.insert(credentials.exchange, credentials);
-        
+
         Ok(())
     }
 
     /// Retrieve credentials for an exchange
-    pub fn get_credentials(&self, exchange: &ExchangeId) -> Result<&ExchangeCredentials, KeyStoreError> {
+    pub fn get_credentials(
+        &self,
+        exchange: &ExchangeId,
+    ) -> Result<&ExchangeCredentials, KeyStoreError> {
         self.credentials
             .get(exchange)
             .ok_or_else(|| KeyStoreError::KeyNotFound(format!("No credentials for {}", exchange)))
@@ -100,18 +103,24 @@ impl KeyStore {
     /// Validate credentials format
     fn validate_credentials(&self, credentials: &ExchangeCredentials) -> Result<(), KeyStoreError> {
         if credentials.api_key.is_empty() {
-            return Err(KeyStoreError::InvalidKeyFormat("API key cannot be empty".to_string()));
+            return Err(KeyStoreError::InvalidKeyFormat(
+                "API key cannot be empty".to_string(),
+            ));
         }
 
         if credentials.api_secret.is_empty() {
-            return Err(KeyStoreError::InvalidKeyFormat("API secret cannot be empty".to_string()));
+            return Err(KeyStoreError::InvalidKeyFormat(
+                "API secret cannot be empty".to_string(),
+            ));
         }
 
         // Exchange-specific validation
         match credentials.exchange {
             ExchangeId::OKX => {
                 if credentials.passphrase.is_none() {
-                    return Err(KeyStoreError::InvalidKeyFormat("OKX requires passphrase".to_string()));
+                    return Err(KeyStoreError::InvalidKeyFormat(
+                        "OKX requires passphrase".to_string(),
+                    ));
                 }
             }
             _ => {
@@ -123,12 +132,19 @@ impl KeyStore {
     }
 
     /// Enable/disable credentials for an exchange
-    pub fn set_enabled(&mut self, exchange: &ExchangeId, enabled: bool) -> Result<(), KeyStoreError> {
+    pub fn set_enabled(
+        &mut self,
+        exchange: &ExchangeId,
+        enabled: bool,
+    ) -> Result<(), KeyStoreError> {
         if let Some(credentials) = self.credentials.get_mut(exchange) {
             credentials.enabled = enabled;
             Ok(())
         } else {
-            Err(KeyStoreError::KeyNotFound(format!("No credentials for {}", exchange)))
+            Err(KeyStoreError::KeyNotFound(format!(
+                "No credentials for {}",
+                exchange
+            )))
         }
     }
 
@@ -164,7 +180,7 @@ impl KeyStore {
 
 impl Default for KeyStore {
     fn default() -> Self {
-        Self::new().unwrap()
+        Self::new().expect("Failed to create default KeyStore")
     }
 }
 

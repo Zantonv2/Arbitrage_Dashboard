@@ -138,7 +138,7 @@ impl ArbitrageServer {
             max_execution_history: 5000,
             enable_compression: false,
         };
-        let storage = Arc::new(StorageService::new_async(storage_config).await?);
+        let storage = Arc::new(StorageService::new(storage_config).await?);
 
         let normalizer = Arc::new(Normalizer::new());
         let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
@@ -235,11 +235,9 @@ impl ArbitrageServer {
             .with_state(state.clone());
 
         // Static file serving for frontend
-        let static_files = ServeDir::new(&config.server.static_files_path)
-            .not_found_service(
-                ServeDir::new(&config.server.static_files_path)
-                    .append_index_html_on_directories(true),
-            );
+        let static_files = ServeDir::new(&config.server.static_files_path).not_found_service(
+            ServeDir::new(&config.server.static_files_path).append_index_html_on_directories(true),
+        );
 
         // Combine all routes
         let app = Router::new()
