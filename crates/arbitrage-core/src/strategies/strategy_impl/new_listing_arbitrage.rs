@@ -8,8 +8,8 @@ use crate::{ExchangeId, Result, Side, Symbol};
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 /// New Listing Cross-Exchange Arbitrage Strategy
@@ -35,9 +35,9 @@ pub struct NewListingArbitrageStrategy {
     config: StrategyConfig,
     #[allow(dead_code)]
     /// Track symbols we've seen before to detect new ones
-    known_symbols: HashSet<Symbol>,
+    known_symbols: FxHashSet<Symbol>,
     /// Track when symbols were first seen
-    symbol_first_seen: HashMap<Symbol, DateTime<Utc>>,
+    symbol_first_seen: FxHashMap<Symbol, DateTime<Utc>>,
 }
 
 impl NewListingArbitrageStrategy {
@@ -54,8 +54,8 @@ impl NewListingArbitrageStrategy {
                 risk_limits: RiskLimits::default(),
                 custom_params,
             },
-            known_symbols: HashSet::new(),
-            symbol_first_seen: HashMap::new(),
+            known_symbols: FxHashSet::default(),
+            symbol_first_seen: FxHashMap::default(),
         }
     }
 
@@ -190,7 +190,8 @@ impl NewListingArbitrageStrategy {
         let mut signals = Vec::new();
 
         // Group tickers by symbol to find cross-exchange opportunities
-        let mut symbol_tickers: HashMap<Symbol, Vec<(ExchangeId, &Ticker)>> = HashMap::new();
+        let mut symbol_tickers: FxHashMap<Symbol, Vec<(ExchangeId, &Ticker)>> =
+            FxHashMap::default();
 
         for ((exchange, symbol), ticker) in &market_data.tickers {
             if self.is_newly_listed(symbol) && self.is_valid_new_listing(symbol, ticker) {
@@ -347,7 +348,7 @@ impl Strategy for NewListingArbitrageStrategy {
             .tickers
             .keys()
             .map(|(_, symbol)| symbol.clone())
-            .collect::<HashSet<_>>()
+            .collect::<FxHashSet<_>>()
             .into_iter()
             .collect();
 
@@ -357,7 +358,8 @@ impl Strategy for NewListingArbitrageStrategy {
         );
 
         // Group tickers and order books by symbol to find cross-exchange opportunities
-        let mut symbol_data: HashMap<Symbol, Vec<(ExchangeId, Decimal, Decimal)>> = HashMap::new();
+        let mut symbol_data: FxHashMap<Symbol, Vec<(ExchangeId, Decimal, Decimal)>> =
+            FxHashMap::default();
 
         // Collect price data from both tickers and order books
         for symbol in &current_symbols {
