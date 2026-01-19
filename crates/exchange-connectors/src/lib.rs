@@ -1,9 +1,13 @@
 pub mod connections;
 pub mod connector;
+pub mod connector_trait;
+pub mod errors;
 pub mod events;
 pub mod exchange_manager;
 pub mod rate_limiter;
+pub mod rest_client;
 pub mod utils;
+pub mod websocket_pool;
 
 // Re-exports
 pub use connections::{
@@ -11,10 +15,20 @@ pub use connections::{
     OKXConnector,
 };
 pub use connector::ExchangeConnector;
+pub use connector_trait::{
+    ConnectorBase, ExchangeConnector as ExchangeConnectorTrait, TradingConnector,
+};
+pub use errors::{ErrorContext, ExchangeErrorMapper};
 pub use events::{ConnectionEvent, MarketDataEvent};
 pub use exchange_manager::{ExchangeManager, ExchangeManagerConfig};
 pub use rate_limiter::{RateLimitConfig, RateLimiter, UnifiedRateLimitManager};
+pub use rest_client::{
+    create_rest_client_config, ExchangeRestClient, RestClientConfig, RestClientManager,
+};
 pub use utils::*;
+pub use websocket_pool::{
+    ConnectionState, ReconnectPolicy, WebSocketEvent, WebSocketMessage, WebSocketPool,
+};
 
 use arbitrage_core::{types::ExchangeId, Result};
 

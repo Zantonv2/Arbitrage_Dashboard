@@ -31,6 +31,7 @@ use chrono::{DateTime, Duration, Utc};
 use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -97,10 +98,9 @@ pub struct EngineStats {
 /// 3. Processing raw signals through the validation pipeline
 /// 4. Emitting validated signals for execution or display
 pub struct ArbitrageEngine {
-    // Market data caches (concurrent-safe)
-    order_books: Arc<DashMap<(ExchangeId, Symbol), OrderBook>>,
-    tickers: Arc<DashMap<(ExchangeId, Symbol), Ticker>>,
-    funding_rates: Arc<DashMap<(ExchangeId, Symbol), FundingRate>>,
+    order_books: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<OrderBook>>>,
+    tickers: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>>,
+    funding_rates: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>>,
 
     // Signal deduplication cache
     signal_cache: Arc<DashMap<OpportunityKey, CachedSignal>>,
@@ -184,25 +184,25 @@ impl ArbitrageEngine {
 
     /// Update order book cache
     pub async fn update_order_book(&self, order_book: OrderBook) -> Result<()> {
-        let key = (order_book.exchange, order_book.symbol.clone());
+        let symbol = Arc::new(order_book.symbol.clone());
+        let key = (order_book.exchange, Arc::clone(&symbol));
 
         debug!(
             "Updating order book: {} on {} ({} bids, {} asks)",
-            order_book.symbol,
+            symbol,
             order_book.exchange,
             order_book.bids.len(),
             order_book.asks.len()
         );
 
-        // Validate order book before caching
         if !order_book.is_valid() {
             return Err(ArbitrageError::Validation(format!(
                 "Invalid order book for {} on {}",
-                order_book.symbol, order_book.exchange
+                symbol, order_book.exchange
             )));
         }
 
-        self.order_books.insert(key, order_book);
+        self.order_books.insert(key, Arc::new(order_book));
         self.increment_stat("order_book_updates");
 
         Ok(())
@@ -210,14 +210,15 @@ impl ArbitrageEngine {
 
     /// Update ticker cache
     pub async fn update_ticker(&self, ticker: Ticker) -> Result<()> {
-        let key = (ticker.exchange, ticker.symbol.clone());
+        let symbol = Arc::new(ticker.symbol.clone());
+        let key = (ticker.exchange, Arc::clone(&symbol));
 
         debug!(
             "Updating ticker: {} on {} (bid={}, ask={})",
-            ticker.symbol, ticker.exchange, ticker.bid, ticker.ask
+            symbol, ticker.exchange, ticker.bid, ticker.ask
         );
 
-        self.tickers.insert(key, ticker);
+        self.tickers.insert(key, Arc::new(ticker));
         self.increment_stat("ticker_updates");
 
         Ok(())
@@ -225,14 +226,15 @@ impl ArbitrageEngine {
 
     /// Update funding rate cache
     pub async fn update_funding_rate(&self, funding_rate: FundingRate) -> Result<()> {
-        let key = (funding_rate.exchange, funding_rate.symbol.clone());
+        let symbol = Arc::new(funding_rate.symbol.clone());
+        let key = (funding_rate.exchange, Arc::clone(&symbol));
 
         debug!(
             "Updating funding rate: {} on {} (rate={})",
-            funding_rate.symbol, funding_rate.exchange, funding_rate.rate
+            symbol, funding_rate.exchange, funding_rate.rate
         );
 
-        self.funding_rates.insert(key, funding_rate);
+        self.funding_rates.insert(key, Arc::new(funding_rate));
         self.increment_stat("funding_rate_updates");
 
         Ok(())
@@ -404,14 +406,13 @@ impl ArbitrageEngine {
                 }
                 Err(e) => {
                     debug!("Size calculation failed: {}", e);
-                    // Continue with zero size - signal still valid for display
                 }
             }
         }
 
         // Stage 7: Confidence scoring
         if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
-            let target_qty = signal.recommended_size.max(Decimal::new(1, 2)); // Min 0.01
+            let target_qty = signal.recommended_size.max(Decimal::new(1, 2));
 
             if let (Some(buy_vwap), Some(sell_vwap)) =
                 (buy_ob.vwap_buy(target_qty), sell_ob.vwap_sell(target_qty))
@@ -479,15 +480,15 @@ impl ArbitrageEngine {
         let mut bundle = MarketBundle::new();
 
         for entry in self.order_books.iter() {
-            bundle.add_order_book(entry.value().clone());
+            bundle.add_order_book(Arc::clone(entry.value()));
         }
 
         for entry in self.tickers.iter() {
-            bundle.add_ticker(entry.value().clone());
+            bundle.add_ticker(Arc::clone(entry.value()));
         }
 
         for entry in self.funding_rates.iter() {
-            bundle.add_funding_rate(entry.value().clone());
+            bundle.add_funding_rate(Arc::clone(entry.value()));
         }
 
         bundle
@@ -651,9 +652,9 @@ impl ArbitrageEngine {
 
     /// Get engine statistics
     pub fn get_stats(&self) -> EngineStats {
-        let mut unique_symbols = std::collections::HashSet::new();
+        let mut unique_symbols = FxHashSet::default();
         for entry in self.order_books.iter() {
-            unique_symbols.insert(entry.key().1.clone());
+            unique_symbols.insert(Arc::clone(&entry.key().1));
         }
 
         EngineStats {
@@ -689,31 +690,32 @@ impl ArbitrageEngine {
     }
 
     /// Get order book from cache
-    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<OrderBook> {
+    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Arc<OrderBook>> {
         self.order_books
-            .get(&(exchange, symbol.clone()))
-            .map(|v| v.clone())
+            .get(&(exchange, Arc::new(symbol.clone())))
+            .map(|v| Arc::clone(&v))
     }
 
-    /// Get all cached order books
-    pub fn get_all_order_books(&self) -> Vec<OrderBook> {
+    pub fn get_all_order_books(&self) -> Vec<Arc<OrderBook>> {
         self.order_books
             .iter()
-            .map(|entry| entry.value().clone())
+            .map(|entry| Arc::clone(entry.value()))
             .collect()
     }
 
-    /// Get ticker from cache
-    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Ticker> {
+    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Arc<Ticker>> {
         self.tickers
-            .get(&(exchange, symbol.clone()))
-            .map(|v| v.clone())
+            .get(&(exchange, Arc::new(symbol.clone())))
+            .map(|v| Arc::clone(&v))
     }
 
-    /// Get funding rate from cache
-    pub fn get_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<FundingRate> {
+    pub fn get_funding_rate(
+        &self,
+        exchange: ExchangeId,
+        symbol: &Symbol,
+    ) -> Option<Arc<FundingRate>> {
         self.funding_rates
-            .get(&(exchange, symbol.clone()))
-            .map(|v| v.clone())
+            .get(&(exchange, Arc::new(symbol.clone())))
+            .map(|v| Arc::clone(&v))
     }
 }
