@@ -27,6 +27,7 @@ logs/
 
 # Workflow outputs
 outputs/
+output/
 
 # Database
 data/
