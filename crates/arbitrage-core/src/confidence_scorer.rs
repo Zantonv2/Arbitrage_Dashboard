@@ -10,6 +10,19 @@ pub enum NetSpreadResult {
     Unprofitable,
 }
 
+impl NetSpreadResult {
+    pub fn is_unprofitable(&self) -> bool {
+        matches!(self, NetSpreadResult::Unprofitable)
+    }
+
+    pub fn profit_value(self) -> Option<i32> {
+        match self {
+            NetSpreadResult::Profit(value) => Some(value),
+            NetSpreadResult::Unprofitable => None,
+        }
+    }
+}
+
 /// Factors contributing to confidence score
 #[derive(Debug, Clone)]
 pub struct ConfidenceFactors {

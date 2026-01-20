@@ -54,7 +54,7 @@ mod division_by_zero_tests {
             ExchangeId::ByBit,
         );
 
-        assert_eq!(result.unwrap(), -1);
+        assert_eq!(result.profit_value().unwrap(), -1);
     }
 
     #[test]
@@ -76,7 +76,7 @@ mod division_by_zero_tests {
             ExchangeId::ByBit,
         );
 
-        assert_eq!(result.unwrap(), -1);
+        assert_eq!(result.profit_value().unwrap(), -1);
     }
 }
 
@@ -162,7 +162,7 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
-        let spread = result.unwrap();
+        let spread = result.profit_value().unwrap();
         assert!(
             spread > 0,
             "Expected positive spread with negative maker fee, got {}",
@@ -189,7 +189,7 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
-        let spread = result.unwrap();
+        let spread = result.profit_value().unwrap();
         assert!(spread > 0);
     }
 
@@ -222,7 +222,9 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
-        assert!(result_with_rebate.unwrap() > result_standard.unwrap());
+        assert!(
+            result_with_rebate.profit_value().unwrap() > result_standard.profit_value().unwrap()
+        );
     }
 }
 
