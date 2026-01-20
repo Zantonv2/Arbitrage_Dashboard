@@ -1,6 +1,6 @@
 use crate::{ExchangeId, Symbol};
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-use rand::rng;
+use rand::{rng, Rng};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,12 +15,12 @@ pub struct EncryptedString {
 }
 
 impl EncryptedString {
-    fn derive_key(master_password: &[u8], salt: &[u8]) -> &Key<Aes256Gcm> {
+    fn derive_key(master_password: &[u8], salt: &[u8]) -> Key<Aes256Gcm> {
         let mut key_bytes = [0u8; KEY_SIZE];
         for (i, byte) in master_password.iter().cycle().take(KEY_SIZE).enumerate() {
             key_bytes[i] = *byte ^ salt[i % salt.len()];
         }
-        Key::from_slice(&key_bytes)
+        *Key::from_slice(&key_bytes)
     }
 
     pub fn new(plaintext: &str, master_password: &str) -> Self {
