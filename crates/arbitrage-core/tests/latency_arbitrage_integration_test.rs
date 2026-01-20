@@ -85,11 +85,11 @@ async fn test_latency_arbitrage_filtering() -> Result<()> {
     let latency_strategy = LatencyArbitrageStrategy::new();
     let symbol = Symbol::new("ETH", "USDT");
 
-    let mut signal = RawSignal::new("latency_arbitrage", Arc::new(symbol.clone()));
+    let mut signal = RawSignal::new("latency_arbitrage", symbol.clone());
 
     let buy_leg = TradeLeg::new(
         ExchangeId::GateIo,
-        Arc::new(symbol.clone()),
+        symbol.clone(),
         Side::Buy,
         Decimal::from(2990),
         Decimal::from(2),
@@ -98,7 +98,7 @@ async fn test_latency_arbitrage_filtering() -> Result<()> {
 
     let sell_leg = TradeLeg::new(
         ExchangeId::OKX,
-        Arc::new(symbol.clone()),
+        symbol.clone(),
         Side::Sell,
         Decimal::from(3030),
         Decimal::from(2),

@@ -708,13 +708,9 @@ impl ArbitrageEngine {
     }
 
     /// Get order book from cache
-    pub fn get_order_book(
-        &self,
-        exchange: ExchangeId,
-        symbol: Arc<Symbol>,
-    ) -> Option<Arc<OrderBook>> {
+    pub fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Arc<OrderBook>> {
         self.order_books
-            .get(&(exchange, symbol))
+            .get(&(exchange, Arc::new(symbol.clone())))
             .map(|v| Arc::clone(&v))
     }
 
@@ -725,19 +721,19 @@ impl ArbitrageEngine {
             .collect()
     }
 
-    pub fn get_ticker(&self, exchange: ExchangeId, symbol: Arc<Symbol>) -> Option<Arc<Ticker>> {
+    pub fn get_ticker(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Arc<Ticker>> {
         self.tickers
-            .get(&(exchange, symbol))
+            .get(&(exchange, Arc::new(symbol.clone())))
             .map(|v| Arc::clone(&v))
     }
 
     pub fn get_funding_rate(
         &self,
         exchange: ExchangeId,
-        symbol: Arc<Symbol>,
+        symbol: &Symbol,
     ) -> Option<Arc<FundingRate>> {
         self.funding_rates
-            .get(&(exchange, symbol))
+            .get(&(exchange, Arc::new(symbol.clone())))
             .map(|v| Arc::clone(&v))
     }
 }

@@ -9,8 +9,6 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::Arc;
 
 /// Stablecoin Peg Arbitrage Strategy
 ///
@@ -29,10 +27,9 @@ use std::sync::Arc;
 /// - Stablecoin tickers from all exchanges
 /// - Order book depth for liquidity validation
 /// - Cross-stablecoin pairs (USDT/USDC, etc.)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StablecoinArbitrageStrategy {
     config: StrategyConfig,
-    peg_targets_cache: Mutex<Option<HashMap<String, Decimal>>>,
 }
 
 impl StablecoinArbitrageStrategy {
@@ -45,16 +42,12 @@ impl StablecoinArbitrageStrategy {
                 custom_params: StablecoinDefaults::get_custom_params(),
                 ..Default::default()
             },
-            peg_targets_cache: Mutex::new(None),
         }
     }
 
     /// Create with custom configuration
     pub fn with_config(config: StrategyConfig) -> Self {
-        Self {
-            config,
-            peg_targets_cache: Mutex::new(None),
-        }
+        Self { config }
     }
 
     /// Get supported exchanges for stablecoin arbitrage
@@ -62,13 +55,8 @@ impl StablecoinArbitrageStrategy {
         ExchangeCapabilities::get_cex_arbitrage_exchanges()
     }
 
-    /// Get configured peg targets (cached)
+    /// Get configured peg targets
     fn get_peg_targets(&self) -> HashMap<String, Decimal> {
-        let mut cache = self.peg_targets_cache.lock().unwrap();
-        if let Some(ref cached) = *cache {
-            return cached.clone();
-        }
-
         let mut targets = HashMap::new();
 
         if let Some(peg_targets) = self.config.custom_params.get("peg_targets") {
@@ -83,6 +71,7 @@ impl StablecoinArbitrageStrategy {
             }
         }
 
+        // Default targets if not configured
         if targets.is_empty() {
             targets.insert("USDT".to_string(), Decimal::ONE);
             targets.insert("USDC".to_string(), Decimal::ONE);
@@ -91,7 +80,6 @@ impl StablecoinArbitrageStrategy {
             targets.insert("TUSD".to_string(), Decimal::ONE);
         }
 
-        *cache = Some(targets.clone());
         targets
     }
 
@@ -462,8 +450,6 @@ impl Strategy for StablecoinArbitrageStrategy {
 
     fn update_config(&mut self, config: StrategyConfig) -> Result<()> {
         self.config = config;
-        let mut cache = self.peg_targets_cache.lock().unwrap();
-        *cache = None;
         Ok(())
     }
 }

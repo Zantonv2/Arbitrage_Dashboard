@@ -916,7 +916,7 @@ mod additional_core_benchmarks {
             b.iter(|| {
                 black_box(arbitrage_core::strategies::TradeLeg::new(
                     ExchangeId::OKX,
-                    Arc::new(Symbol::new("BTC", "USDT")),
+                    Symbol::new("BTC", "USDT"),
                     Side::Buy,
                     Decimal::from(50000),
                     Decimal::from(1),

@@ -10,7 +10,6 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::json;
-use std::sync::Arc;
 use tracing::debug;
 
 /// New Listing Cross-Exchange Arbitrage Strategy
@@ -269,12 +268,12 @@ impl NewListingArbitrageStrategy {
                         }
 
                         // Create signal
-                        let mut signal = RawSignal::new(self.id(), Arc::new(symbol.clone()));
+                        let mut signal = RawSignal::new(self.id(), symbol.clone());
 
                         // Buy leg
                         let buy_leg = TradeLeg::new(
                             buy_exchange,
-                            Arc::new(symbol.clone()),
+                            symbol.clone(),
                             Side::Buy,
                             buy_price,
                             liquidity,
@@ -284,7 +283,7 @@ impl NewListingArbitrageStrategy {
                         // Sell leg
                         let sell_leg = TradeLeg::new(
                             sell_exchange,
-                            Arc::new(symbol.clone()),
+                            symbol.clone(),
                             Side::Sell,
                             sell_price,
                             liquidity,
@@ -475,12 +474,12 @@ impl Strategy for NewListingArbitrageStrategy {
                         }
 
                         // Create signal
-                        let mut signal = RawSignal::new(self.id(), Arc::new(symbol.clone()));
+                        let mut signal = RawSignal::new(self.id(), symbol.clone());
 
                         // Buy leg (buy at lower price)
                         let buy_leg = TradeLeg::new(
                             buy_exchange,
-                            Arc::new(symbol.clone()),
+                            symbol.clone(),
                             Side::Buy,
                             buy_price,
                             liquidity,
@@ -490,7 +489,7 @@ impl Strategy for NewListingArbitrageStrategy {
                         // Sell leg (sell at higher price)
                         let sell_leg = TradeLeg::new(
                             sell_exchange,
-                            Arc::new(symbol.clone()),
+                            symbol.clone(),
                             Side::Sell,
                             sell_price,
                             liquidity,

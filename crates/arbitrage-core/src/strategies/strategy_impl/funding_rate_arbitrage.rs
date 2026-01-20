@@ -9,7 +9,6 @@ use chrono::{Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
-use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Funding Rate Arbitrage Strategy
@@ -302,7 +301,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             // Add perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                Arc::new((**symbol).clone()),
+                (**symbol).clone(),
                 perp_side,
                 spot_price, // Use spot price as approximation for perp price
                 position_quantity,
@@ -317,7 +316,7 @@ impl Strategy for FundingRateArbitrageStrategy {
 
             let spot_leg = TradeLeg::new(
                 *exchange,
-                Arc::new((**symbol).clone()),
+                (**symbol).clone(),
                 spot_side,
                 spot_price,
                 hedge_quantity,

@@ -10,7 +10,6 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::debug;
 
 /// Convergence Arbitrage Strategy

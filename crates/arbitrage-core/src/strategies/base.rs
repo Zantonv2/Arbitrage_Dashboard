@@ -237,7 +237,7 @@ impl Default for MarketBundle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawSignal {
     pub strategy_id: String,
-    pub symbol: Arc<Symbol>,
+    pub symbol: Symbol,
     pub legs: Vec<TradeLeg>,
     pub expected_profit_bps: i32,
     pub basis_bps: Option<i32>,
@@ -247,7 +247,7 @@ pub struct RawSignal {
 }
 
 impl RawSignal {
-    pub fn new(strategy_id: impl Into<String>, symbol: Arc<Symbol>) -> Self {
+    pub fn new(strategy_id: impl Into<String>, symbol: Symbol) -> Self {
         Self {
             strategy_id: strategy_id.into(),
             symbol,
@@ -266,26 +266,14 @@ impl RawSignal {
 
     /// Add a buy leg with fluent builder pattern
     pub fn add_buy_leg(mut self, exchange: ExchangeId, price: Decimal, quantity: Decimal) -> Self {
-        let leg = TradeLeg::new(
-            exchange,
-            Arc::clone(&self.symbol),
-            Side::Buy,
-            price,
-            quantity,
-        );
+        let leg = TradeLeg::new(exchange, self.symbol.clone(), Side::Buy, price, quantity);
         self.legs.push(leg);
         self
     }
 
     /// Add a sell leg with fluent builder pattern
     pub fn add_sell_leg(mut self, exchange: ExchangeId, price: Decimal, quantity: Decimal) -> Self {
-        let leg = TradeLeg::new(
-            exchange,
-            Arc::clone(&self.symbol),
-            Side::Sell,
-            price,
-            quantity,
-        );
+        let leg = TradeLeg::new(exchange, self.symbol.clone(), Side::Sell, price, quantity);
         self.legs.push(leg);
         self
     }
@@ -343,7 +331,7 @@ impl RawSignal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeLeg {
     pub exchange: ExchangeId,
-    pub symbol: Arc<Symbol>,
+    pub symbol: Symbol,
     pub side: Side,
     pub price: Decimal,
     pub quantity: Decimal,
@@ -353,7 +341,7 @@ pub struct TradeLeg {
 impl TradeLeg {
     pub fn new(
         exchange: ExchangeId,
-        symbol: Arc<Symbol>,
+        symbol: Symbol,
         side: Side,
         price: Decimal,
         quantity: Decimal,

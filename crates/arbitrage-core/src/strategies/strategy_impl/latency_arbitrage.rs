@@ -10,7 +10,6 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Temporal (Latency) Arbitrage Strategy
 ///
@@ -117,7 +116,7 @@ impl Strategy for LatencyArbitrageStrategy {
 
             // Collect prices from all exchanges
             for exchange in self.get_exchanges_by_latency() {
-                if let Some(ticker) = market_data.get_ticker(exchange, Arc::clone(&symbol)) {
+                if let Some(ticker) = market_data.get_ticker(exchange, &symbol) {
                     let mid_price = (ticker.bid + ticker.ask) / Decimal::from(2);
                     exchange_prices.push((exchange, mid_price));
                 }
