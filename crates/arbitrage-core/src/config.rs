@@ -12,6 +12,7 @@ const NONCE_SIZE: usize = 12;
 pub struct EncryptedString {
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
+    salt: Vec<u8>,
 }
 
 impl EncryptedString {
@@ -20,13 +21,14 @@ impl EncryptedString {
         for (i, byte) in master_password.iter().cycle().take(KEY_SIZE).enumerate() {
             key_bytes[i] = *byte ^ salt[i % salt.len()];
         }
-        *Key::from_slice(&key_bytes)
+        *Key::<Aes256Gcm>::from_slice(&key_bytes)
     }
 
     pub fn new(plaintext: &str, master_password: &str) -> Self {
         let salt: [u8; 16] = rng().random();
         let key = Self::derive_key(master_password.as_bytes(), &salt);
-        let nonce = Nonce::from_slice(&rng().random::<[u8; NONCE_SIZE]>());
+        let nonce_array: [u8; NONCE_SIZE] = rng().random();
+        let nonce = Nonce::from_slice(&nonce_array);
 
         let cipher = Aes256Gcm::new(&key);
         let ciphertext = cipher
@@ -36,19 +38,28 @@ impl EncryptedString {
         Self {
             ciphertext,
             nonce: nonce.to_vec(),
+            salt: salt.to_vec(),
         }
     }
 
     pub fn decrypt(&self, master_password: &str) -> Result<String, String> {
-        let salt: [u8; 16] = [0u8; 16];
+        let salt: [u8; 16] = self
+            .salt
+            .clone()
+            .try_into()
+            .map_err(|_| "Invalid salt length")?;
         let key = Self::derive_key(master_password.as_bytes(), &salt);
         let nonce = Nonce::from_slice(&self.nonce);
 
         let cipher = Aes256Gcm::new(&key);
         cipher
-            .decrypt(nonce, &self.ciphertext)
+            .decrypt(nonce, &*self.ciphertext)
             .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
             .map_err(|e| format!("Decryption failed: {}", e))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ciphertext.is_empty()
     }
 }
 
