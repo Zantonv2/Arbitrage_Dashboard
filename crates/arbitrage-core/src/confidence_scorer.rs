@@ -15,6 +15,10 @@ impl NetSpreadResult {
         matches!(self, NetSpreadResult::Unprofitable)
     }
 
+    pub fn is_profitable(&self) -> bool {
+        matches!(self, NetSpreadResult::Profit(_))
+    }
+
     pub fn profit_value(self) -> Option<i32> {
         match self {
             NetSpreadResult::Profit(value) => Some(value),

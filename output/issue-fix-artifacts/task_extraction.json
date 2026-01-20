@@ -1,134 +1,151 @@
 {
-  "issue_number": 84,
-  "issue_title": "[CRITICAL]: Input Validation Defects - Zero/Division/Negative/Bounds Issues",
-  "atomic_tasks": [
+  "issue_id": 85,
+  "issue_title": "[CRITICAL]: Reliability Defects - Magic Values/Race Conditions/Security",
+  "consolidated_from": [
+    "magic-value-return.md",
+    "stat-race-condition.md",
+    "credential-exposure.md"
+  ],
+  "tasks": [
     {
       "id": "T1",
-      "title": "Add effective_buy validation before division in calculate_net_spread_bps",
-      "description": "Add explicit check for effective_buy <= Decimal::ZERO before division in confidence_scorer.rs:184",
+      "category": "Magic Value Return",
+      "title": "Define NetSpreadResult enum with explicit variants",
+      "description": "Create a Result-like enum NetSpreadResult with Profit(i32) and Unprofitable variants to replace magic value -1",
       "file": "crates/arbitrage-core/src/confidence_scorer.rs",
-      "line": 184,
       "acceptance_criteria": [
-        "effective_buy validation added before line 184",
-        "Function returns error or -1 when effective_buy <= 0",
-        "No division by zero possible"
+        "NetSpreadResult enum defined with Profit(i32) and Unprofitable variants",
+        "calculate_net_spread_bps signature returns NetSpreadResult",
+        "Old magic value -1 replaced with NetSpreadResult::Unprofitable"
       ],
-      "difficulty": 2,
-      "loc_estimate": 5,
-      "risk_profile": "medium",
-      "dependencies": []
+      "difficulty": 4,
+      "loc_estimate": 30,
+      "dependencies": [],
+      "risk_profile": {
+        "security": "low",
+        "performance": "none",
+        "edge": "low"
+      }
     },
     {
       "id": "T2",
-      "title": "Modify OrderBook::is_valid() to require at least one bid and one ask level",
-      "description": "Change is_valid() in types.rs to reject empty order books",
-      "file": "crates/arbitrage-core/src/types.rs",
-      "line": 212,
+      "category": "Magic Value Return",
+      "title": "Update call sites in arbitrage_engine.rs",
+      "description": "Update all call sites of calculate_net_spread_bps to handle NetSpreadResult explicitly",
+      "file": "crates/arbitrage-core/src/arbitrage_engine.rs",
       "acceptance_criteria": [
-        "OrderBook::is_valid() returns false when bids.is_empty()",
-        "OrderBook::is_valid() returns false when asks.is_empty()",
-        "Empty order book validation prevents false positives"
+        "Process_signal_pipeline handles NetSpreadResult::Profit and NetSpreadResult::Unprofitable",
+        "No more net_spread_bps < 0 checks - use pattern matching instead",
+        "Compile-time guarantees that all cases are handled"
       ],
       "difficulty": 3,
-      "loc_estimate": 8,
-      "risk_profile": "medium",
-      "dependencies": []
+      "loc_estimate": 20,
+      "dependencies": ["T1"],
+      "risk_profile": {
+        "security": "low",
+        "performance": "none",
+        "edge": "low"
+      }
     },
     {
       "id": "T3",
-      "title": "Add validation that fee rates must be non-negative in FeeSchedule::new()",
-      "description": "Add validation in types.rs FeeSchedule::new() to reject negative fees",
-      "file": "crates/arbitrage-core/src/types.rs",
-      "line": 484,
+      "category": "Race Condition",
+      "title": "Convert increment_stat to use atomic fetch_add",
+      "description": "Replace DashMap-based counter with AtomicU64 and fetch_add operations",
+      "file": "crates/arbitrage-core/src/arbitrage_engine.rs",
       "acceptance_criteria": [
-        "FeeSchedule::new() validates maker_fee >= 0",
-        "FeeSchedule::new() validates taker_fee >= 0",
-        "Returns error or panics with clear message for negative fees"
+        "EngineStats struct uses AtomicU64 for counters",
+        "increment_stat uses atomic fetch_add",
+        "No data races under concurrent access"
       ],
-      "difficulty": 2,
-      "loc_estimate": 6,
-      "risk_profile": "low",
-      "dependencies": []
+      "difficulty": 5,
+      "loc_estimate": 50,
+      "dependencies": [],
+      "risk_profile": {
+        "security": "low",
+        "performance": "medium",
+        "edge": "low"
+      }
     },
     {
       "id": "T4",
-      "title": "Add validation in Signal::new() to reject future timestamps",
-      "description": "Validate created_at is not in the future when creating signals",
-      "file": "crates/arbitrage-core/src/types.rs",
-      "line": 359,
+      "category": "Race Condition",
+      "title": "Add concurrent stress tests for stat tracking",
+      "description": "Add tests that spawn multiple threads incrementing counters concurrently",
+      "file": "crates/arbitrage-core/src/arbitrage_engine.rs",
       "acceptance_criteria": [
-        "Signal::new() validates created_at <= Utc::now()",
-        "Signal rejects future timestamps with clear error"
+        "Test spawns 100+ threads incrementing counters",
+        "No race conditions detected",
+        "Final count matches expected value"
       ],
-      "difficulty": 2,
-      "loc_estimate": 5,
-      "risk_profile": "low",
-      "dependencies": []
+      "difficulty": 3,
+      "loc_estimate": 40,
+      "dependencies": ["T3"],
+      "risk_profile": {
+        "security": "low",
+        "performance": "low",
+        "edge": "low"
+      }
     },
     {
       "id": "T5",
-      "title": "Fix age_seconds() to handle future timestamps safely",
-      "description": "Use num_seconds().abs() or check for negative duration in age_seconds()",
-      "file": "crates/arbitrage-core/src/types.rs",
-      "line": 392,
+      "category": "Credential Security",
+      "title": "Implement encrypted credential storage",
+      "description": "Add encrypted string wrapper for credentials using AES-256-GCM or similar",
+      "file": "crates/arbitrage-core/src/config.rs",
       "acceptance_criteria": [
-        "age_seconds() returns 0 for future timestamps",
-        "No panic on future timestamp edge cases",
-        "Duration check prevents negative age values"
+        "EncryptedString wrapper type defined",
+        "Credentials are encrypted at rest in memory",
+        "Plain text never stored in struct fields"
       ],
-      "difficulty": 2,
-      "loc_estimate": 4,
-      "risk_profile": "medium",
-      "dependencies": ["T4"]
+      "difficulty": 7,
+      "loc_estimate": 100,
+      "dependencies": [],
+      "risk_profile": {
+        "security": "high",
+        "performance": "low",
+        "edge": "medium"
+      }
     },
     {
       "id": "T6",
-      "title": "Add expected_profit validation in validate_instruction()",
-      "description": "Add check for negative expected_profit alongside worst_case_profit check",
-      "file": "crates/arbitrage-core/src/execution_preparer.rs",
-      "line": 146,
+      "category": "Credential Security",
+      "title": "Add environment variable credential injection",
+      "description": "Add support for loading credentials from environment variables",
+      "file": "crates/arbitrage-core/src/config.rs",
       "acceptance_criteria": [
-        "validate_instruction() checks expected_profit <= 0",
-        "Adds validation error for negative expected_profit",
-        "Integration tests cover negative profit scenarios"
+        "API_KEY, API_SECRET, PASSPHRASE env vars take precedence",
+        "Config can be loaded from .env file",
+        "Clear fall-back order: env > .env > config file > default"
       ],
-      "difficulty": 2,
-      "loc_estimate": 6,
-      "risk_profile": "medium",
-      "dependencies": []
+      "difficulty": 4,
+      "loc_estimate": 60,
+      "dependencies": ["T5"],
+      "risk_profile": {
+        "security": "high",
+        "performance": "none",
+        "edge": "low"
+      }
     },
     {
       "id": "T7",
-      "title": "Add force_execute production guard in ExecutionConfig",
-      "description": "Add configuration validation preventing force_execute in production",
-      "file": "crates/arbitrage-core/src/execution_preparer.rs",
-      "line": 9,
+      "category": "Credential Security",
+      "title": "Prevent credential exposure in logs/errors",
+      "description": "Audit and ensure credentials never appear in debug, log, or error messages",
+      "file": "crates/arbitrage-core/src/config.rs",
       "acceptance_criteria": [
-        "ExecutionConfig validates enable_force_execute is false in production",
-        "Clear error when force_execute enabled in prod environment"
+        "Debug impl masks credentials",
+        "Error messages never include credentials",
+        "Serialization (Serde) masks or omits credentials"
       ],
       "difficulty": 3,
-      "loc_estimate": 10,
-      "risk_profile": "low",
-      "dependencies": []
-    },
-    {
-      "id": "T8",
-      "title": "Add integration tests for all edge case validation scenarios",
-      "description": "Create comprehensive tests covering all validation fixes",
-      "file": "crates/arbitrage-core/tests/",
-      "line": 0,
-      "acceptance_criteria": [
-        "Tests for division by zero prevention",
-        "Tests for empty order book rejection",
-        "Tests for negative fee rejection",
-        "Tests for future timestamp handling",
-        "Tests for negative profit validation"
-      ],
-      "difficulty": 4,
-      "loc_estimate": 50,
-      "risk_profile": "low",
-      "dependencies": ["T1", "T2", "T3", "T4", "T5", "T6"]
+      "loc_estimate": 40,
+      "dependencies": ["T5"],
+      "risk_profile": {
+        "security": "high",
+        "performance": "none",
+        "edge": "low"
+      }
     }
   ]
 }

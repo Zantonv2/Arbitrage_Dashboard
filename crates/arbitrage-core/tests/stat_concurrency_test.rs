@@ -4,11 +4,11 @@
 
 use arbitrage_core::{
     arbitrage_engine::ArbitrageEngine,
-    confidence_scorer::ConfidenceScorer,
+    confidence_scorer::{ConfidenceConfig, ConfidenceScorer},
     config::Config,
-    execution_preparer::ExecutionPreparer,
+    execution_preparer::{ExecutionConfig, ExecutionPreparer},
     normalizer::Normalizer,
-    size_calculator::SizeCalculator,
+    size_calculator::{SizeCalculator, SizeConfig},
     storage::{StorageConfig, StorageService},
 };
 use std::sync::Arc;
@@ -17,9 +17,12 @@ use std::thread;
 async fn create_test_engine() -> Arc<ArbitrageEngine> {
     let config = Config::default();
     let normalizer = Arc::new(Normalizer::new());
-    let confidence_scorer = Arc::new(ConfidenceScorer::new(config.clone()));
-    let size_calculator = Arc::new(SizeCalculator::new(config.clone()));
-    let execution_preparer = Arc::new(ExecutionPreparer::new(config.clone()));
+    let confidence_config = ConfidenceConfig::default();
+    let confidence_scorer = Arc::new(ConfidenceScorer::new(confidence_config));
+    let size_config = SizeConfig::default();
+    let size_calculator = Arc::new(SizeCalculator::new(size_config));
+    let execution_config = ExecutionConfig::default();
+    let execution_preparer = Arc::new(ExecutionPreparer::new(execution_config));
 
     let storage_config = StorageConfig {
         database_path: ":memory:".to_string(),

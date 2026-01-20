@@ -2,39 +2,39 @@
   "clusters": [
     {
       "id": "C1",
-      "name": "Division & OrderBook Validation",
+      "name": "Magic Value Refactor",
       "tasks": ["T1", "T2"],
-      "total_difficulty": 5,
-      "total_loc": 13,
-      "subagent": "validation-specialist-1",
-      "description": "Fix division by zero in confidence_scorer and empty orderbook validation in types.rs"
+      "total_difficulty": 7,
+      "total_loc": 50,
+      "subagent": "type-safety-specialist",
+      "description": "Replace magic value -1 returns with explicit NetSpreadResult enum"
     },
     {
       "id": "C2",
-      "name": "Fee & Timestamp Validation",
-      "tasks": ["T3", "T4", "T5"],
-      "total_difficulty": 6,
-      "total_loc": 15,
-      "subagent": "validation-specialist-2",
-      "description": "Fix negative fee validation, signal timestamp validation, and age_seconds panic"
+      "name": "Atomic Statistics",
+      "tasks": ["T3", "T4"],
+      "total_difficulty": 8,
+      "total_loc": 90,
+      "subagent": "concurrency-expert",
+      "description": "Convert stats counters to atomic operations and add stress tests"
     },
     {
       "id": "C3",
-      "name": "Execution Validation & Production Guard",
-      "tasks": ["T6", "T7"],
-      "total_difficulty": 5,
-      "total_loc": 16,
-      "subagent": "execution-validator",
-      "description": "Fix expected_profit validation and add force_execute production guard"
+      "name": "Encrypted Credential Storage",
+      "tasks": ["T5"],
+      "total_difficulty": 7,
+      "total_loc": 100,
+      "subagent": "security-engineer",
+      "description": "Implement AES-256-GCM encrypted credential wrapper"
     },
     {
       "id": "C4",
-      "name": "Integration Tests",
-      "tasks": ["T8"],
-      "total_difficulty": 4,
-      "total_loc": 50,
-      "subagent": "test-engineer",
-      "description": "Create comprehensive integration tests for all validation edge cases"
+      "name": "Credential Injection & Security",
+      "tasks": ["T6", "T7"],
+      "total_difficulty": 7,
+      "total_loc": 100,
+      "subagent": "security-engineer-2",
+      "description": "Add env var injection and prevent credential exposure in logs"
     }
   ]
 }
