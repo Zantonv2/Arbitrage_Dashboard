@@ -107,11 +107,11 @@ async fn test_new_listing_arbitrage_filtering() -> Result<()> {
     let symbol = Symbol::new("NEWTOKEN", "USDT");
 
     // Create a valid new listing arbitrage signal
-    let mut signal = RawSignal::new("new_listing_arbitrage", symbol.clone());
+    let mut signal = RawSignal::new("new_listing_arbitrage", Arc::new(symbol.clone()));
 
     let buy_leg = TradeLeg::new(
         ExchangeId::MEXC, // Cheaper exchange
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Buy,
         Decimal::new(50, 2), // Buy at $0.50
         Decimal::from(1000),
@@ -120,7 +120,7 @@ async fn test_new_listing_arbitrage_filtering() -> Result<()> {
 
     let sell_leg = TradeLeg::new(
         ExchangeId::OKX, // More expensive exchange
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Sell,
         Decimal::new(75, 2), // Sell at $0.75
         Decimal::from(1000),

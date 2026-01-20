@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Funding Rate Arbitrage Strategy
@@ -285,7 +286,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             }
 
             // Create signal
-            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
+            let mut signal = RawSignal::new(self.id(), (**symbol).clone().into());
 
             // Determine position side based on funding rate sign
             let (perp_side, spot_side) = if funding_rate.rate > Decimal::ZERO {
@@ -301,7 +302,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             // Add perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                (**symbol).clone(),
+                Arc::new((**symbol).clone()),
                 perp_side,
                 spot_price, // Use spot price as approximation for perp price
                 position_quantity,
@@ -316,7 +317,7 @@ impl Strategy for FundingRateArbitrageStrategy {
 
             let spot_leg = TradeLeg::new(
                 *exchange,
-                (**symbol).clone(),
+                Arc::new((**symbol).clone()),
                 spot_side,
                 spot_price,
                 hedge_quantity,

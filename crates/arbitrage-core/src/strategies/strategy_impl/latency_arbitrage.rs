@@ -10,6 +10,7 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Temporal (Latency) Arbitrage Strategy
 ///
@@ -177,12 +178,12 @@ impl Strategy for LatencyArbitrageStrategy {
 
                             if quantity >= min_quantity {
                                 // Create latency arbitrage signal
-                                let mut signal = RawSignal::new(self.id(), (*symbol).clone());
+                                let mut signal = RawSignal::new(self.id(), Arc::clone(&symbol));
 
                                 // Buy from slower/cheaper exchange
                                 let buy_leg = TradeLeg::new(
                                     min_exchange,
-                                    (*symbol).clone(),
+                                    Arc::clone(&symbol),
                                     Side::Buy,
                                     ask_level.price,
                                     quantity.min(min_quantity * Decimal::from(5)), // Limit size
@@ -192,7 +193,7 @@ impl Strategy for LatencyArbitrageStrategy {
                                 // Sell to faster/expensive exchange
                                 let sell_leg = TradeLeg::new(
                                     max_exchange,
-                                    (*symbol).clone(),
+                                    Arc::clone(&symbol),
                                     Side::Sell,
                                     bid_level.price,
                                     quantity.min(min_quantity * Decimal::from(5)), // Limit size

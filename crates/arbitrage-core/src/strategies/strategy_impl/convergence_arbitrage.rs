@@ -336,12 +336,12 @@ impl ConvergenceArbitrageStrategy {
                     let short_quantity = position_value / short_price;
 
                     // Create convergence signal
-                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone());
+                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
 
                     // Long leg
                     let long_leg = TradeLeg::new(
                         exchange,
-                        (**long_symbol).clone(),
+                        (**long_symbol).clone().into(),
                         Side::Buy,
                         long_price,
                         long_quantity,
@@ -351,7 +351,7 @@ impl ConvergenceArbitrageStrategy {
                     // Short leg
                     let short_leg = TradeLeg::new(
                         exchange,
-                        (**short_symbol).clone(),
+                        (**short_symbol).clone().into(),
                         Side::Sell,
                         short_price,
                         short_quantity,
@@ -518,12 +518,12 @@ impl Strategy for ConvergenceArbitrageStrategy {
                     let short_quantity = position_value / short_price;
 
                     // Create convergence signal
-                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone());
+                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
 
                     // Long leg
                     let long_leg = TradeLeg::new(
                         exchange,
-                        (**long_symbol).clone(),
+                        (**long_symbol).clone().into(),
                         Side::Buy,
                         long_price,
                         long_quantity,
@@ -533,7 +533,7 @@ impl Strategy for ConvergenceArbitrageStrategy {
                     // Short leg
                     let short_leg = TradeLeg::new(
                         exchange,
-                        (**short_symbol).clone(),
+                        (**short_symbol).clone().into(),
                         Side::Sell,
                         short_price,
                         short_quantity,
