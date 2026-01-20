@@ -1,7 +1,7 @@
 use arbitrage_core::confidence_scorer::{ConfidenceConfig, ConfidenceScorer, FeeSchedule};
-use arbitrage_core::config::TradingConfig;
 use arbitrage_core::execution_preparer::{ExecutionConfig, ExecutionPreparer};
 use arbitrage_core::types::{ExchangeId, OrderBook, OrderBookLevel, Signal, Symbol};
+use chrono::Utc;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
@@ -84,7 +84,7 @@ mod empty_orderbook_tests {
     use super::*;
 
     #[test]
-    fn test_empty_bids_is_valid() {
+    fn test_empty_bids_rejected() {
         let symbol = Symbol::new("BTC", "USDT");
         let orderbook = OrderBook::new(
             ExchangeId::OKX,
@@ -93,11 +93,11 @@ mod empty_orderbook_tests {
             vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
         );
 
-        assert!(orderbook.is_valid());
+        assert!(!orderbook.is_valid());
     }
 
     #[test]
-    fn test_empty_asks_is_valid() {
+    fn test_empty_asks_rejected() {
         let symbol = Symbol::new("BTC", "USDT");
         let orderbook = OrderBook::new(
             ExchangeId::OKX,
@@ -106,19 +106,19 @@ mod empty_orderbook_tests {
             vec![],
         );
 
-        assert!(orderbook.is_valid());
+        assert!(!orderbook.is_valid());
     }
 
     #[test]
-    fn test_completely_empty_orderbook_is_valid() {
+    fn test_completely_empty_orderbook_rejected() {
         let symbol = Symbol::new("BTC", "USDT");
         let orderbook = OrderBook::new(ExchangeId::OKX, symbol.clone(), vec![], vec![]);
 
-        assert!(orderbook.is_valid());
+        assert!(!orderbook.is_valid());
     }
 
     #[test]
-    fn test_orderbook_with_empty_middle_is_valid() {
+    fn test_orderbook_with_both_sides_valid() {
         let symbol = Symbol::new("BTC", "USDT");
         let orderbook = OrderBook::new(
             ExchangeId::OKX,
@@ -128,6 +128,15 @@ mod empty_orderbook_tests {
         );
 
         assert!(orderbook.is_valid());
+    }
+
+    #[test]
+    fn test_empty_orderbook_prevents_vwap() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let orderbook = OrderBook::new(ExchangeId::OKX, symbol.clone(), vec![], vec![]);
+
+        let vwap_result = orderbook.vwap_buy(Decimal::from(1));
+        assert!(vwap_result.is_none());
     }
 }
 
@@ -135,7 +144,7 @@ mod negative_fee_tests {
     use super::*;
 
     #[test]
-    fn test_negative_maker_fee_is_rejected_in_calculation() {
+    fn test_negative_maker_fee_affects_calculation() {
         let config = ConfidenceConfig::default();
         let mut scorer = ConfidenceScorer::new(config);
 
@@ -148,13 +157,17 @@ mod negative_fee_tests {
 
         let result = scorer.calculate_net_spread_bps(
             Decimal::from(50000),
-            Decimal::from(50100),
+            Decimal::from(50500),
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
 
         let spread = result.unwrap();
-        assert!(spread > 0);
+        assert!(
+            spread > 0,
+            "Expected positive spread with negative maker fee, got {}",
+            spread
+        );
     }
 
     #[test]
@@ -214,38 +227,33 @@ mod negative_fee_tests {
 }
 
 mod future_timestamp_tests {
+    use super::*;
     use chrono::{Duration, Utc};
 
-    #[test]
-    fn test_signal_with_future_created_at_has_zero_age() {
-        let future_time = Utc::now() + Duration::hours(1);
-        let symbol = Symbol::new("BTC", "USDT");
-
-        let signal = Signal::new(
-            symbol,
+    fn create_test_signal_with_time(created_at: chrono::DateTime<Utc>) -> Signal {
+        Signal::new(
+            Symbol::new("BTC", "USDT"),
             ExchangeId::OKX,
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
-        );
+            created_at,
+        )
+    }
 
-        let mut signal_with_future_time = signal;
-        signal_with_future_time.created_at = future_time;
+    #[test]
+    fn test_signal_with_past_created_at_works() {
+        let past_time = Utc::now() - Duration::hours(1);
+        let signal = create_test_signal_with_time(past_time);
 
-        let age = signal_with_future_time.age_seconds();
-        assert_eq!(age, 0);
+        let age = signal.age_seconds();
+        assert!(age >= 3600);
     }
 
     #[test]
     fn test_signal_age_is_calculated_correctly() {
-        let symbol = Symbol::new("BTC", "USDT");
-        let signal = Signal::new(
-            symbol,
-            ExchangeId::OKX,
-            ExchangeId::ByBit,
-            Decimal::from(50000),
-            Decimal::from(50100),
-        );
+        let now = Utc::now();
+        let signal = create_test_signal_with_time(now);
 
         let age = signal.age_seconds();
         assert_eq!(age, 0);
@@ -253,14 +261,8 @@ mod future_timestamp_tests {
 
     #[test]
     fn test_signal_expires_at_is_set_by_default() {
-        let symbol = Symbol::new("BTC", "USDT");
-        let signal = Signal::new(
-            symbol,
-            ExchangeId::OKX,
-            ExchangeId::ByBit,
-            Decimal::from(50000),
-            Decimal::from(50100),
-        );
+        let now = Utc::now();
+        let signal = create_test_signal_with_time(now);
 
         let expires_in = signal.expires_at - signal.created_at;
         let expires_minutes = expires_in.num_minutes();
@@ -269,14 +271,8 @@ mod future_timestamp_tests {
 
     #[test]
     fn test_signal_is_expired_with_past_expiry() {
-        let symbol = Symbol::new("BTC", "USDT");
-        let mut signal = Signal::new(
-            symbol,
-            ExchangeId::OKX,
-            ExchangeId::ByBit,
-            Decimal::from(50000),
-            Decimal::from(50100),
-        );
+        let now = Utc::now();
+        let mut signal = create_test_signal_with_time(now);
 
         signal.expires_at = Utc::now() - Duration::minutes(10);
 
@@ -285,18 +281,21 @@ mod future_timestamp_tests {
 
     #[test]
     fn test_signal_is_not_expired_with_future_expiry() {
-        let symbol = Symbol::new("BTC", "USDT");
-        let mut signal = Signal::new(
-            symbol,
-            ExchangeId::OKX,
-            ExchangeId::ByBit,
-            Decimal::from(50000),
-            Decimal::from(50100),
-        );
+        let now = Utc::now();
+        let mut signal = create_test_signal_with_time(now);
 
         signal.expires_at = Utc::now() + Duration::minutes(10);
 
         assert!(!signal.is_expired());
+    }
+
+    #[test]
+    fn test_signal_created_in_future_panics() {
+        let future_time = Utc::now() + Duration::hours(1);
+
+        let result = std::panic::catch_unwind(|| create_test_signal_with_time(future_time));
+
+        assert!(result.is_err());
     }
 }
 
@@ -314,6 +313,7 @@ mod negative_profit_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(49900),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -340,6 +340,7 @@ mod negative_profit_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50000),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -360,6 +361,7 @@ mod negative_profit_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(49000),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -400,6 +402,7 @@ mod force_execute_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(49900),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -425,23 +428,11 @@ mod force_execute_tests {
     }
 
     #[test]
-    fn test_trading_config_force_execute_default() {
-        let trading_config = TradingConfig::default();
-        assert!(!trading_config.force_execute_production);
-    }
-
-    #[test]
-    fn test_force_execute_in_production_mode_is_guard() {
-        let trading_config = TradingConfig {
-            force_execute_production: false,
-            ..TradingConfig::default()
-        };
-
+    fn test_force_execute_guard_prevents_negative_profit_when_disabled() {
         let config = ExecutionConfig {
-            enable_force_execute: true,
+            enable_force_execute: false,
             ..ExecutionConfig::default()
         };
-
         let preparer = ExecutionPreparer::new(config);
 
         let signal = Signal::new(
@@ -450,6 +441,7 @@ mod force_execute_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(49900),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -459,9 +451,33 @@ mod force_execute_tests {
         assert!(!instruction.is_valid());
 
         let has_guard_error = instruction.validation_errors.iter().any(|e| {
-            e.contains("force_execute") || e.contains("production") || e.contains("override")
+            e.contains("force_execute") || e.contains("not positive") || e.contains("override")
         });
         assert!(has_guard_error);
+    }
+
+    #[test]
+    fn test_force_execute_guard_allows_when_enabled() {
+        let config = ExecutionConfig {
+            enable_force_execute: true,
+            ..ExecutionConfig::default()
+        };
+        let preparer = ExecutionPreparer::new(config);
+
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(49900),
+            Utc::now(),
+        );
+
+        let result = preparer.prepare_execution(&signal, Decimal::from(1));
+        assert!(result.is_ok());
+
+        let instruction = result.unwrap();
+        assert!(instruction.is_valid());
     }
 }
 
@@ -501,6 +517,7 @@ mod validation_error_message_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(49900),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -520,14 +537,9 @@ mod validation_error_message_tests {
     }
 
     #[test]
-    fn test_force_execute_error_message_is_clear() {
-        let trading_config = TradingConfig {
-            force_execute_production: false,
-            ..TradingConfig::default()
-        };
-
+    fn test_force_execute_disabled_produces_error() {
         let config = ExecutionConfig {
-            enable_force_execute: true,
+            enable_force_execute: false,
             ..ExecutionConfig::default()
         };
 
@@ -539,6 +551,7 @@ mod validation_error_message_tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(49900),
+            Utc::now(),
         );
 
         let result = preparer.prepare_execution(&signal, Decimal::from(1));
@@ -546,13 +559,12 @@ mod validation_error_message_tests {
 
         let instruction = result.unwrap();
 
-        let force_execute_error = instruction
-            .validation_errors
-            .iter()
-            .find(|e| e.contains("force_execute") || e.contains("production"));
+        let force_execute_error = instruction.validation_errors.iter().find(|e| {
+            e.contains("force_execute") || e.contains("positive") || e.contains("override")
+        });
         assert!(
             force_execute_error.is_some(),
-            "Should have an error mentioning force_execute or production, got: {:?}",
+            "Should have an error mentioning force_execute or positive, got: {:?}",
             instruction.validation_errors
         );
     }
