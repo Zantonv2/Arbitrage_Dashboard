@@ -17,6 +17,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 // ============================================================================
@@ -211,7 +212,7 @@ pub async fn get_orderbook(
     // Get order book from engine cache
     match state
         .arbitrage_engine
-        .get_order_book(exchange_id, &parsed_symbol)
+        .get_order_book(exchange_id, Arc::new(parsed_symbol))
     {
         Some(ob) => {
             let bids: Vec<Value> = ob

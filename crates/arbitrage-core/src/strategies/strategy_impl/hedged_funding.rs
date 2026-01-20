@@ -403,12 +403,12 @@ impl HedgedFundingStrategy {
             }
 
             // Create hedged funding signal
-            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
+            let mut signal = RawSignal::new(self.id(), symbol.clone().into());
 
             // Perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                (**symbol).clone(),
+                symbol.clone().into(),
                 perp_side,
                 perp_price,
                 position_size,
@@ -418,7 +418,7 @@ impl HedgedFundingStrategy {
             // Spot hedge leg
             let spot_leg = TradeLeg::new(
                 hedge_exchange,
-                (**symbol).clone(),
+                symbol.clone().into(),
                 spot_side,
                 spot_price,
                 hedge_size,
@@ -570,12 +570,12 @@ impl Strategy for HedgedFundingStrategy {
             }
 
             // Create hedged funding signal
-            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
+            let mut signal = RawSignal::new(self.id(), symbol.clone().into());
 
             // Perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                (**symbol).clone(),
+                symbol.clone().into(),
                 perp_side,
                 perp_price,
                 position_size,
@@ -585,7 +585,7 @@ impl Strategy for HedgedFundingStrategy {
             // Spot hedge leg
             let spot_leg = TradeLeg::new(
                 hedge_exchange,
-                (**symbol).clone(),
+                symbol.clone().into(),
                 spot_side,
                 spot_price,
                 position_size, // 1:1 hedge ratio for simplicity

@@ -538,12 +538,12 @@ impl Strategy for SpotPerpArbitrageStrategy {
                     let position_size = Decimal::ONE;
 
                     // Create signal
-                    let mut signal = RawSignal::new(self.id(), (*symbol).clone());
+                    let mut signal = RawSignal::new(self.id(), (*symbol).clone().into());
 
                     // Add spot leg
                     let spot_leg = TradeLeg::new(
                         spot_exchange,
-                        (*symbol).clone(),
+                        (*symbol).clone().into(),
                         spot_side,
                         spot_price,
                         position_size,
@@ -553,7 +553,7 @@ impl Strategy for SpotPerpArbitrageStrategy {
                     // Add perp leg
                     let perp_leg = TradeLeg::new(
                         perp_exchange,
-                        (*symbol).clone(),
+                        (*symbol).clone().into(),
                         perp_side,
                         perp_price,
                         position_size,
