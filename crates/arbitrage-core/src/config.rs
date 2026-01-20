@@ -1,7 +1,6 @@
 use crate::{ExchangeId, Symbol};
-use aes_gcm::{aead::Aead, Aes256Gcm, Key, Nonce};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use rand::Rng;
+use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
+use rand::rng;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,14 +8,14 @@ use std::collections::HashMap;
 const KEY_SIZE: usize = 32;
 const NONCE_SIZE: usize = 12;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EncryptedString {
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
 }
 
 impl EncryptedString {
-    fn derive_key(master_password: &[u8], salt: &[u8]) -> Key<Aes256Gcm> {
+    fn derive_key(master_password: &[u8], salt: &[u8]) -> &Key<Aes256Gcm> {
         let mut key_bytes = [0u8; KEY_SIZE];
         for (i, byte) in master_password.iter().cycle().take(KEY_SIZE).enumerate() {
             key_bytes[i] = *byte ^ salt[i % salt.len()];
@@ -25,9 +24,9 @@ impl EncryptedString {
     }
 
     pub fn new(plaintext: &str, master_password: &str) -> Self {
-        let salt: [u8; 16] = rand::thread_rng().gen();
+        let salt: [u8; 16] = rng().random();
         let key = Self::derive_key(master_password.as_bytes(), &salt);
-        let nonce = Nonce::from_slice(rand::thread_rng().gen::<[u8; NONCE_SIZE]>());
+        let nonce = Nonce::from_slice(&rng().random::<[u8; NONCE_SIZE]>());
 
         let cipher = Aes256Gcm::new(&key);
         let ciphertext = cipher
