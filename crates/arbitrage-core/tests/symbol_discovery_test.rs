@@ -6,7 +6,7 @@ use arbitrage_core::{
 };
 use chrono::Utc;
 use rust_decimal::Decimal;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[tokio::test]
 async fn test_enhanced_symbol_discovery() {
@@ -184,7 +184,7 @@ async fn test_symbol_qualification_criteria() {
 #[tokio::test]
 async fn test_quote_currency_filtering() {
     let mut criteria = SymbolSelectionCriteria::default();
-    let mut allowed_quotes = HashSet::new();
+    let mut allowed_quotes = FxHashSet::default();
     allowed_quotes.insert("USDT".to_string());
     allowed_quotes.insert("USDC".to_string());
     criteria.allowed_quotes = allowed_quotes;

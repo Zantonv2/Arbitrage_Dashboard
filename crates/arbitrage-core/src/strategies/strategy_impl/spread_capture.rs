@@ -26,6 +26,7 @@ use tracing::debug;
 /// - Historical spread stability metrics
 /// - Volume and volatility indicators
 /// - Maker fee schedules for profitability
+#[derive(Debug, Clone)]
 pub struct SpreadCaptureStrategy {
     config: StrategyConfig,
 }

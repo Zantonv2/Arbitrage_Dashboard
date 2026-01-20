@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         FilterContext, FundingRate, MarketBundle, RawSignal, SpotPerpArbitrageStrategy, Strategy,
@@ -48,9 +49,9 @@ async fn test_spot_perp_arbitrage_integration() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(spot_book);
-    market_bundle.add_order_book(perp_book);
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_order_book(Arc::new(spot_book));
+    market_bundle.add_order_book(Arc::new(perp_book));
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     let signals = spot_perp_strategy.detect(&market_bundle)?;
 
@@ -155,9 +156,9 @@ async fn test_spot_perp_arbitrage_no_opportunity() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(spot_book);
-    market_bundle.add_order_book(perp_book);
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_order_book(Arc::new(spot_book));
+    market_bundle.add_order_book(Arc::new(perp_book));
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     let signals = spot_perp_strategy.detect(&market_bundle)?;
 
@@ -201,9 +202,9 @@ async fn test_spot_perp_arbitrage_negative_funding() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(spot_book);
-    market_bundle.add_order_book(perp_book);
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_order_book(Arc::new(spot_book));
+    market_bundle.add_order_book(Arc::new(perp_book));
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     let signals = spot_perp_strategy.detect(&market_bundle)?;
 

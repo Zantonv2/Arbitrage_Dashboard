@@ -69,6 +69,7 @@ pub enum LimitingFactor {
 }
 
 /// Calculator for optimal trade sizes
+#[derive(Debug, Clone)]
 pub struct SizeCalculator {
     config: SizeConfig,
 }

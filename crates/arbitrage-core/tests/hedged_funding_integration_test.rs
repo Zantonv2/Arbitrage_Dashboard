@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
+use arbitrage_core::strategies::base::{
+    ConfidenceFactors, FilterContext, FundingRate, MarketBundle, RiskLimits, Strategy,
+    StrategyConfig, Ticker,
+};
+use arbitrage_core::strategies::HedgedFundingStrategy;
 use arbitrage_core::{
-    strategies::{
-        FilterContext, FundingRate, HedgedFundingStrategy, MarketBundle, Strategy, Ticker,
-    },
     types::{ExchangeId, Symbol},
-    Result,
+    FeeSchedule, Result,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
@@ -43,9 +47,9 @@ async fn test_hedged_funding_integration() -> Result<()> {
         Decimal::from(50000), // last
     );
 
-    market_bundle.add_funding_rate(funding_rate);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     // Run strategy detection
     let signals = strategy.detect(&market_bundle)?;
@@ -141,9 +145,9 @@ async fn test_hedged_funding_negative_rate() -> Result<()> {
         Decimal::from(3000),
     );
 
-    market_bundle.add_funding_rate(funding_rate);
-    market_bundle.add_ticker(bybit_ticker);
-    market_bundle.add_ticker(okx_ticker);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -213,9 +217,9 @@ async fn test_hedged_funding_low_rate() -> Result<()> {
         Decimal::from(50000),
     );
 
-    market_bundle.add_funding_rate(funding_rate);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -260,9 +264,9 @@ async fn test_hedged_funding_insufficient_time() -> Result<()> {
         Decimal::from(3000),
     );
 
-    market_bundle.add_funding_rate(funding_rate);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -307,9 +311,9 @@ async fn test_hedged_funding_filtering() -> Result<()> {
         Decimal::from(50000),
     );
 
-    market_bundle.add_funding_rate(funding_rate);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -368,8 +372,8 @@ async fn test_hedged_funding_no_hedge_exchange() -> Result<()> {
         Decimal::from(50000),
     );
 
-    market_bundle.add_funding_rate(funding_rate);
-    market_bundle.add_ticker(okx_ticker);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
     // No hedge exchange ticker added
 
     let signals = strategy.detect(&market_bundle)?;
@@ -439,12 +443,12 @@ async fn test_hedged_funding_multiple_rates() -> Result<()> {
         Decimal::from(3000),
     );
 
-    market_bundle.add_funding_rate(btc_funding);
-    market_bundle.add_funding_rate(eth_funding);
-    market_bundle.add_ticker(btc_okx);
-    market_bundle.add_ticker(btc_bybit);
-    market_bundle.add_ticker(eth_bybit);
-    market_bundle.add_ticker(eth_okx);
+    market_bundle.add_funding_rate(Arc::new(btc_funding));
+    market_bundle.add_funding_rate(Arc::new(eth_funding));
+    market_bundle.add_ticker(Arc::new(btc_okx));
+    market_bundle.add_ticker(Arc::new(btc_bybit));
+    market_bundle.add_ticker(Arc::new(eth_bybit));
+    market_bundle.add_ticker(Arc::new(eth_okx));
 
     let signals = strategy.detect(&market_bundle)?;
 

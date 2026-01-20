@@ -27,6 +27,7 @@ impl Default for ExecutionConfig {
 }
 
 /// Prepares execution instructions from signals
+#[derive(Debug, Clone)]
 pub struct ExecutionPreparer {
     config: ExecutionConfig,
     fee_schedules: HashMap<crate::types::ExchangeId, FeeSchedule>, // Real fee data

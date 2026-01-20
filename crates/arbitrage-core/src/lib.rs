@@ -10,6 +10,7 @@ pub mod size_calculator;
 pub mod storage;
 pub mod symbol_discovery;
 pub mod symbol_manager;
+pub mod test_utils;
 pub mod types;
 
 // Strategies folder (Potential 8-22% profit)

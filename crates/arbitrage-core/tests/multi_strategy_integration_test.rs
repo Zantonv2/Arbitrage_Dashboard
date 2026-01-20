@@ -55,8 +55,8 @@ async fn test_multi_strategy_detection() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(50160), Decimal::from(1))],
     );
 
-    market_bundle.add_order_book(btc_okx_book);
-    market_bundle.add_order_book(btc_bybit_book);
+    market_bundle.add_order_book(Arc::new(btc_okx_book));
+    market_bundle.add_order_book(Arc::new(btc_bybit_book));
 
     // 2. Funding Rate Arbitrage opportunity
     let funding_rate = FundingRate::new(
@@ -65,7 +65,7 @@ async fn test_multi_strategy_detection() -> Result<()> {
         Decimal::new(15, 5), // 0.00015 = 0.015% funding rate
         Utc::now() + Duration::hours(6),
     );
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     // Add BTC ticker for funding rate strategy
     let btc_ticker = Ticker::new(
@@ -75,7 +75,7 @@ async fn test_multi_strategy_detection() -> Result<()> {
         Decimal::from(50010),
         Decimal::from(50005),
     );
-    market_bundle.add_ticker(btc_ticker);
+    market_bundle.add_ticker(Arc::new(btc_ticker));
 
     // 3. Stablecoin Arbitrage opportunity: USDT above peg
     let usdt_symbol = Symbol::new("USDT", "USD");
@@ -98,8 +98,8 @@ async fn test_multi_strategy_detection() -> Result<()> {
             Decimal::from(5000),
         )],
     );
-    market_bundle.add_ticker(usdt_ticker);
-    market_bundle.add_order_book(usdt_book);
+    market_bundle.add_ticker(Arc::new(usdt_ticker));
+    market_bundle.add_order_book(Arc::new(usdt_book));
 
     // 4. Cross-stablecoin opportunity: USDT/USDC spread
     let usdt_usdc_symbol = Symbol::new("USDT", "USDC");
@@ -127,8 +127,8 @@ async fn test_multi_strategy_detection() -> Result<()> {
             Decimal::from(2000),
         )],
     );
-    market_bundle.add_order_book(usdt_usdc_okx);
-    market_bundle.add_order_book(usdt_usdc_bybit);
+    market_bundle.add_order_book(Arc::new(usdt_usdc_okx));
+    market_bundle.add_order_book(Arc::new(usdt_usdc_bybit));
 
     // Test each strategy individually
     println!("\n=== Testing Individual Strategies ===");
@@ -195,8 +195,8 @@ async fn test_strategy_priority_and_conflicts() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(3055), Decimal::from(5))],
     );
 
-    market_bundle.add_order_book(eth_okx);
-    market_bundle.add_order_book(eth_bybit);
+    market_bundle.add_order_book(Arc::new(eth_okx));
+    market_bundle.add_order_book(Arc::new(eth_bybit));
 
     // Test both strategies
     let cex_strategy = CexArbitrageStrategy::new();
@@ -250,7 +250,7 @@ async fn test_strategy_performance() -> Result<()> {
                 )],
             );
 
-            market_bundle.add_order_book(order_book);
+            market_bundle.add_order_book(Arc::new(order_book));
         }
     }
 
@@ -331,7 +331,7 @@ async fn test_strategy_error_handling() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::ZERO, Decimal::from(1))],
     );
 
-    invalid_bundle.add_order_book(invalid_book);
+    invalid_bundle.add_order_book(Arc::new(invalid_book));
 
     // Should not panic or return error
     let signals = strategy.detect(&invalid_bundle)?;

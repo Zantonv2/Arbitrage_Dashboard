@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         FilterContext, LatencyArbitrageStrategy, MarketBundle, RawSignal, Strategy, Ticker,
@@ -50,10 +51,10 @@ async fn test_latency_arbitrage_integration() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(gateio_book);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(gateio_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(gateio_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(gateio_ticker));
 
     let signals = latency_strategy.detect(&market_bundle)?;
 
@@ -179,10 +180,10 @@ async fn test_latency_arbitrage_no_opportunity() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(gateio_book);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(gateio_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(gateio_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(gateio_ticker));
 
     let signals = latency_strategy.detect(&market_bundle)?;
 
@@ -232,10 +233,10 @@ async fn test_latency_arbitrage_multiple_symbols() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(2965), Decimal::from(3))],
     );
 
-    market_bundle.add_order_book(btc_okx);
-    market_bundle.add_order_book(btc_gateio);
-    market_bundle.add_order_book(eth_okx);
-    market_bundle.add_order_book(eth_mexc);
+    market_bundle.add_order_book(Arc::new(btc_okx));
+    market_bundle.add_order_book(Arc::new(btc_gateio));
+    market_bundle.add_order_book(Arc::new(eth_okx));
+    market_bundle.add_order_book(Arc::new(eth_mexc));
 
     // Add tickers for price calculation
     let btc_okx_ticker = Ticker::new(
@@ -267,10 +268,10 @@ async fn test_latency_arbitrage_multiple_symbols() -> Result<()> {
         Decimal::from(2960),
     );
 
-    market_bundle.add_ticker(btc_okx_ticker);
-    market_bundle.add_ticker(btc_gateio_ticker);
-    market_bundle.add_ticker(eth_okx_ticker);
-    market_bundle.add_ticker(eth_mexc_ticker);
+    market_bundle.add_ticker(Arc::new(btc_okx_ticker));
+    market_bundle.add_ticker(Arc::new(btc_gateio_ticker));
+    market_bundle.add_ticker(Arc::new(eth_okx_ticker));
+    market_bundle.add_ticker(Arc::new(eth_mexc_ticker));
 
     let signals = latency_strategy.detect(&market_bundle)?;
 
