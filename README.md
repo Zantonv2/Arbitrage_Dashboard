@@ -63,4 +63,4 @@ arbitrage-server/      # HTTP/WebSocket API
 
 ## License
 
-MIT
+Apache-2.0
