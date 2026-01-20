@@ -39,8 +39,15 @@ WORKFLOW (execute in order):
    - Skip issues that don't exist or are closed
    - Log skipped issues to output/issue-fix-artifacts/skipped_issues.json
 0.6 Create batch state file: output/issue-fix-artifacts/batch_state.json
-   { "issues": ["105", "106", "107"], "status": "pending", "completed": [], "failed": [] }
-0.7 If --auto flag detected, set AUTO_MODE=true
+   { "issues": ["105", "106", "107"], "status": "pending", "completed": [], "failed": [], "reconciliation_counts": {} }
+0.7 Calculate dynamic max_reconciliations based on batch:
+   - Base: 3 reconciliations
+   - Add 1 per 5 issues (batch size adjustment)
+   - Add 1 if any issue has risk_profile="high"
+   - Add 1 if AUTO_MODE=false (more careful default mode)
+   - Maximum: 10 reconciliations
+   Example: 3 issues + 0 (base<5) + 1 (auto mode) = 4 max
+0.8 If --auto flag detected, set AUTO_MODE=true
 
 1. BATCH PREPARATION (ONE-TIME)
 1.1 Check for uncommitted changes: git status --porcelain
@@ -82,7 +89,12 @@ For each issue in $ARGUMENTS:
 
 2.5 VALIDATION FOR THIS ISSUE
 2.5.1 Run validation (see Section 4 below)
-2.5.2 If issue FAILS after 3 reconciliations:
+2.5.2 Calculate remaining reconciliations dynamically:
+   - Used: current_reconciliation_count for this issue
+   - Max: batch_state.max_reconciliations
+   - Remaining: max - used
+   - If remaining <= 0: Mark as FAILED, continue to next issue
+2.5.3 If issue FAILS after remaining reconciliations:
    - Log failure to ../batch-fix-worktree/output/issue-fix-artifacts/failed_issues.json
    - Mark issue as FAILED in batch_state.json
    - Continue to next issue (batch continues even if one fails)
@@ -114,6 +126,13 @@ After ALL issues processed:
    - Proceed to PR creation
 
 4. VALIDATION LOOP (PER-ISSUE OR FINAL BATCH)
+DYNAMIC RECONCILIATION:
+- Initial max_reconciliations calculated from batch characteristics
+- Adaptive extension: If score improved by >=10% from previous attempt, extend by 1
+- Regression check: If score dropped by >5%, reduce remaining attempts by 1
+- Early termination: If score >= threshold on first try, no reconciliation needed
+- Never exceed: max_reconciliations + 2 (hard cap for pathological cases)
+
 AUTO_MODE (5 Validators):
 4.1 Launch 5 independent validator subagents with unique session_ids
 4.2 Each validator scores 7 criteria (0-10) - NO WEIGHTS:
@@ -131,8 +150,14 @@ Pass criteria:
 - All validators must have unique session_ids
 
 4.3 Write results to output/issue-fix-artifacts/validation_round_{n}_validator_{m}.json
-4.4 On failure: Generate fix tasks in reconciliation_{n}.json and restart (max 3 iterations)
-4.5 No partial passing - must achieve threshold
+4.4 On failure: Generate fix tasks in reconciliation_{n}.json
+   - Calculate adaptive_reconciliations = min(max_reconciliations - current, 1 + improvement_bonus)
+   - If improvement >=10% from previous: add 1 to remaining
+   - If regression >5%: subtract 1 from remaining
+   - Restart validation with remaining reconciliations
+4.5 Track progress: output/issue-fix-artifacts/validation_progress.json
+   { "round": n, "score": X, "improvement": Y%, "remaining_attempts": Z, "adaptive": true/false }
+4.6 No partial passing - must achieve threshold
 
 5. ONE PULL REQUEST CREATION (BATCH-LEVEL)
 5.1 git checkout -b batch-fix-{ISSUES} (created from upstream)
@@ -204,14 +229,19 @@ CONSTRAINTS:
 - UPSTREAM BRANCH IS PERMANENT - never delete
 - Feature branches deleted after merge
 - Labels are optional - graceful fallback if they don't exist
-- If ANY issue fails after 3 reconciliations: BATCH FAILS, NO PR created
+- Dynamic reconciliations: calculated per batch, adaptive extension based on progress
+  - Base: 3 + batch_size_factor + risk_factor + mode_factor
+  - Adaptive: +1 if improvement >=10%, -1 if regression >5%
+  - Hard cap: max_reconciliations + 2
+- If ANY issue fails after all reconciliations: BATCH FAILS, NO PR created
 
 OUTPUT ARTIFACTS:
 output/issue-fix-artifacts/
 ├── environment.json
-├── batch_state.json
+├── batch_state.json (includes max_reconciliations, per-issue counts)
 ├── skipped_issues.json
 ├── failed_issues.json (if any failures)
+├── validation_progress.json (adaptive tracking per issue)
 ├── per-issue/
 │   ├── issue_{N}/
 │   │   ├── issue_context.json
