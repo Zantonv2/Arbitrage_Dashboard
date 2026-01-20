@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use arbitrage_core::strategies::base::{
-    ConfidenceFactors, FilterContext, FundingRate, MarketBundle, RiskLimits, Strategy,
-    StrategyConfig, Ticker,
+    FilterContext, FundingRate, MarketBundle, Strategy, Ticker,
 };
 use arbitrage_core::strategies::HedgedFundingStrategy;
 use arbitrage_core::{
     types::{ExchangeId, Symbol},
-    FeeSchedule, Result,
+    Result,
 };
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;

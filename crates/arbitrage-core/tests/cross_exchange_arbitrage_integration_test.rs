@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         CrossExchangeArbitrageStrategy, FilterContext, MarketBundle, RawSignal, Strategy, TradeLeg,
@@ -7,6 +6,7 @@ use arbitrage_core::{
     Result,
 };
 use rust_decimal::Decimal;
+use std::sync::Arc;
 use tokio;
 
 /// Integration test for cross-exchange arbitrage

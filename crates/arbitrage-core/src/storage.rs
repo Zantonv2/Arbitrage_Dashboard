@@ -2,7 +2,7 @@ use crate::{
     types::{ExecutionInstruction, Signal},
     ArbitrageError, Result,
 };
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rust_decimal::Decimal;
 use sqlx::{sqlite::SqlitePool, Row};
 use std::str::FromStr;

@@ -49,7 +49,7 @@ async fn create_test_engine(
 async fn test_funding_rate_arbitrage_integration() -> Result<()> {
     // Create arbitrage engine with funding rate strategy
     let config = Config::default();
-    let (engine, _receiver) = create_test_engine(config).await?;
+    let (_engine, _receiver) = create_test_engine(config).await?;
 
     // Register funding rate arbitrage strategy
     let mut registry = StrategyRegistry::new();

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        size_calculator::{SizeCalculator, SizeConfig, SizeRecommendation, SizeTier},
+        size_calculator::{SizeCalculator, SizeConfig, SizeTier},
         types::{ExchangeId, OrderBook, OrderBookLevel, Signal, Symbol},
     };
     use rust_decimal::Decimal;
@@ -64,13 +64,13 @@ mod tests {
     #[test]
     fn test_size_calculator_new() {
         let config = SizeConfig::default();
-        let calculator = SizeCalculator::new(config);
+        let _calculator = SizeCalculator::new(config);
         assert!(true);
     }
 
     #[test]
     fn test_size_calculator_default() {
-        let calculator = SizeCalculator::default();
+        let _calculator = SizeCalculator::default();
         assert!(true);
     }
 

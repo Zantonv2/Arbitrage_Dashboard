@@ -52,8 +52,7 @@ impl ConfigExtensions for HashMap<String, Value> {
     fn get_decimal(&self, key: &str) -> Option<Decimal> {
         self.get(key)
             .and_then(|v| v.as_f64())
-            .map(|f| Decimal::try_from(f).ok())
-            .flatten()
+            .and_then(|f| Decimal::try_from(f).ok())
     }
 
     fn get_f64_or(&self, key: &str, default: f64) -> f64 {

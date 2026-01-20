@@ -251,7 +251,7 @@ proptest! {
             .collect();
 
         let order_book = OrderBook::new(ExchangeId::OKX, symbol.clone(), bid_levels, ask_levels);
-        let is_valid = order_book.is_valid();
+        let _is_valid = order_book.is_valid();
 
         if let (Some(best_bid), Some(best_ask)) = (order_book.best_bid(), order_book.best_ask()) {
             prop_assert!(best_bid.price < best_ask.price, "Best bid must be less than best ask");
@@ -270,7 +270,7 @@ proptest! {
 
     #[test]
     fn test_vwap_price_range(
-        prices in proptest::collection::vec(small_decimal(), 3..10),
+        _prices in proptest::collection::vec(small_decimal(), 3..10),
         quantities in proptest::collection::vec(small_decimal(), 3..10)
     ) {
         for qty in &quantities {
@@ -446,8 +446,8 @@ proptest! {
         let db = Decimal::new(b, 4);
 
         let sum = da + db;
-        let diff = da - db;
-        let product = da * db;
+        let _diff = da - db;
+        let _product = da * db;
         let quotient = da / db;
 
         prop_assert!(sum > Decimal::ZERO || da == db);
@@ -524,7 +524,7 @@ proptest! {
 
         let order_book = OrderBook::new(ExchangeId::OKX, symbol.clone(), bid_levels, ask_levels);
 
-        let is_valid = order_book.is_valid();
+        let _is_valid = order_book.is_valid();
 
         if let (Some(best_bid), Some(best_ask)) = (order_book.best_bid(), order_book.best_ask()) {
             prop_assert!(best_bid.price < best_ask.price);
