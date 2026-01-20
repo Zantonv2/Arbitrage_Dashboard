@@ -377,8 +377,14 @@ async fn test_hedged_funding_multiple_rates() -> Result<()> {
 
     let signals = strategy.detect(&market_bundle)?;
 
-    let btc_signals: Vec<_> = signals.iter().filter(|s| s.symbol == btc_symbol).collect();
-    let eth_signals: Vec<_> = signals.iter().filter(|s| s.symbol == eth_symbol).collect();
+    let btc_signals: Vec<_> = signals
+        .iter()
+        .filter(|s| s.symbol == btc_symbol.clone().into())
+        .collect();
+    let eth_signals: Vec<_> = signals
+        .iter()
+        .filter(|s| s.symbol == eth_symbol.clone().into())
+        .collect();
 
     assert!(
         !btc_signals.is_empty(),

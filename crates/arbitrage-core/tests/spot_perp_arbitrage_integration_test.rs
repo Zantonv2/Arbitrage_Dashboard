@@ -65,11 +65,11 @@ async fn test_spot_perp_arbitrage_filtering() -> Result<()> {
     let spot_perp_strategy = SpotPerpArbitrageStrategy::new();
     let symbol = Symbol::new("ETH", "USDT");
 
-    let mut signal = RawSignal::new("spot_perp_arbitrage", symbol.clone());
+    let mut signal = RawSignal::new("spot_perp_arbitrage", Arc::new(symbol.clone()));
 
     let spot_leg = TradeLeg::new(
         ExchangeId::Bitstamp,
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Buy,
         Decimal::from(3000),
         Decimal::from(1),
@@ -78,7 +78,7 @@ async fn test_spot_perp_arbitrage_filtering() -> Result<()> {
 
     let perp_leg = TradeLeg::new(
         ExchangeId::ByBit,
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Sell,
         Decimal::from(3060),
         Decimal::from(1),

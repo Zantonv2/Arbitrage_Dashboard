@@ -6,6 +6,7 @@ use crate::{ArbitrageError, ExchangeId, OrderType, Result, Side, Symbol};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::debug;
 
 /// Spread Capture Strategy
@@ -321,12 +322,12 @@ impl SpreadCaptureStrategy {
                 }
 
                 // Create signal with both bid and ask orders
-                let mut signal = RawSignal::new(self.id(), (*symbol).clone());
+                let mut signal = RawSignal::new(self.id(), Arc::clone(&symbol));
 
                 // Add bid leg (buy order)
                 let bid_leg = TradeLeg::new(
                     exchange,
-                    (*symbol).clone(),
+                    Arc::clone(&symbol),
                     Side::Buy,
                     our_bid,
                     position_size,
@@ -337,7 +338,7 @@ impl SpreadCaptureStrategy {
                 // Add ask leg (sell order)
                 let ask_leg = TradeLeg::new(
                     exchange,
-                    (*symbol).clone(),
+                    Arc::clone(&symbol),
                     Side::Sell,
                     our_ask,
                     position_size,

@@ -77,11 +77,11 @@ async fn test_cross_exchange_arbitrage_filtering() -> Result<()> {
     let symbol = Symbol::new("ETH", "USDT");
 
     // Create a valid cross-exchange signal
-    let mut signal = RawSignal::new("cross_exchange_arbitrage", symbol.clone());
+    let mut signal = RawSignal::new("cross_exchange_arbitrage", Arc::new(symbol.clone()));
 
     let buy_leg = TradeLeg::new(
         ExchangeId::ByBit,
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Buy,
         Decimal::from(3000), // $3,000
         Decimal::from(1),
@@ -90,7 +90,7 @@ async fn test_cross_exchange_arbitrage_filtering() -> Result<()> {
 
     let sell_leg = TradeLeg::new(
         ExchangeId::OKX,
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Sell,
         Decimal::from(3030), // $3,030
         Decimal::from(1),

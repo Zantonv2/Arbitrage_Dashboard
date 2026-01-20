@@ -179,7 +179,7 @@ pub fn low_confidence_factors() -> ConfidenceFactors {
 pub fn buy_trade_leg(exchange: ExchangeId, price: Decimal, quantity: Decimal) -> TradeLeg {
     TradeLeg::new(
         exchange,
-        btc_usdt_symbol(),
+        btc_usdt_symbol().into(),
         crate::types::Side::Buy,
         price,
         quantity,
@@ -189,7 +189,7 @@ pub fn buy_trade_leg(exchange: ExchangeId, price: Decimal, quantity: Decimal) ->
 pub fn sell_trade_leg(exchange: ExchangeId, price: Decimal, quantity: Decimal) -> TradeLeg {
     TradeLeg::new(
         exchange,
-        btc_usdt_symbol(),
+        btc_usdt_symbol().into(),
         crate::types::Side::Sell,
         price,
         quantity,
@@ -430,14 +430,14 @@ impl SignalBuilder {
             .unwrap_or_else(|| Symbol::new("BTC", "USDT"));
         self.legs.push(TradeLeg::new(
             buy_exchange,
-            symbol.clone(),
+            symbol.clone().into(),
             crate::types::Side::Buy,
             buy_price,
             Decimal::from(1),
         ));
         self.legs.push(TradeLeg::new(
             sell_exchange,
-            symbol.clone(),
+            symbol.clone().into(),
             crate::types::Side::Sell,
             sell_price,
             Decimal::from(1),
@@ -458,7 +458,7 @@ impl SignalBuilder {
     pub fn build(self) -> RawSignal {
         let mut signal = RawSignal::new(
             self.strategy_id,
-            self.symbol.unwrap_or_else(|| Symbol::new("BTC", "USDT")),
+            Arc::new(self.symbol.unwrap_or_else(|| Symbol::new("BTC", "USDT"))),
         );
         for leg in self.legs {
             signal.add_leg(leg);

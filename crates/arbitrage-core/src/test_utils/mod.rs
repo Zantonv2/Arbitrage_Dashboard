@@ -59,7 +59,7 @@ pub fn create_test_order_book(exchange: ExchangeId, symbol: &str) -> OrderBook {
 }
 
 pub fn create_test_raw_signal() -> RawSignal {
-    let symbol = Symbol::new("BTC", "USDT");
+    let symbol = Arc::new(Symbol::new("BTC", "USDT"));
     let mut signal = RawSignal::new("test_strategy", symbol);
     signal.set_profit_bps(15);
     signal
