@@ -525,3 +525,84 @@ impl ExchangeStatus {
         }
     }
 }
+
+/// Trait for converting Decimal values to basis points (bps)
+pub trait ToBps {
+    fn to_bps(&self) -> Option<i32>;
+    fn to_bps_or_zero(&self) -> i32;
+}
+
+impl ToBps for Decimal {
+    fn to_bps(&self) -> Option<i32> {
+        (self * Decimal::from(10000)).to_i32()
+    }
+
+    fn to_bps_or_zero(&self) -> i32 {
+        self.to_bps().unwrap_or(0)
+    }
+}
+
+/// Trait for calculating mid price from market data
+pub trait MidPrice {
+    fn mid_price(&self) -> Option<Decimal>;
+}
+
+impl MidPrice for crate::strategies::Ticker {
+    fn mid_price(&self) -> Option<Decimal> {
+        if self.bid.is_zero() && self.ask.is_zero() {
+            None
+        } else {
+            Some((self.bid + self.ask) / Decimal::from(2))
+        }
+    }
+}
+
+impl MidPrice for OrderBook {
+    fn mid_price(&self) -> Option<Decimal> {
+        match (self.best_ask(), self.best_bid()) {
+            (Some(ask), Some(bid)) => Some((ask.price + bid.price) / Decimal::from(2)),
+            _ => None,
+        }
+    }
+}
+
+/// Exchange constants for convenience
+pub mod exchange_constants {
+    use super::ExchangeId;
+
+    pub const ALL_EXCHANGES: [ExchangeId; 12] = [
+        ExchangeId::OKX,
+        ExchangeId::ByBit,
+        ExchangeId::MEXC,
+        ExchangeId::GateIo,
+        ExchangeId::Bitstamp,
+        ExchangeId::Kraken,
+        ExchangeId::HTX,
+        ExchangeId::BingX,
+        ExchangeId::Hyperliquid,
+        ExchangeId::KuCoin,
+        ExchangeId::Bitget,
+        ExchangeId::Binance,
+    ];
+
+    pub const PERPETUAL_EXCHANGES: [ExchangeId; 3] =
+        [ExchangeId::OKX, ExchangeId::ByBit, ExchangeId::MEXC];
+
+    pub const SPOT_EXCHANGES: [ExchangeId; 6] = [
+        ExchangeId::OKX,
+        ExchangeId::ByBit,
+        ExchangeId::MEXC,
+        ExchangeId::GateIo,
+        ExchangeId::Bitstamp,
+        ExchangeId::Kraken,
+    ];
+}
+
+/// Calculate profit in basis points from buy and sell prices
+pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i32> {
+    if buy_price.is_zero() {
+        return None;
+    }
+    let profit_ratio = (sell_price - buy_price) / buy_price;
+    (profit_ratio * Decimal::from(10000)).to_i32()
+}

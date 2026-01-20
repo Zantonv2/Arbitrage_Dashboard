@@ -40,6 +40,77 @@ pub trait Strategy: Send + Sync {
     fn update_config(&mut self, config: StrategyConfig) -> Result<()>;
 }
 
+/// Extended strategy trait with default filter implementation
+/// Eliminates boilerplate by providing common filter logic
+pub trait ArbitrageStrategy: Strategy {
+    /// Expected number of legs for this strategy (default: 2)
+    fn expected_leg_count(&self) -> usize {
+        2
+    }
+
+    /// Validate signal with default criteria
+    fn validate_signal(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool> {
+        if !signal.is_valid() {
+            return Ok(false);
+        }
+
+        if signal.legs.len() != self.expected_leg_count() {
+            return Ok(false);
+        }
+
+        let exchanges = signal.get_exchanges();
+        if !exchanges.iter().all(|ex| context.is_exchange_allowed(*ex)) {
+            return Ok(false);
+        }
+
+        if signal.expected_profit_bps < context.min_profit_bps {
+            return Ok(false);
+        }
+
+        let total = signal.total_notional();
+        if total > context.max_exposure {
+            return Ok(false);
+        }
+
+        self.validate_inventory(signal, context)
+    }
+
+    /// Inventory validation hook (default: skip)
+    fn validate_inventory(&self, _signal: &RawSignal, _context: &FilterContext) -> Result<bool> {
+        Ok(true)
+    }
+}
+
+/// Macro to create strategy new() function with default config
+#[macro_export]
+macro_rules! strategy_new {
+    ($type:ident, $strategy_id:expr) => {
+        impl $type {
+            pub fn new() -> Self {
+                let config = StrategyConfig {
+                    min_profit_bps: StrategyLimits::get_min_profit_bps($strategy_id),
+                    max_exposure: StrategyLimits::get_max_exposure($strategy_id),
+                    custom_params: StrategyUtils::create_base_custom_params(),
+                    ..Default::default()
+                };
+                Self { config }
+            }
+        }
+    };
+}
+
+/// Macro to implement Default for strategy using strategy_new!
+#[macro_export]
+macro_rules! strategy_default {
+    ($type:ident) => {
+        impl Default for $type {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+
 /// Bundle of market data for strategy analysis
 #[derive(Debug, Clone)]
 pub struct MarketBundle {
@@ -193,12 +264,38 @@ impl RawSignal {
         self.legs.push(leg);
     }
 
+    /// Add a buy leg with fluent builder pattern
+    pub fn add_buy_leg(mut self, exchange: ExchangeId, price: Decimal, quantity: Decimal) -> Self {
+        let leg = TradeLeg::new(exchange, self.symbol.clone(), Side::Buy, price, quantity);
+        self.legs.push(leg);
+        self
+    }
+
+    /// Add a sell leg with fluent builder pattern
+    pub fn add_sell_leg(mut self, exchange: ExchangeId, price: Decimal, quantity: Decimal) -> Self {
+        let leg = TradeLeg::new(exchange, self.symbol.clone(), Side::Sell, price, quantity);
+        self.legs.push(leg);
+        self
+    }
+
     pub fn set_profit_bps(&mut self, profit_bps: i32) {
         self.expected_profit_bps = profit_bps;
     }
 
+    /// Set profit in basis points with fluent builder pattern
+    pub fn with_profit_bps(mut self, bps: i32) -> Self {
+        self.expected_profit_bps = bps;
+        self
+    }
+
     pub fn add_metadata(&mut self, key: impl Into<String>, value: serde_json::Value) {
         self.metadata.insert(key.into(), value);
+    }
+
+    /// Add metadata with fluent builder pattern
+    pub fn with_metadata(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
     }
 
     /// Validate that the signal has valid legs and profit
