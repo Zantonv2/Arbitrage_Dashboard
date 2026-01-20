@@ -376,7 +376,7 @@ async fn test_engine_strategy_signal_flow() -> Result<()> {
 
 #[tokio::test]
 async fn test_signal_execution_order_flow() -> Result<()> {
-    use arbitrage_core::types::{Order, OrderType, TimeInForce};
+    use arbitrage_core::types::{Order, OrderType};
 
     let engine = create_test_engine(":memory:").await?;
 

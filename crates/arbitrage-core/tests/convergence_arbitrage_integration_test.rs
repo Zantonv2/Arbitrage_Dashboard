@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use arbitrage_core::{
     strategies::{ConvergenceArbitrageStrategy, FilterContext, MarketBundle, Strategy, Ticker},
     types::{ExchangeId, Symbol},
     Result,
 };
 use rust_decimal::Decimal;
+use std::sync::Arc;
 
 /// Integration test for convergence arbitrage strategy
 #[tokio::test]

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         FilterContext, MarketBundle, SpreadCaptureStrategy, Strategy, StrategyConfig, Ticker,
@@ -8,6 +7,7 @@ use arbitrage_core::{
 };
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::sync::Arc;
 
 /// Integration test for spread capture strategy
 #[tokio::test]

@@ -2,6 +2,7 @@ use crate::{
     types::{ExecutionInstruction, Signal},
     ArbitrageError, Result,
 };
+use chrono::Utc;
 use rust_decimal::Decimal;
 use sqlx::{sqlite::SqlitePool, Row};
 use std::str::FromStr;
@@ -591,7 +592,14 @@ impl StorageService {
         let sell_price = Decimal::from_str(&row.get::<String, _>("sell_price"))
             .map_err(|e| ArbitrageError::Storage(format!("Invalid sell price: {}", e)))?;
 
-        let mut signal = Signal::new(symbol, buy_exchange, sell_exchange, buy_price, sell_price);
+        let mut signal = Signal::new(
+            symbol,
+            buy_exchange,
+            sell_exchange,
+            buy_price,
+            sell_price,
+            Utc::now(),
+        );
         signal.id = id;
 
         signal.gross_profit_percent =

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        size_calculator::{SizeCalculator, SizeConfig, SizeRecommendation, SizeTier},
+        size_calculator::{SizeCalculator, SizeConfig, SizeTier},
         types::{ExchangeId, OrderBook, OrderBookLevel, Signal, Symbol},
     };
     use rust_decimal::Decimal;
@@ -13,6 +13,7 @@ mod tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         )
     }
 
@@ -63,13 +64,13 @@ mod tests {
     #[test]
     fn test_size_calculator_new() {
         let config = SizeConfig::default();
-        let calculator = SizeCalculator::new(config);
+        let _calculator = SizeCalculator::new(config);
         assert!(true);
     }
 
     #[test]
     fn test_size_calculator_default() {
-        let calculator = SizeCalculator::default();
+        let _calculator = SizeCalculator::default();
         assert!(true);
     }
 
@@ -344,6 +345,7 @@ mod tests {
             ExchangeId::ByBit,
             Decimal::ZERO,
             Decimal::ZERO,
+            chrono::Utc::now(),
         );
         signal.gross_profit_percent = Decimal::ZERO;
         signal.net_profit_percent = Decimal::ZERO;
@@ -505,6 +507,7 @@ mod tests {
                 ExchangeId::ByBit,
                 Decimal::from(50000 - i * 10),
                 Decimal::from(50100 + i * 10),
+                chrono::Utc::now(),
             );
             signal.gross_profit_percent = Decimal::from(i * 10);
             signal.net_profit_percent = Decimal::from(i * 8);

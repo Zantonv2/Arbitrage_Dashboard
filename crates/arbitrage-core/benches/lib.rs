@@ -315,6 +315,7 @@ mod memory_benchmarks {
                         ExchangeId::ByBit,
                         Decimal::from(50000 + i),
                         Decimal::from(50010 + i),
+                        chrono::Utc::now(),
                     );
                     signals.push(signal);
                 }
@@ -649,6 +650,7 @@ mod utilities_benchmarks {
                             ExchangeId::ByBit,
                             Decimal::from(50000 + i),
                             Decimal::from(50010 + i),
+                            chrono::Utc::now(),
                         );
                         let profit = Decimal::from(i % 100);
                         (signal, profit)
@@ -821,6 +823,7 @@ mod additional_core_benchmarks {
                     ExchangeId::ByBit,
                     Decimal::from(50000),
                     Decimal::from(50010),
+                    chrono::Utc::now(),
                 ))
             })
         });
@@ -835,6 +838,7 @@ mod additional_core_benchmarks {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50010),
+            chrono::Utc::now(),
         );
         group.bench_function("check_expired", |b| {
             b.iter(|| black_box(signal.is_expired()))
@@ -1345,6 +1349,7 @@ mod signal_processing_benchmarks {
                     ExchangeId::ByBit,
                     Decimal::from(50000),
                     Decimal::from(50100),
+                    chrono::Utc::now(),
                 ))
             })
         });
@@ -1359,6 +1364,7 @@ mod signal_processing_benchmarks {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         );
         group.bench_function("is_valid", |b| b.iter(|| black_box(signal.is_valid())));
         group.finish();
@@ -1372,6 +1378,7 @@ mod signal_processing_benchmarks {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         );
         group.bench_function("is_expired", |b| b.iter(|| black_box(signal.is_expired())));
         group.finish();
@@ -1385,6 +1392,7 @@ mod signal_processing_benchmarks {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         );
         group.bench_function("profit_bps", |b| b.iter(|| black_box(signal.profit_bps())));
         group.finish();
@@ -1400,6 +1408,7 @@ mod signal_processing_benchmarks {
                     ExchangeId::ByBit,
                     Decimal::from(50000 + i % 100),
                     Decimal::from(50100 + i % 100),
+                    chrono::Utc::now(),
                 )
             })
             .collect();
@@ -1422,6 +1431,7 @@ mod signal_processing_benchmarks {
                     ExchangeId::ByBit,
                     Decimal::from(50000),
                     Decimal::from(50000 + i as i32),
+                    chrono::Utc::now(),
                 )
             })
             .collect();
@@ -1441,6 +1451,7 @@ mod signal_processing_benchmarks {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         );
         let mut group = c.benchmark_group("signal/clone");
         group.bench_function("clone", |b| b.iter(|| black_box(signal.clone())));
@@ -1454,6 +1465,7 @@ mod signal_processing_benchmarks {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         );
         let signal2 = signal1.clone();
         let mut group = c.benchmark_group("signal/equality");

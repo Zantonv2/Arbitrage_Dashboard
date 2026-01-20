@@ -90,14 +90,8 @@ pub fn low_liquidity_order_book() -> OrderBook {
     OrderBook::new(
         ExchangeId::ByBit,
         btc_usdt_symbol(),
-        vec![OrderBookLevel::new(
-            Decimal::from(50000),
-            Decimal::from(0_0001),
-        )],
-        vec![OrderBookLevel::new(
-            Decimal::from(50001),
-            Decimal::from(0_0001),
-        )],
+        vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))],
     )
 }
 

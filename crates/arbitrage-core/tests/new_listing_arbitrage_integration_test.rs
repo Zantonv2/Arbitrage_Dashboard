@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         FilterContext, MarketBundle, NewListingArbitrageStrategy, RawSignal, Strategy, Ticker,
@@ -9,6 +8,7 @@ use arbitrage_core::{
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use std::sync::Arc;
 use tokio;
 
 /// Integration test for new listing arbitrage

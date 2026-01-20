@@ -422,7 +422,7 @@ async fn test_cex_arbitrage_all_tier1_exchanges() -> Result<()> {
 
 #[tokio::test]
 async fn test_cex_arbitrage_empty_orderbook() -> Result<()> {
-    let (engine, strategies) = create_test_engine(Decimal::new(1, 4)).await?;
+    let (engine, _strategies) = create_test_engine(Decimal::new(1, 4)).await?;
 
     let symbol = Symbol::new("BTC", "USDT");
 
@@ -433,24 +433,17 @@ async fn test_cex_arbitrage_empty_orderbook() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
     );
 
-    let bybit_book = OrderBook::new(
+    let _bybit_book = OrderBook::new(
         ExchangeId::ByBit,
         symbol.clone(),
         vec![OrderBookLevel::new(Decimal::from(50200), Decimal::from(1))],
         vec![],
     );
 
-    engine.update_order_book(okx_book).await?;
-    engine.update_order_book(bybit_book).await?;
-
-    let mut registry = StrategyRegistry::new();
-    for strategy in strategies {
-        registry.register(strategy)?;
-    }
-
-    let signals = engine.detect_opportunities(&registry).await?;
-
-    println!("Empty orderbook test: {} signals detected", signals.len());
+    let result = engine.update_order_book(okx_book).await;
+    assert!(result.is_err(), "Expected error for empty bids orderbook");
+    let error_msg = result.unwrap_err().to_string().to_lowercase();
+    assert!(error_msg.contains("empty") || error_msg.contains("invalid"));
 
     Ok(())
 }

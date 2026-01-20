@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use arbitrage_core::{
     strategies::{MarketBundle, StablecoinArbitrageStrategy, Strategy, Ticker},
     types::{ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
 };
 use rust_decimal::Decimal;
+use std::sync::Arc;
 use tokio;
 
 /// Integration test for stablecoin peg arbitrage
