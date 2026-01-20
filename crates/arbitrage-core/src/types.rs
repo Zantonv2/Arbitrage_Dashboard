@@ -525,3 +525,62 @@ impl ExchangeStatus {
         }
     }
 }
+
+/// Trait for converting Decimal values to basis points (bps)
+/// 1 basis point = 0.01% = 0.0001
+/// For percentage values (0.1 = 10%), multiply by 10000 to get bps (1000 bps = 10%)
+pub trait ToBps {
+    fn to_bps(&self) -> Option<i32>;
+    fn to_bps_or_zero(&self) -> i32;
+}
+
+impl ToBps for Decimal {
+    fn to_bps(&self) -> Option<i32> {
+        (self * Decimal::from(10000)).to_i32()
+    }
+
+    fn to_bps_or_zero(&self) -> i32 {
+        self.to_bps().unwrap_or(0)
+    }
+}
+
+/// Exchange constants for convenience
+pub mod exchange_constants {
+    use super::ExchangeId;
+
+    pub const ALL_EXCHANGES: [ExchangeId; 12] = [
+        ExchangeId::OKX,
+        ExchangeId::ByBit,
+        ExchangeId::MEXC,
+        ExchangeId::GateIo,
+        ExchangeId::Bitstamp,
+        ExchangeId::Kraken,
+        ExchangeId::HTX,
+        ExchangeId::BingX,
+        ExchangeId::Hyperliquid,
+        ExchangeId::KuCoin,
+        ExchangeId::Bitget,
+        ExchangeId::Binance,
+    ];
+
+    pub const PERPETUAL_EXCHANGES: [ExchangeId; 3] =
+        [ExchangeId::OKX, ExchangeId::ByBit, ExchangeId::MEXC];
+
+    pub const SPOT_EXCHANGES: [ExchangeId; 6] = [
+        ExchangeId::OKX,
+        ExchangeId::ByBit,
+        ExchangeId::MEXC,
+        ExchangeId::GateIo,
+        ExchangeId::Bitstamp,
+        ExchangeId::Kraken,
+    ];
+}
+
+/// Calculate profit in basis points from buy and sell prices
+pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i32> {
+    if buy_price.is_zero() {
+        return None;
+    }
+    let profit_ratio = (sell_price - buy_price) / buy_price;
+    (profit_ratio * Decimal::from(10000)).to_i32()
+}
