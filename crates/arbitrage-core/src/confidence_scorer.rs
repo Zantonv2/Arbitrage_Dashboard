@@ -1,11 +1,14 @@
-use crate::{
-    types::{ExchangeId, OrderBook, VwapResult},
-    ArbitrageError, Result,
-};
+use crate::types::{ExchangeId, OrderBook, VwapResult};
 use chrono::{DateTime, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+
+/// Result type for net spread calculation
+pub enum NetSpreadResult {
+    Profit(i32),
+    Unprofitable,
+}
 
 /// Factors contributing to confidence score
 #[derive(Debug, Clone)]
@@ -155,9 +158,9 @@ impl ConfidenceScorer {
         sell_price: Decimal,
         buy_exchange: ExchangeId,
         sell_exchange: ExchangeId,
-    ) -> Result<i32> {
+    ) -> NetSpreadResult {
         if buy_price.is_zero() {
-            return Err(ArbitrageError::Calculation("Zero buy price".to_string()));
+            return NetSpreadResult::Unprofitable;
         }
 
         // Get fee rates (default to 0.1% if not found)
@@ -178,29 +181,24 @@ impl ConfidenceScorer {
         let effective_sell = sell_price * (Decimal::ONE - sell_fee_rate);
 
         if effective_sell <= effective_buy {
-            return Ok(-1); // Return negative to indicate unprofitable signal
+            return NetSpreadResult::Unprofitable;
         }
 
         if effective_buy <= Decimal::ZERO {
-            return Err(ArbitrageError::Calculation(
-                "effective_buy must be positive for net spread calculation".to_string(),
-            ));
+            return NetSpreadResult::Unprofitable;
         }
 
-        let net_spread_ratio = (effective_sell - effective_buy)
-            .checked_div(effective_buy)
-            .ok_or_else(|| {
-                ArbitrageError::Calculation(
-                    "Division by zero in net spread calculation".to_string(),
-                )
-            })?;
+        let net_spread_ratio = match (effective_sell - effective_buy).checked_div(effective_buy) {
+            Some(ratio) => ratio,
+            None => return NetSpreadResult::Unprofitable,
+        };
 
-        let spread_bps = net_spread_ratio
-            .checked_mul(Decimal::from(10000))
-            .ok_or_else(|| ArbitrageError::Calculation("Spread BPS overflow".to_string()))?;
+        let spread_bps = match net_spread_ratio.checked_mul(Decimal::from(10000)) {
+            Some(bps) => bps,
+            None => return NetSpreadResult::Unprofitable,
+        };
 
-        // Safe conversion to i32
-        Ok(spread_bps.to_i32().unwrap_or(0))
+        NetSpreadResult::Profit(spread_bps.to_i32().unwrap_or(0))
     }
 
     /// Check if market data is fresh enough
