@@ -1,3 +1,4 @@
+use crate::types::ToBps;
 /// Strategy-specific configurations, constants, and utilities
 ///
 /// This module contains strategy-specific parameters, default configurations,
@@ -6,6 +7,71 @@ use crate::ExchangeId;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+
+/// Trait for calculating fees and net profit
+pub trait FeeCalculator {
+    fn total_fee_bps(&self, buy_fee: Decimal, sell_fee: Decimal) -> i32;
+    fn net_profit_after_fees(&self, gross_profit_bps: i32, total_fee_bps: i32) -> i32;
+}
+
+impl FeeCalculator for () {
+    fn total_fee_bps(&self, buy_fee: Decimal, sell_fee: Decimal) -> i32 {
+        ((buy_fee + sell_fee) * Decimal::from(100)).to_bps_or_zero()
+    }
+
+    fn net_profit_after_fees(&self, gross_profit_bps: i32, total_fee_bps: i32) -> i32 {
+        gross_profit_bps - total_fee_bps
+    }
+}
+
+/// Trait for convenient access to typed values from HashMap<String, Value>
+pub trait ConfigExtensions {
+    fn get_f64(&self, key: &str) -> Option<f64>;
+    fn get_i64(&self, key: &str) -> Option<i64>;
+    fn get_bool(&self, key: &str) -> Option<bool>;
+    fn get_decimal(&self, key: &str) -> Option<Decimal>;
+    fn get_f64_or(&self, key: &str, default: f64) -> f64;
+    fn get_i64_or(&self, key: &str, default: i64) -> i64;
+    fn get_bool_or(&self, key: &str, default: bool) -> bool;
+    fn get_decimal_or(&self, key: &str, default: Decimal) -> Decimal;
+}
+
+impl ConfigExtensions for HashMap<String, Value> {
+    fn get_f64(&self, key: &str) -> Option<f64> {
+        self.get(key).and_then(|v| v.as_f64())
+    }
+
+    fn get_i64(&self, key: &str) -> Option<i64> {
+        self.get(key).and_then(|v| v.as_i64())
+    }
+
+    fn get_bool(&self, key: &str) -> Option<bool> {
+        self.get(key).and_then(|v| v.as_bool())
+    }
+
+    fn get_decimal(&self, key: &str) -> Option<Decimal> {
+        self.get(key)
+            .and_then(|v| v.as_f64())
+            .map(|f| Decimal::try_from(f).ok())
+            .flatten()
+    }
+
+    fn get_f64_or(&self, key: &str, default: f64) -> f64 {
+        self.get_f64(key).unwrap_or(default)
+    }
+
+    fn get_i64_or(&self, key: &str, default: i64) -> i64 {
+        self.get_i64(key).unwrap_or(default)
+    }
+
+    fn get_bool_or(&self, key: &str, default: bool) -> bool {
+        self.get_bool(key).unwrap_or(default)
+    }
+
+    fn get_decimal_or(&self, key: &str, default: Decimal) -> Decimal {
+        self.get_decimal(key).unwrap_or(default)
+    }
+}
 
 /// Default configuration parameters for CEX arbitrage strategy
 pub struct CexArbitrageDefaults;
