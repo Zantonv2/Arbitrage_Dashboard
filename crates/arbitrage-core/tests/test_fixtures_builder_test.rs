@@ -1,6 +1,5 @@
 use arbitrage_core::test_utils::fixtures::TestFixtures;
 use arbitrage_core::types::*;
-use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 
 #[test]

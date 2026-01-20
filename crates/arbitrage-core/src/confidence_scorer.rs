@@ -181,6 +181,12 @@ impl ConfidenceScorer {
             return Ok(-1); // Return negative to indicate unprofitable signal
         }
 
+        if effective_buy <= Decimal::ZERO {
+            return Err(ArbitrageError::Calculation(
+                "effective_buy must be positive for net spread calculation".to_string(),
+            ));
+        }
+
         let net_spread_ratio = (effective_sell - effective_buy)
             .checked_div(effective_buy)
             .ok_or_else(|| {

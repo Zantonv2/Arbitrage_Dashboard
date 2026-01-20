@@ -15,14 +15,39 @@ pub struct ExecutionConfig {
     pub enable_force_execute: bool, // Allow negative worst-case profit if strategy requires
 }
 
+impl ExecutionConfig {
+    pub fn new(
+        slippage_buffer_percent: Decimal,
+        default_time_in_force: TimeInForce,
+        order_type: OrderType,
+        enable_force_execute: bool,
+    ) -> Self {
+        if enable_force_execute && Self::is_production() {
+            tracing::error!("force_execute cannot be enabled in production mode - ignoring force_execute setting");
+        }
+        Self {
+            slippage_buffer_percent,
+            default_time_in_force,
+            order_type,
+            enable_force_execute: enable_force_execute && !Self::is_production(),
+        }
+    }
+
+    fn is_production() -> bool {
+        std::env::var("ARBITRAGE_ENV")
+            .map(|v| v.eq_ignore_ascii_case("production"))
+            .unwrap_or(false)
+    }
+}
+
 impl Default for ExecutionConfig {
     fn default() -> Self {
-        Self {
-            slippage_buffer_percent: Decimal::new(5, 4), // 0.0005 = 0.05% slippage buffer
-            default_time_in_force: TimeInForce::IOC,
-            order_type: OrderType::Limit,
-            enable_force_execute: false, // Conservative default
-        }
+        Self::new(
+            Decimal::new(5, 4), // 0.0005 = 0.05% slippage buffer
+            TimeInForce::IOC,
+            OrderType::Limit,
+            false, // Conservative default
+        )
     }
 }
 
@@ -189,6 +214,20 @@ impl ExecutionPreparer {
             instruction
                 .validation_errors
                 .push("Buy and sell symbols must match".to_string());
+        }
+
+        // Check that expected profit is positive (unless force execute is enabled)
+        if instruction.expected_profit <= Decimal::ZERO && !self.config.enable_force_execute {
+            instruction.validation_errors.push(format!(
+                "Expected profit {} is not positive",
+                instruction.expected_profit
+            ));
+        } else if instruction.expected_profit <= Decimal::ZERO && self.config.enable_force_execute {
+            tracing::warn!(
+                signal_id = %instruction.signal_id,
+                expected_profit = %instruction.expected_profit,
+                "Force executing instruction with negative expected profit"
+            );
         }
 
         // Check that worst case is still profitable (unless force execute is enabled)

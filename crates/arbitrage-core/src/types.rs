@@ -210,14 +210,16 @@ impl OrderBook {
     }
 
     pub fn is_valid(&self) -> bool {
-        // Check that bids are sorted descending and asks ascending
+        if self.bids.is_empty() || self.asks.is_empty() {
+            return false;
+        }
+
         let bids_sorted = self.bids.windows(2).all(|w| w[0].price >= w[1].price);
         let asks_sorted = self.asks.windows(2).all(|w| w[0].price <= w[1].price);
 
-        // Check that best bid < best ask
         let spread_valid = match (self.best_bid(), self.best_ask()) {
             (Some(bid), Some(ask)) => bid.price < ask.price,
-            _ => true, // Empty books are considered valid
+            _ => false,
         };
 
         bids_sorted && asks_sorted && spread_valid
@@ -362,7 +364,11 @@ impl Signal {
         sell_exchange: ExchangeId,
         buy_price: Decimal,
         sell_price: Decimal,
+        created_at: DateTime<Utc>,
     ) -> Self {
+        if created_at > Utc::now() {
+            panic!("Signal created_at cannot be in the future");
+        }
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
@@ -379,7 +385,7 @@ impl Signal {
             max_size: Decimal::ZERO,
             expected_slippage: Decimal::ZERO,
             estimated_execution_time_ms: 0,
-            created_at: now,
+            created_at,
             expires_at: now + chrono::Duration::minutes(5), // Default 5 min expiry
             metadata: HashMap::new(),
         }
@@ -390,7 +396,12 @@ impl Signal {
     }
 
     pub fn age_seconds(&self) -> i64 {
-        (Utc::now() - self.created_at).num_seconds()
+        let duration = Utc::now() - self.created_at;
+        if duration.num_seconds() < 0 {
+            0
+        } else {
+            duration.num_seconds()
+        }
     }
 }
 
@@ -483,6 +494,12 @@ pub struct FeeSchedule {
 
 impl FeeSchedule {
     pub fn new(exchange: ExchangeId, maker_fee: Decimal, taker_fee: Decimal) -> Self {
+        if maker_fee < Decimal::ZERO {
+            panic!("maker_fee cannot be negative: {}", maker_fee);
+        }
+        if taker_fee < Decimal::ZERO {
+            panic!("taker_fee cannot be negative: {}", taker_fee);
+        }
         Self {
             exchange,
             maker_fee,

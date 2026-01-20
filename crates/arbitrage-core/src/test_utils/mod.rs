@@ -90,8 +90,8 @@ pub fn create_test_order_book_with_spread(
     ask: Decimal,
 ) -> OrderBook {
     let symbol_parts: Vec<&str> = symbol.split('/').collect();
-    let base = symbol_parts.get(0).map(|s| *s).unwrap_or("BTC");
-    let quote = symbol_parts.get(1).map(|s| *s).unwrap_or("USDT");
+    let base = symbol_parts.first().copied().unwrap_or("BTC");
+    let quote = symbol_parts.get(1).copied().unwrap_or("USDT");
     let symbol = Symbol::new(base, quote);
     OrderBook::new(
         exchange,
@@ -107,8 +107,8 @@ pub fn create_test_market_bundle_with_order_books(
 ) -> MarketBundle {
     let mut bundle = MarketBundle::new();
     let symbol_parts: Vec<&str> = symbol.split('/').collect();
-    let base = symbol_parts.get(0).map(|s| *s).unwrap_or("BTC");
-    let quote = symbol_parts.get(1).map(|s| *s).unwrap_or("USDT");
+    let base = symbol_parts.first().copied().unwrap_or("BTC");
+    let quote = symbol_parts.get(1).copied().unwrap_or("USDT");
     let symbol_obj = Symbol::new(base, quote);
 
     for (i, &exchange) in exchanges.iter().enumerate() {

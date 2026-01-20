@@ -2,8 +2,8 @@
 mod tests {
     use crate::{
         confidence_scorer::FeeSchedule,
-        execution_preparer::{ExecutionConfig, ExecutionPreparer, ExecutionPreview, OrderSummary},
-        types::{ExecutionInstruction, Order, OrderType, Side, Signal, TimeInForce},
+        execution_preparer::{ExecutionConfig, ExecutionPreparer},
+        types::{OrderType, Side, Signal, TimeInForce},
     };
     use rust_decimal::Decimal;
 
@@ -14,6 +14,7 @@ mod tests {
             crate::types::ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         )
     }
 
@@ -31,13 +32,13 @@ mod tests {
     #[test]
     fn test_execution_preparer_new() {
         let config = ExecutionConfig::default();
-        let preparer = ExecutionPreparer::new(config);
+        let _preparer = ExecutionPreparer::new(config);
         assert!(true);
     }
 
     #[test]
     fn test_execution_preparer_default() {
-        let preparer = ExecutionPreparer::default();
+        let _preparer = ExecutionPreparer::default();
         assert!(true);
     }
 
@@ -84,7 +85,7 @@ mod tests {
 
         let result = preparer.prepare_execution(&signal, quantity);
         assert!(result.is_ok());
-        let instruction = result.unwrap();
+        let _instruction = result.unwrap();
 
         // Profit should be calculated (can be positive, zero, or negative)
         assert!(true); // Just verify no panic
@@ -100,7 +101,7 @@ mod tests {
         let instruction_result = preparer.prepare_execution(&signal, quantity);
         assert!(instruction_result.is_ok());
 
-        let preview = preparer.generate_preview(&instruction_result.unwrap());
+        let _preview = preparer.generate_preview(&instruction_result.unwrap());
         assert!(true); // Just verify no panic
     }
 
@@ -307,7 +308,7 @@ mod tests {
         let instruction_result = preparer.prepare_execution(&signal, quantity);
         assert!(instruction_result.is_ok());
 
-        let preview = preparer.generate_preview(&instruction_result.unwrap());
+        let _preview = preparer.generate_preview(&instruction_result.unwrap());
         // Force execute allows execution even with issues
         assert!(true);
     }
@@ -615,6 +616,7 @@ mod tests {
                 crate::types::ExchangeId::ByBit,
                 Decimal::from(50000),
                 Decimal::from(50100 + i),
+                chrono::Utc::now(),
             );
             let quantity = Decimal::from(i + 1);
             let result = preparer.prepare_execution(&signal, quantity);

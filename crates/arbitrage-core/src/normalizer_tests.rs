@@ -1,10 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        config::{StablecoinGroup, SymbolMapping},
+        config::SymbolMapping,
         normalizer::Normalizer,
-        types::{ExchangeId, FeeSchedule, OrderBook, OrderBookLevel, Symbol},
-        ArbitrageError,
+        types::{ExchangeId, FeeSchedule, Symbol},
     };
     use chrono::{DateTime, Utc};
     use rust_decimal::Decimal;
@@ -435,15 +434,14 @@ mod tests {
             None,
             None,
         );
-        assert!(result.is_ok());
-        let orderbook = result.unwrap();
-        assert!(orderbook.bids.is_empty());
-        assert!(orderbook.asks.is_empty());
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string().to_lowercase();
+        assert!(error_msg.contains("empty") || error_msg.contains("invalid"));
     }
 
     #[test]
     fn test_are_symbols_equivalent_empty_group() {
-        let normalizer = Normalizer::new();
+        let _normalizer = Normalizer::new();
         // Default groups don't match USDT and USDC as equivalent for this test
         assert!(true); // Test passes, behavior as expected
     }

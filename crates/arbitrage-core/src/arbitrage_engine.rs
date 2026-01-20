@@ -572,6 +572,7 @@ impl ArbitrageEngine {
             sell_leg.exchange,
             buy_leg.price,
             sell_leg.price,
+            Utc::now(),
         );
 
         signal.gross_profit_percent = gross_profit_percent;

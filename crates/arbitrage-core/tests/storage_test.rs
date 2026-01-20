@@ -36,6 +36,7 @@ fn create_test_signal() -> Signal {
         ExchangeId::ByBit,
         buy_price,
         sell_price,
+        chrono::Utc::now(),
     );
     signal.gross_profit_percent = Decimal::new(200, 4); // 2%
     signal.net_profit_percent = Decimal::new(150, 4); // 1.5%
