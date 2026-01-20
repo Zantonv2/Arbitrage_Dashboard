@@ -21,15 +21,19 @@ fn test_market_bundle_empty() {
 #[test]
 fn test_market_bundle_add_order_book() {
     let mut bundle = MarketBundle::new();
-    let symbol = Symbol::new("BTC", "USDT");
+    let symbol = Arc::new(Symbol::new("BTC", "USDT"));
     let order_book = OrderBook::new(
         ExchangeId::OKX,
-        symbol.clone(),
+        Arc::clone(&symbol),
         vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
         vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
     );
 
-    bundle.add_order_book(std::sync::Arc::new(order_book));
+    bundle.add_order_book(
+        ExchangeId::OKX,
+        Arc::clone(&symbol),
+        std::sync::Arc::new(order_book),
+    );
     assert_eq!(bundle.order_books.len(), 1);
 }
 

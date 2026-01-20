@@ -14,6 +14,7 @@ use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::debug;
+use std::sync::Arc;
 
 /// Hedged Funding Strategy
 ///

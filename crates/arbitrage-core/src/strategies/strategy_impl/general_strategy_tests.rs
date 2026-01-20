@@ -1,4 +1,5 @@
 #[cfg(test)]
+use std::sync::Arc;
 mod tests {
     use crate::strategies::base::{
         MarketBundle, RawSignal, Strategy, StrategyConfig, Ticker, TradeLeg,

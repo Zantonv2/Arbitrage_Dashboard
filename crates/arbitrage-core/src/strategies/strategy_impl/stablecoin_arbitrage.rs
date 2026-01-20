@@ -10,6 +10,7 @@ use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::Arc;
 
 /// Stablecoin Peg Arbitrage Strategy
 ///

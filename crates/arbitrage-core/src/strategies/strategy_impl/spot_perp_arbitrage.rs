@@ -11,6 +11,7 @@ use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashSet;
 use tracing::debug;
+use std::sync::Arc;
 
 /// Spot ↔ Perpetual Arbitrage Strategy
 ///
