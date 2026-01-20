@@ -16,5 +16,11 @@ pub mod types;
 // Strategies folder (Potential 8-22% profit)
 pub mod strategies;
 
+#[cfg(test)]
+pub mod property_tests;
+
+#[cfg(test)]
+pub mod unit_tests;
+
 pub use error::{ArbitrageError, Result};
 pub use types::*;
