@@ -256,6 +256,7 @@ pub trait ExchangeConnector: Send + Sync {
 mod tests {
     use super::*;
     use rust_decimal::Decimal;
+    use std::str::FromStr;
 
     fn create_test_connector_base() -> ConnectorBase {
         let config = ConnectorConfig {
@@ -375,8 +376,14 @@ mod tests {
         assert_eq!(order_book.bids.len(), 3);
         assert_eq!(order_book.asks.len(), 3);
 
-        assert_eq!(order_book.bids[0].price, Decimal::new(50000, 2));
-        assert_eq!(order_book.bids[0].quantity, Decimal::new(15, 1));
+        assert_eq!(
+            order_book.bids[0].price,
+            Decimal::from_str("50000.00").unwrap()
+        );
+        assert_eq!(
+            order_book.bids[0].quantity,
+            Decimal::from_str("1.5").unwrap()
+        );
     }
 
     #[tokio::test]
