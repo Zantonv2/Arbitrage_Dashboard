@@ -8,7 +8,14 @@ repository.workspace = true
 description = "Core data structures and business logic for the arbitrage dashboard"
 
 [features]
-default = ["all-strategies"]
+default = ["all-exchanges", "all-strategies", "tracing", "metrics", "test-utils"]
+all-exchanges = ["okx", "bybit", "mexc", "gateio", "bitstamp", "kraken"]
+okx = []
+bybit = []
+mexc = []
+gateio = []
+bitstamp = []
+kraken = []
 all-strategies = [
     "cex-arbitrage",
     "funding-rate-arbitrage",
@@ -20,7 +27,6 @@ all-strategies = [
     "hedged-funding",
     "latency-arbitrage",
     "spread-capture",
-    "test-utils",
 ]
 cex-arbitrage = []
 funding-rate-arbitrage = []
@@ -36,6 +42,7 @@ test-utils = []
 tracing = []
 metrics = []
 simulator = []
+dev = ["test-utils"]
 
 [dependencies]
 # Workspace dependencies

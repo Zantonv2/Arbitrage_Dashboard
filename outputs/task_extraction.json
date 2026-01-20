@@ -1,0 +1,131 @@
+{
+  "issue_number": 6,
+  "issue_title": "[Phase 4] Testing & Polish - 850 Tests, Features, Performance",
+  "current_state": {
+    "compilation_status": "BLOCKED",
+    "total_errors": 59,
+    "error_breakdown": {
+      "exchange_connectors": 58,
+      "arbitrage_core": 1
+    }
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "name": "Fix exchange_connectors compilation errors",
+      "description": "Fix 58 compilation errors in exchange-connectors crate related to ConnectorBase/ConnectorStats naming and ExchangeConnectorTrait/ExchangeConnector trait naming",
+      "difficulty": 6,
+      "loc_estimate": 150,
+      "risk": "medium",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "cargo check passes for exchange-connectors crate",
+        "All ConnectorBase references renamed to ConnectorStats",
+        "All ExchangeConnectorTrait references renamed to ExchangeConnector",
+        "All necessary imports added"
+      ]
+    },
+    {
+      "id": "T2",
+      "name": "Verify arbitrage-core compilation",
+      "description": "Fix remaining compilation errors in arbitrage-core crate",
+      "difficulty": 3,
+      "loc_estimate": 20,
+      "risk": "low",
+      "dependencies": ["T1"],
+      "acceptance_criteria": [
+        "cargo check passes for entire workspace",
+        "No remaining compilation errors"
+      ]
+    },
+    {
+      "id": "T3",
+      "name": "Run initial test suite",
+      "description": "Run cargo test to establish baseline and verify tests compile and run",
+      "difficulty": 2,
+      "loc_estimate": 10,
+      "risk": "low",
+      "dependencies": ["T2"],
+      "acceptance_criteria": [
+        "cargo test compiles successfully",
+        "At least 1 test passes",
+        "Capture test count baseline"
+      ]
+    },
+    {
+      "id": "T4",
+      "name": "Validate test_utils module",
+      "description": "Verify test_utils module works correctly with all helper functions",
+      "difficulty": 3,
+      "loc_estimate": 50,
+      "risk": "low",
+      "dependencies": ["T3"],
+      "acceptance_criteria": [
+        "test_utils::create_test_engine works",
+        "test_utils::create_test_market_bundle works",
+        "test_utils::create_test_order_book works",
+        "test_utils::create_test_signal works"
+      ]
+    },
+    {
+      "id": "T5",
+      "name": "Validate mock connectors",
+      "description": "Verify mock.rs MockConnector implementation works correctly",
+      "difficulty": 4,
+      "loc_estimate": 80,
+      "risk": "medium",
+      "dependencies": ["T3"],
+      "acceptance_criteria": [
+        "MockConnector implements ExchangeConnector trait",
+        "MockConnector::with_latency works",
+        "MockConnector::with_failure works",
+        "MockConnector::set_order_book works",
+        "All 6 exchange mocks compile"
+      ]
+    },
+    {
+      "id": "T6",
+      "name": "Validate TestFixtures factory",
+      "description": "Verify TestFixtures with OrderBookBuilder, TickerBuilder, SignalBuilder work",
+      "difficulty": 4,
+      "loc_estimate": 60,
+      "risk": "low",
+      "dependencies": ["T3"],
+      "acceptance_criteria": [
+        "TestFixtures::order_book() returns OrderBookBuilder",
+        "OrderBookBuilder chain methods work (.exchange, .symbol, .spread, .build)",
+        "TestFixtures::arbitrage_opportunity() preset works",
+        "All builders produce valid test data"
+      ]
+    },
+    {
+      "id": "T7",
+      "name": "Run full test suite and verify coverage",
+      "description": "Run all tests and verify 99%+ pass rate and 90%+ coverage",
+      "difficulty": 3,
+      "loc_estimate": 30,
+      "risk": "low",
+      "dependencies": ["T4", "T5", "T6"],
+      "acceptance_criteria": [
+        "cargo test passes with 99%+ pass rate",
+        "Total test count >= 850",
+        "Line coverage >= 90%",
+        "No flaky tests"
+      ]
+    },
+    {
+      "id": "T8",
+      "name": "Run benchmarks",
+      "description": "Verify benchmark suite runs and produces valid results",
+      "difficulty": 3,
+      "loc_estimate": 20,
+      "risk": "low",
+      "dependencies": ["T3"],
+      "acceptance_criteria": [
+        "cargo bench compiles",
+        "All 50 benchmarks run successfully",
+        "Baseline metrics captured"
+      ]
+    }
+  ]
+}

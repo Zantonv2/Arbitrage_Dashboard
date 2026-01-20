@@ -1,0 +1,45 @@
+digraph clusters {
+  rankdir=TB;
+  node [shape=box, style=rounded];
+
+  subgraph cluster_c1 {
+    label="C1: Critical Path - Fix Compilation";
+    style=dashed;
+    color=red;
+    T1 [label="T1: Fix exchange_connectors\n(58 errors, 150 LOC)\nDifficulty: 6"];
+    T2 [label="T2: Fix arbitrage-core\n(1 error, 20 LOC)\nDifficulty: 3"];
+  }
+
+  subgraph cluster_c2 {
+    label="C2: Test Infrastructure Validation";
+    style=dashed;
+    color=blue;
+    T3 [label="T3: Run initial test suite\n(Baseline, 10 LOC)\nDifficulty: 2"];
+    T4 [label="T4: Validate test_utils\n(50 LOC)\nDifficulty: 3"];
+  }
+
+  subgraph cluster_c3 {
+    label="C3: Advanced Testing Features";
+    style=dashed;
+    color=green;
+    T5 [label="T5: Validate mock connectors\n(80 LOC)\nDifficulty: 4"];
+    T6 [label="T6: Validate TestFixtures\n(60 LOC)\nDifficulty: 4"];
+  }
+
+  subgraph cluster_c4 {
+    label="C4: Final Validation & Benchmarks";
+    style=dashed;
+    color=purple;
+    T7 [label="T7: Full test suite\n(30 LOC)\nDifficulty: 3"];
+    T8 [label="T8: Run benchmarks\n(20 LOC)\nDifficulty: 3"];
+  }
+
+  T1 -> T2;
+  T2 -> T3;
+  T3 -> T4;
+  T4 -> T5;
+  T4 -> T6;
+  T5 -> T7;
+  T6 -> T7;
+  T7 -> T8;
+}

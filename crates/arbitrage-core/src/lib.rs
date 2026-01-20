@@ -22,5 +22,17 @@ pub mod property_tests;
 #[cfg(test)]
 pub mod unit_tests;
 
+#[cfg(test)]
+mod confidence_scorer_tests;
+
+#[cfg(test)]
+mod normalizer_tests;
+
+#[cfg(test)]
+mod execution_preparer_tests;
+
+#[cfg(test)]
+mod size_calculator_tests;
+
 pub use error::{ArbitrageError, Result};
 pub use types::*;

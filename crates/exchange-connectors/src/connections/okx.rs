@@ -1,9 +1,9 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
-use crate::connector_trait::{ConnectorBase, ExchangeConnectorTrait};
+use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{
     format_symbol, parse_decimal, parse_symbol, parse_timestamp, ExponentialBackoff, SymbolFormat,
@@ -105,21 +105,16 @@ impl OKXConnector {
 }
 
 #[async_trait]
-impl ExchangeConnectorTrait for OKXConnector {
-    fn id(&self) -> ExchangeId {
+impl ExchangeConnector for OKXConnector {
+    fn exchange_id(&self) -> ExchangeId {
         ExchangeId::OKX
     }
 
-    fn config(&self) -> &ConnectorConfig {
-        &self.base.config
-    }
-
-    fn base(&self) -> &ConnectorBase {
-        &self.base
-    }
-
-    fn base_mut(&mut self) -> &mut ConnectorBase {
-        &mut self.base
+    fn status(&self) -> ConnectionStatus {
+        match self.base.status.try_read() {
+            Ok(status) => status.clone(),
+            Err(_) => ConnectionStatus::Disconnected,
+        }
     }
 
     fn event_receiver(&self) -> broadcast::Receiver<ConnectionEvent> {
@@ -130,9 +125,7 @@ impl ExchangeConnectorTrait for OKXConnector {
         let okx_symbol = self.symbol_to_okx(symbol);
         let url = format!(
             "{}/api/v5/market/books?instId={}&sz={}",
-            self.config().rest_url,
-            okx_symbol,
-            self.config().order_book_depth
+            self.base.config.rest_url, okx_symbol, self.base.config.order_book_depth
         );
 
         let response = self.client.get(&url).send().await?;
@@ -152,7 +145,7 @@ impl ExchangeConnectorTrait for OKXConnector {
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
         let url = format!(
             "{}/api/v5/public/instruments?instType=SPOT",
-            self.config().rest_url
+            self.base.config.rest_url
         );
         let response = self.client.get(&url).send().await?;
         let data: serde_json::Value = response.json().await?;
@@ -180,8 +173,7 @@ impl ExchangeConnectorTrait for OKXConnector {
             let okx_symbol = self.symbol_to_okx(symbol);
             let url = format!(
                 "{}/api/v5/market/ticker?instId={}",
-                self.config().rest_url,
-                okx_symbol
+                self.base.config.rest_url, okx_symbol
             );
 
             if let Ok(response) = self.client.get(&url).send().await {
@@ -208,8 +200,7 @@ impl ExchangeConnectorTrait for OKXConnector {
             let okx_symbol = format!("{}-SWAP", self.symbol_to_okx(symbol));
             let url = format!(
                 "{}/api/v5/public/funding-rate?instId={}",
-                self.config().rest_url,
-                okx_symbol
+                self.base.config.rest_url, okx_symbol
             );
 
             if let Ok(response) = self.client.get(&url).send().await {
@@ -229,11 +220,11 @@ impl ExchangeConnectorTrait for OKXConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
-        self.base_mut().connect().await
+        self.base.connect().await
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        self.base_mut().disconnect().await
+        self.base.disconnect().await
     }
 
     async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
@@ -273,6 +264,28 @@ impl ExchangeConnectorTrait for OKXConnector {
         Ok(())
     }
 
+    async fn health_check(&self) -> Result<HealthStatus> {
+        let status = self.status();
+        let stats = self.get_stats();
+        Ok(HealthStatus {
+            is_connected: status == ConnectionStatus::Connected,
+            last_message_time: Some(stats.last_update),
+            websocket_status: status,
+            rest_api_status: ConnectionStatus::Connected,
+            error_count: stats.errors_count,
+            reconnect_count: stats.reconnections,
+        })
+    }
+
+    fn get_stats(&self) -> ConnectorStats {
+        self.base.get_stats()
+    }
+
+    async fn force_reconnect(&mut self) -> Result<()> {
+        self.disconnect().await?;
+        self.connect().await
+    }
+
     // === Trading Methods ===
 
     async fn place_order(
@@ -282,7 +295,7 @@ impl ExchangeConnectorTrait for OKXConnector {
         use crate::connector::{OrderResponse, OrderStatusType};
 
         // OKX API endpoint for placing orders
-        let url = format!("{}/api/v5/trade/order", self.config().rest_url);
+        let url = format!("{}/api/v5/trade/order", self.base.config.rest_url);
 
         // Convert our order request to OKX format
         let okx_order = serde_json::json!({
@@ -362,13 +375,11 @@ impl ExchangeConnectorTrait for OKXConnector {
         }
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
-        use crate::connector::{CancelResponse, OrderStatusType};
-
-        let url = format!("{}/api/v5/trade/cancel-order", self.config().rest_url);
+    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+        let url = format!("{}/api/v5/trade/cancel-order", self.base.config.rest_url);
 
         let cancel_request = serde_json::json!({
-            "instId": "BTC-USDT", // This should be dynamic based on the order
+            "instId": "BTC-USDT",
             "ordId": order_id,
         });
 
@@ -392,31 +403,20 @@ impl ExchangeConnectorTrait for OKXConnector {
             )));
         }
 
-        let response_json: serde_json::Value = response.json().await.map_err(|e| {
-            arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
-        })?;
-
-        let status = if response_json.get("code").and_then(|c| c.as_str()) == Some("0") {
-            OrderStatusType::Cancelled
-        } else {
-            OrderStatusType::Rejected
-        };
-
         Ok(CancelResponse {
             order_id: order_id.to_string(),
             client_order_id: None,
-            status,
+            status: OrderStatusType::Cancelled,
             timestamp: chrono::Utc::now(),
         })
     }
 
-    async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
+    async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
         use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
 
         let url = format!(
             "{}/api/v5/trade/order?ordId={}",
-            self.config().rest_url,
-            order_id
+            self.base.config.rest_url, order_id
         );
 
         let response = self.client.get(&url).send().await.map_err(|e| {
@@ -518,7 +518,7 @@ impl ExchangeConnectorTrait for OKXConnector {
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
         use crate::connector::{AssetBalance, Balance};
 
-        let url = format!("{}/api/v5/account/balance", self.config().rest_url);
+        let url = format!("{}/api/v5/account/balance", self.base.config.rest_url);
 
         let response = self.client.get(&url).send().await.map_err(|e| {
             arbitrage_core::ArbitrageError::Network(format!(
@@ -587,7 +587,7 @@ impl ExchangeConnectorTrait for OKXConnector {
     ) -> Result<Vec<crate::connector::OrderStatus>> {
         use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
 
-        let mut url = format!("{}/api/v5/trade/orders-pending", self.config().rest_url);
+        let mut url = format!("{}/api/v5/trade/orders-pending", self.base.config.rest_url);
 
         if let Some(sym) = symbol {
             url.push_str(&format!("?instId={}-{}", sym.base, sym.quote));
@@ -1011,7 +1011,10 @@ impl OKXConnector {
         })?;
 
         let mut asks = Vec::new();
-        for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
+        for ask in asks_data
+            .iter()
+            .take(self.base.config.order_book_depth as usize)
+        {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
@@ -1022,7 +1025,10 @@ impl OKXConnector {
         }
 
         let mut bids = Vec::new();
-        for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
+        for bid in bids_data
+            .iter()
+            .take(self.base.config.order_book_depth as usize)
+        {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;

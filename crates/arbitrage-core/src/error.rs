@@ -81,4 +81,7 @@ pub enum ArbitrageError {
 
     #[error("Generic error: {0}")]
     Generic(#[from] anyhow::Error),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }

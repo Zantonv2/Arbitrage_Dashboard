@@ -1,7 +1,7 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{

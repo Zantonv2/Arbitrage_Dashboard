@@ -91,7 +91,7 @@ fn get_test_configs() -> Vec<TestConfig> {
 }
 
 /// Create connector instance based on exchange ID
-fn create_connector(exchange_id: ExchangeId) -> Box<dyn ExchangeConnector> {
+fn create_connector(exchange_id: ExchangeId) -> Box<dyn ExchangeConnector + Send + Sync + 'static> {
     match exchange_id {
         ExchangeId::OKX => Box::new(OKXConnector::new()),
         ExchangeId::ByBit => Box::new(BybitConnector::new()),

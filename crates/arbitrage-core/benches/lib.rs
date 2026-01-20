@@ -10,8 +10,8 @@ use arbitrage_core::{
         stablecoin_arbitrage::StablecoinArbitrageStrategy,
     },
     types::{
-        exchange_constants::ALL_EXCHANGES, ExchangeId, FeeSchedule, OrderBook, OrderBookLevel,
-        OrderType, Side, Symbol,
+        exchange_constants::ALL_EXCHANGES, ExchangeId, FeeSchedule, FundingRate, OrderBook,
+        OrderBookLevel, OrderType, Side, Symbol, TickerData,
     },
     FeeSchedule as CoreFeeSchedule, Order, Signal, ToBps,
 };
@@ -1015,6 +1015,702 @@ mod additional_core_benchmarks {
         group.finish();
     }
 }
+
+mod additional_strategy_benchmarks {
+    use super::*;
+
+    pub fn benchmark_convergence_detect(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/convergence_detect");
+        let strategy = ConvergenceArbitrageStrategy::new();
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let bundle = arbitrage_core::strategies::MarketBundle::new();
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_hedged_funding_detect(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/hedged_funding_detect");
+        let strategy = HedgedFundingStrategy::new();
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let bundle = arbitrage_core::strategies::MarketBundle::new();
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_latency_detect(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/latency_detect");
+        let strategy = LatencyArbitrageStrategy::new();
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let bundle = arbitrage_core::strategies::MarketBundle::new();
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_funding_rate_detect(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/funding_rate_detect");
+        let strategy = FundingRateArbitrageStrategy::new();
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let bundle = arbitrage_core::strategies::MarketBundle::new();
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+}
+
+mod additional_calculation_benchmarks {
+    use super::*;
+
+    pub fn benchmark_spread_percentage(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/spread_percentage");
+        let bid = Decimal::from(50000);
+        let ask = Decimal::from(50050);
+        group.bench_function("spread_pct", |b| {
+            b.iter(|| {
+                let spread = (ask - bid) / bid * Decimal::from(100);
+                black_box(spread)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_profit_loss(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/pnl");
+        let entry_price = Decimal::from(50000);
+        let exit_price = Decimal::from(50500);
+        let quantity = Decimal::from(1);
+        group.bench_function("calculate_pnl", |b| {
+            b.iter(|| {
+                let pnl = (exit_price - entry_price) * quantity;
+                black_box(pnl)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_notional_value(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/notional");
+        let price = Decimal::from(50000);
+        let quantity = Decimal::from(10);
+        group.bench_function("notional", |b| {
+            b.iter(|| {
+                let notional = price * quantity;
+                black_box(notional)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_order_cost(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/order_cost");
+        let price = Decimal::from(50000);
+        let quantity = Decimal::from(1);
+        let fee_rate = Decimal::from(10) / Decimal::from(100000);
+        group.bench_function("order_cost", |b| {
+            b.iter(|| {
+                let notional = price * quantity;
+                let fee = notional * fee_rate;
+                let cost = notional + fee;
+                black_box(cost)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_price_impact(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/impact");
+        let base_price = Decimal::from(50000);
+        let order_quantity = Decimal::from(10);
+        let total_liquidity = Decimal::from(1000);
+        group.bench_function("price_impact", |b| {
+            b.iter(|| {
+                let impact = (order_quantity / total_liquidity) * Decimal::from(100);
+                let adjusted_price = base_price * (Decimal::ONE + impact / Decimal::from(10000));
+                black_box(adjusted_price)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_arbitrage_profit(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/arbitrage");
+        let buy_price = Decimal::from(50000);
+        let sell_price = Decimal::from(50100);
+        let quantity = Decimal::from(1);
+        let fee_rate = Decimal::from(10) / Decimal::from(100000);
+        group.bench_function("gross_profit", |b| {
+            b.iter(|| {
+                let buy_cost = buy_price * quantity * (Decimal::ONE + fee_rate);
+                let sell_value = sell_price * quantity * (Decimal::ONE - fee_rate);
+                let profit = sell_value - buy_cost;
+                black_box(profit)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_annualized_rate(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/annualized");
+        let funding_rate = Decimal::from(1) / Decimal::from(10000);
+        let hours_per_day = Decimal::from(24);
+        group.bench_function("annualized", |b| {
+            b.iter(|| {
+                let annualized = funding_rate * hours_per_day * Decimal::from(365);
+                black_box(annualized)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_weighted_average_price(c: &mut Criterion) {
+        let mut group = c.benchmark_group("calculations/wap");
+        let prices = vec![
+            (Decimal::from(50000), Decimal::from(10)),
+            (Decimal::from(49999), Decimal::from(20)),
+            (Decimal::from(49998), Decimal::from(30)),
+        ];
+        group.bench_function("calculate_wap", |b| {
+            b.iter(|| {
+                let total_value: Decimal = prices.iter().map(|(p, q)| *p * *q).sum();
+                let total_qty: Decimal = prices.iter().map(|(_, q)| *q).sum();
+                let wap = if total_qty > Decimal::ZERO {
+                    total_value / total_qty
+                } else {
+                    Decimal::ZERO
+                };
+                black_box(wap)
+            })
+        });
+        group.finish();
+    }
+}
+
+mod orderbook_benchmarks {
+    use super::*;
+
+    pub fn benchmark_best_bid_ask(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/best_price");
+        let orderbook = create_test_orderbook(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            Decimal::from(50000),
+            Decimal::from(50010),
+        );
+        group.bench_function("best_bid_ask", |b| {
+            b.iter(|| {
+                let best_bid = orderbook.best_bid().map(|l| l.price);
+                let best_ask = orderbook.best_ask().map(|l| l.price);
+                black_box((best_bid, best_ask))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_orderbook_spread(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/spread");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))],
+        );
+        group.bench_function("spread", |b| b.iter(|| black_box(orderbook.spread())));
+        group.finish();
+    }
+
+    pub fn benchmark_orderbook_mid_price(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/mid_price");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            vec![OrderBookLevel::new(Decimal::from(49999), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))],
+        );
+        group.bench_function("mid_price", |b| b.iter(|| black_box(orderbook.mid_price())));
+        group.finish();
+    }
+
+    pub fn benchmark_orderbook_depth(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/depth");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            (1..=50)
+                .map(|i| OrderBookLevel::new(Decimal::from(50000 - i), Decimal::from(i)))
+                .collect(),
+            (1..=50)
+                .map(|i| OrderBookLevel::new(Decimal::from(50000 + i), Decimal::from(i)))
+                .collect(),
+        );
+        group.bench_function("bid_depth", |b| b.iter(|| black_box(orderbook.bid_depth())));
+        group.finish();
+    }
+
+    pub fn benchmark_liquidity_at_price(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/liquidity");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            (1..=20)
+                .map(|i| OrderBookLevel::new(Decimal::from(50000 - i), Decimal::from(i * 10)))
+                .collect(),
+            (1..=20)
+                .map(|i| OrderBookLevel::new(Decimal::from(50000 + i), Decimal::from(i * 10)))
+                .collect(),
+        );
+        group.bench_function("liquidity_bid", |b| {
+            b.iter(|| black_box(orderbook.liquidity_at_price(Decimal::from(49990), true)))
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_vwap_execution(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/vwap");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            (1..=100)
+                .map(|i| {
+                    OrderBookLevel::new(
+                        Decimal::from(50000 - i),
+                        Decimal::from(10) * Decimal::from(i),
+                    )
+                })
+                .collect(),
+            (1..=100)
+                .map(|i| {
+                    OrderBookLevel::new(
+                        Decimal::from(50000 + i),
+                        Decimal::from(10) * Decimal::from(i),
+                    )
+                })
+                .collect(),
+        );
+        let quantity = Decimal::from(100);
+        group.bench_function("vwap_buy", |b| {
+            b.iter(|| black_box(orderbook.vwap_buy(quantity)))
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_orderbook_is_valid(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/validation");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            vec![OrderBookLevel::new(Decimal::from(49999), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))],
+        );
+        group.bench_function("is_valid", |b| b.iter(|| black_box(orderbook.is_valid())));
+        group.finish();
+    }
+
+    pub fn benchmark_orderbook_imbalance(c: &mut Criterion) {
+        let mut group = c.benchmark_group("orderbook/imbalance");
+        let orderbook = OrderBook::new(
+            ExchangeId::OKX,
+            Symbol::new("BTC", "USDT"),
+            (1..=50)
+                .map(|i| OrderBookLevel::new(Decimal::from(50000 - i), Decimal::from(i)))
+                .collect(),
+            (1..=50)
+                .map(|i| OrderBookLevel::new(Decimal::from(50000 + i), Decimal::from(i)))
+                .collect(),
+        );
+        group.bench_function("imbalance", |b| b.iter(|| black_box(orderbook.imbalance())));
+        group.finish();
+    }
+}
+
+mod signal_processing_benchmarks {
+    use super::*;
+
+    pub fn benchmark_signal_creation(c: &mut Criterion) {
+        let mut group = c.benchmark_group("signal/create");
+        group.bench_function("new_signal", |b| {
+            b.iter(|| {
+                black_box(Signal::new(
+                    Symbol::new("BTC", "USDT"),
+                    ExchangeId::OKX,
+                    ExchangeId::ByBit,
+                    Decimal::from(50000),
+                    Decimal::from(50100),
+                ))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_signal_validation(c: &mut Criterion) {
+        let mut group = c.benchmark_group("signal/validation");
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(50100),
+        );
+        group.bench_function("is_valid", |b| b.iter(|| black_box(signal.is_valid())));
+        group.finish();
+    }
+
+    pub fn benchmark_signal_expired(c: &mut Criterion) {
+        let mut group = c.benchmark_group("signal/expired");
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(50100),
+        );
+        group.bench_function("is_expired", |b| b.iter(|| black_box(signal.is_expired())));
+        group.finish();
+    }
+
+    pub fn benchmark_signal_profitability(c: &mut Criterion) {
+        let mut group = c.benchmark_group("signal/profitability");
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(50100),
+        );
+        group.bench_function("profit_bps", |b| b.iter(|| black_box(signal.profit_bps())));
+        group.finish();
+    }
+
+    pub fn benchmark_signals_sort(c: &mut Criterion) {
+        let mut group = c.benchmark_group("signal/sort");
+        let mut signals: Vec<Signal> = (0..100)
+            .map(|i| {
+                Signal::new(
+                    Symbol::new(format!("SYM{}", i), "USDT"),
+                    ExchangeId::OKX,
+                    ExchangeId::ByBit,
+                    Decimal::from(50000 + i % 100),
+                    Decimal::from(50100 + i % 100),
+                )
+            })
+            .collect();
+        group.bench_function("sort_by_profit", |b| {
+            b.iter(|| {
+                signals.sort_by_key(|s| s.profit_bps());
+                black_box(&signals)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_signals_filter(c: &mut Criterion) {
+        let mut group = c.benchmark_group("signal/filter");
+        let signals: Vec<Signal> = (0..100)
+            .map(|i| {
+                Signal::new(
+                    Symbol::new(format!("SYM{}", i), "USDT"),
+                    ExchangeId::OKX,
+                    ExchangeId::ByBit,
+                    Decimal::from(50000),
+                    Decimal::from(50000 + i as i32),
+                )
+            })
+            .collect();
+        group.bench_function("filter_profitable", |b| {
+            b.iter(|| {
+                let profitable: Vec<_> = signals.iter().filter(|s| s.profit_bps() > 10).collect();
+                black_box(profitable)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_signal_clone(c: &mut Criterion) {
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(50100),
+        );
+        let mut group = c.benchmark_group("signal/clone");
+        group.bench_function("clone", |b| b.iter(|| black_box(signal.clone())));
+        group.finish();
+    }
+
+    pub fn benchmark_signal_equality(c: &mut Criterion) {
+        let signal1 = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(50100),
+        );
+        let signal2 = signal1.clone();
+        let mut group = c.benchmark_group("signal/equality");
+        group.bench_function("eq", |b| b.iter(|| black_box(signal1 == signal2)));
+        group.finish();
+    }
+}
+
+mod market_data_benchmarks {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    pub fn benchmark_ticker_creation(c: &mut Criterion) {
+        let mut group = c.benchmark_group("market/ticker_create");
+        group.bench_function("new_ticker", |b| {
+            b.iter(|| {
+                black_box(TickerData {
+                    symbol: Symbol::new("BTC", "USDT"),
+                    exchange: ExchangeId::OKX,
+                    last_price: Decimal::from(50000),
+                    bid_price: Decimal::from(49999),
+                    ask_price: Decimal::from(50001),
+                    volume_24h: Decimal::from(1000000),
+                    price_change_24h: Decimal::from(100),
+                    timestamp: chrono::Utc::now(),
+                })
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_funding_rate_creation(c: &mut Criterion) {
+        let mut group = c.benchmark_group("market/funding_create");
+        group.bench_function("new_funding", |b| {
+            b.iter(|| {
+                black_box(FundingRate {
+                    symbol: Symbol::new("BTC", "USDT"),
+                    exchange: ExchangeId::OKX,
+                    funding_rate: Decimal::from(1) / Decimal::from(10000),
+                    predicted_rate: Some(Decimal::from(1) / Decimal::from(10000)),
+                    funding_time: chrono::Utc::now(),
+                    timestamp: chrono::Utc::now(),
+                })
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_orderbook_snapshot(c: &mut Criterion) {
+        let mut group = c.benchmark_group("market/orderbook_snapshot");
+        let symbol = Symbol::new("BTC", "USDT");
+        group.bench_function("snapshot_100_levels", |b| {
+            b.iter(|| {
+                let orderbook = OrderBook::new(
+                    ExchangeId::OKX,
+                    symbol.clone(),
+                    (1..=100)
+                        .map(|i| OrderBookLevel::new(Decimal::from(50000 - i), Decimal::from(i)))
+                        .collect(),
+                    (1..=100)
+                        .map(|i| OrderBookLevel::new(Decimal::from(50000 + i), Decimal::from(i)))
+                        .collect(),
+                );
+                black_box(orderbook)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_market_bundle_construction(c: &mut Criterion) {
+        let mut group = c.benchmark_group("market/bundle_build");
+        group.bench_function("bundle_10_symbols", |b| {
+            b.iter(|| {
+                let mut bundle = arbitrage_core::strategies::MarketBundle::new();
+                for i in 0..10 {
+                    let symbol = Symbol::new(format!("SYM{}", i), "USDT");
+                    let orderbook = Arc::new(OrderBook::new(
+                        ALL_EXCHANGES[i % ALL_EXCHANGES.len()],
+                        symbol.clone(),
+                        vec![OrderBookLevel::new(
+                            Decimal::from(50000 + i),
+                            Decimal::from(10),
+                        )],
+                        vec![OrderBookLevel::new(
+                            Decimal::from(50010 + i),
+                            Decimal::from(10),
+                        )],
+                    ));
+                    bundle.insert_orderbook(
+                        ALL_EXCHANGES[i % ALL_EXCHANGES.len()],
+                        symbol,
+                        orderbook,
+                    );
+                }
+                black_box(bundle)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_price_comparison(c: &mut Criterion) {
+        let mut group = c.benchmark_group("market/price_compare");
+        let prices: Vec<(ExchangeId, Decimal)> = ALL_EXCHANGES
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| (e, Decimal::from(50000 + i as i32)))
+            .collect();
+        group.bench_function("find_min_max", |b| {
+            b.iter(|| {
+                let min_price = prices.iter().map(|(_, p)| *p).min();
+                let max_price = prices.iter().map(|(_, p)| *p).max();
+                black_box((min_price, max_price))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_cross_exchange_spread(c: &mut Criterion) {
+        let mut group = c.benchmark_group("market/cross_spread");
+        let orderbooks: HashMap<ExchangeId, Arc<OrderBook>> = ALL_EXCHANGES
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| {
+                let orderbook = Arc::new(OrderBook::new(
+                    e,
+                    Symbol::new("BTC", "USDT"),
+                    vec![OrderBookLevel::new(
+                        Decimal::from(50000 + i as i32),
+                        Decimal::from(10),
+                    )],
+                    vec![OrderBookLevel::new(
+                        Decimal::from(50005 + i as i32),
+                        Decimal::from(10),
+                    )],
+                ));
+                (e, orderbook)
+            })
+            .collect();
+        group.bench_function("max_spread", |b| {
+            b.iter(|| {
+                let mut max_spread = Decimal::ZERO;
+                for i in 0..ALL_EXCHANGES.len() {
+                    for j in (i + 1)..ALL_EXCHANGES.len() {
+                        let bid = orderbooks[&ALL_EXCHANGES[i]].best_bid().map(|l| l.price);
+                        let ask = orderbooks[&ALL_EXCHANGES[j]].best_ask().map(|l| l.price);
+                        if let (Some(b), Some(a)) = (bid, ask) {
+                            let spread = a - b;
+                            if spread > max_spread {
+                                max_spread = spread;
+                            }
+                        }
+                    }
+                }
+                black_box(max_spread)
+            })
+        });
+        group.finish();
+    }
+}
+
+mod exchange_rate_benchmarks {
+    use super::*;
+
+    pub fn benchmark_fee_schedule_lookup(c: &mut Criterion) {
+        let mut group = c.benchmark_group("fees/lookup");
+        let schedules: HashMap<ExchangeId, CoreFeeSchedule> = ALL_EXCHANGES
+            .iter()
+            .map(|&e| {
+                (
+                    e,
+                    CoreFeeSchedule::new(e, Decimal::from(10), Decimal::from(20)),
+                )
+            })
+            .collect();
+        group.bench_function("get_okx_fee", |b| {
+            b.iter(|| {
+                let fee = schedules.get(&ExchangeId::OKX).cloned();
+                black_box(fee)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_fee_calculation_detailed(c: &mut Criterion) {
+        let mut group = c.benchmark_group("fees/detailed");
+        let quantity = Decimal::from(1);
+        let price = Decimal::from(50000);
+        let taker_fee_bps = Decimal::from(10);
+        group.bench_function("taker_fee", |b| {
+            b.iter(|| {
+                let notional = price * quantity;
+                let fee = notional * taker_fee_bps / Decimal::from(10000);
+                black_box(fee)
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_total_fee_calculation(c: &mut Criterion) {
+        let mut group = c.benchmark_group("fees/total");
+        let fee_a = CoreFeeSchedule::new(ExchangeId::OKX, Decimal::from(10), Decimal::from(20));
+        let fee_b = CoreFeeSchedule::new(ExchangeId::ByBit, Decimal::from(10), Decimal::from(20));
+        let quantity = Decimal::from(1);
+        let avg_price = Decimal::from(50000);
+        group.bench_function("round_trip", |b| {
+            b.iter(|| {
+                let notional = avg_price * quantity;
+                let total_fee =
+                    notional * (fee_a.taker_fee + fee_b.taker_fee) / Decimal::from(100000);
+                black_box(total_fee)
+            })
+        });
+        group.finish();
+    }
+}
+
+criterion_group!(
+    additional_benches,
+    additional_strategy_benchmarks::benchmark_convergence_detect,
+    additional_strategy_benchmarks::benchmark_hedged_funding_detect,
+    additional_strategy_benchmarks::benchmark_latency_detect,
+    additional_strategy_benchmarks::benchmark_funding_rate_detect,
+    additional_calculation_benchmarks::benchmark_spread_percentage,
+    additional_calculation_benchmarks::benchmark_profit_loss,
+    additional_calculation_benchmarks::benchmark_notional_value,
+    additional_calculation_benchmarks::benchmark_order_cost,
+    additional_calculation_benchmarks::benchmark_price_impact,
+    additional_calculation_benchmarks::benchmark_arbitrage_profit,
+    additional_calculation_benchmarks::benchmark_annualized_rate,
+    additional_calculation_benchmarks::benchmark_weighted_average_price,
+    orderbook_benchmarks::benchmark_best_bid_ask,
+    orderbook_benchmarks::benchmark_orderbook_spread,
+    orderbook_benchmarks::benchmark_orderbook_mid_price,
+    orderbook_benchmarks::benchmark_orderbook_depth,
+    orderbook_benchmarks::benchmark_liquidity_at_price,
+    orderbook_benchmarks::benchmark_vwap_execution,
+    orderbook_benchmarks::benchmark_orderbook_is_valid,
+    orderbook_benchmarks::benchmark_orderbook_imbalance,
+    signal_processing_benchmarks::benchmark_signal_creation,
+    signal_processing_benchmarks::benchmark_signal_validation,
+    signal_processing_benchmarks::benchmark_signal_expired,
+    signal_processing_benchmarks::benchmark_signal_profitability,
+    signal_processing_benchmarks::benchmark_signals_sort,
+    signal_processing_benchmarks::benchmark_signals_filter,
+    signal_processing_benchmarks::benchmark_signal_clone,
+    signal_processing_benchmarks::benchmark_signal_equality,
+    market_data_benchmarks::benchmark_ticker_creation,
+    market_data_benchmarks::benchmark_funding_rate_creation,
+    market_data_benchmarks::benchmark_orderbook_snapshot,
+    market_data_benchmarks::benchmark_market_bundle_construction,
+    market_data_benchmarks::benchmark_price_comparison,
+    market_data_benchmarks::benchmark_cross_exchange_spread,
+    exchange_rate_benchmarks::benchmark_fee_schedule_lookup,
+    exchange_rate_benchmarks::benchmark_fee_calculation_detailed,
+    exchange_rate_benchmarks::benchmark_total_fee_calculation,
+);
 
 criterion_group!(
     benches,
