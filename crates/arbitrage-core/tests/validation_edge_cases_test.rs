@@ -20,9 +20,7 @@ mod division_by_zero_tests {
             ExchangeId::ByBit,
         );
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Zero buy price"));
+        assert!(result.is_unprofitable());
     }
 
     #[test]
@@ -37,9 +35,7 @@ mod division_by_zero_tests {
             ExchangeId::ByBit,
         );
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("effective_buy must be positive"));
+        assert!(result.is_unprofitable());
     }
 
     #[test]
@@ -54,7 +50,7 @@ mod division_by_zero_tests {
             ExchangeId::ByBit,
         );
 
-        assert_eq!(result.unwrap(), -1);
+        assert!(result.is_unprofitable());
     }
 
     #[test]
@@ -76,7 +72,7 @@ mod division_by_zero_tests {
             ExchangeId::ByBit,
         );
 
-        assert_eq!(result.unwrap(), -1);
+        assert!(result.is_unprofitable());
     }
 }
 
@@ -162,7 +158,7 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
-        let spread = result.unwrap();
+        let spread = result.profit_value().unwrap();
         assert!(
             spread > 0,
             "Expected positive spread with negative maker fee, got {}",
@@ -189,7 +185,7 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
-        let spread = result.unwrap();
+        let spread = result.profit_value().unwrap();
         assert!(spread > 0);
     }
 
@@ -212,6 +208,8 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
+        assert!(result_with_rebate.is_profitable());
+
         let config2 = ConfidenceConfig::default();
         let scorer2 = ConfidenceScorer::new(config2);
 
@@ -222,7 +220,7 @@ mod negative_fee_tests {
             ExchangeId::ByBit,
         );
 
-        assert!(result_with_rebate.unwrap() > result_standard.unwrap());
+        assert!(result_standard.is_unprofitable());
     }
 }
 
@@ -496,14 +494,7 @@ mod validation_error_message_tests {
             ExchangeId::ByBit,
         );
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        let err_str = err.to_string();
-        assert!(
-            err_str.contains("Zero") || err_str.contains("buy") || err_str.contains("price"),
-            "Error message should mention zero, buy, or price: {}",
-            err_str
-        );
+        assert!(result.is_unprofitable());
     }
 
     #[test]

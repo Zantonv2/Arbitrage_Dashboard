@@ -59,6 +59,8 @@ parking_lot = { workspace = true }
 tracing = { workspace = true }
 statrs = { workspace = true }
 rand = { workspace = true }
+base64 = "0.22"
+aes-gcm = "0.10"
 reqwest = { workspace = true }
 sqlx = { workspace = true }
 rustc-hash = { workspace = true }

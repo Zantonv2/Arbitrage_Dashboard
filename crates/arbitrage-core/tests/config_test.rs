@@ -25,8 +25,16 @@ fn test_exchange_config_defaults() {
     let exchange_config = ExchangeConfig::default();
     assert!(!exchange_config.enabled);
     assert!(exchange_config.testnet);
-    assert!(exchange_config.api_key.is_none());
-    assert!(exchange_config.api_secret.is_none());
+    assert!(exchange_config
+        .api_key
+        .decrypt("default-master-key")
+        .unwrap()
+        .is_empty());
+    assert!(exchange_config
+        .api_secret
+        .decrypt("default-master-key")
+        .unwrap()
+        .is_empty());
     assert_eq!(exchange_config.symbols.len(), 3); // BTC, ETH, SOL
     assert!(exchange_config.rate_limit_per_second > 0);
 }

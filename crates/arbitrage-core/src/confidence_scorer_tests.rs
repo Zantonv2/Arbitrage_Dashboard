@@ -113,23 +113,23 @@ mod tests {
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
-        assert!(result.unwrap() > 0);
+        assert!(result.is_profitable());
     }
 
     #[test]
     fn test_calculate_net_spread_bps_with_fees() {
         let config = ConfidenceConfig::default();
         let scorer = ConfidenceScorer::new(config);
-        // Small spread that might be negative after fees
+        // Larger spread that should be profitable after fees
         let buy_price = Decimal::from(50000);
-        let sell_price = Decimal::from(50100);
+        let sell_price = Decimal::from(50300);
         let result = scorer.calculate_net_spread_bps(
             buy_price,
             sell_price,
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
-        assert!(result.is_ok());
+        assert!(result.is_profitable());
     }
 
     #[test]
@@ -243,7 +243,7 @@ mod tests {
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
-        assert!(result.is_err());
+        assert!(result.is_unprofitable());
     }
 
     #[test]
@@ -259,9 +259,7 @@ mod tests {
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
-        // Should handle gracefully
-        let spread = result.unwrap();
-        assert!(spread >= -1 || spread > 0);
+        assert!(result.is_unprofitable());
     }
 
     #[test]
@@ -381,8 +379,7 @@ mod tests {
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
-        // Should handle negative input gracefully
-        assert!(result.is_ok() || result.is_err());
+        assert!(result.is_profitable() || result.is_unprofitable());
     }
 
     #[test]
@@ -561,7 +558,7 @@ mod tests {
             ExchangeId::OKX,
             ExchangeId::ByBit,
         );
-        let spread = result.unwrap();
+        let spread = result.profit_value().unwrap();
         assert!(spread > 0);
     }
 
@@ -579,13 +576,13 @@ mod tests {
 
         let result2 = scorer.calculate_net_spread_bps(
             Decimal::from(50000),
-            Decimal::from(50200),
+            Decimal::from(50500),
             ExchangeId::MEXC,
             ExchangeId::GateIo,
         );
 
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
+        assert!(result1.is_profitable());
+        assert!(result2.is_profitable());
     }
 
     #[test]

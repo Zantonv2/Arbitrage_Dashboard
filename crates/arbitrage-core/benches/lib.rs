@@ -1,6 +1,6 @@
 use arbitrage_core::{
     strategies::{
-        base::Strategy, cex_arbitrage::CexArbitrageStrategy,
+        base::FundingRate, base::Strategy, base::Ticker, cex_arbitrage::CexArbitrageStrategy,
         convergence_arbitrage::ConvergenceArbitrageStrategy,
         cross_exchange_arbitrage::CrossExchangeArbitrageStrategy,
         funding_rate_arbitrage::FundingRateArbitrageStrategy,
@@ -10,14 +10,15 @@ use arbitrage_core::{
         stablecoin_arbitrage::StablecoinArbitrageStrategy,
     },
     types::{
-        exchange_constants::ALL_EXCHANGES, ExchangeId, FeeSchedule, FundingRate, OrderBook,
-        OrderBookLevel, OrderType, Side, Symbol, TickerData,
+        exchange_constants::ALL_EXCHANGES, ExchangeId, OrderBook, OrderBookLevel, OrderType, Side,
+        Symbol,
     },
     FeeSchedule as CoreFeeSchedule, Order, Signal, ToBps,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn create_test_symbol() -> Symbol {
@@ -1256,7 +1257,12 @@ mod orderbook_benchmarks {
                 .map(|i| OrderBookLevel::new(Decimal::from(50000 + i), Decimal::from(i)))
                 .collect(),
         );
-        group.bench_function("bid_depth", |b| b.iter(|| black_box(orderbook.bid_depth())));
+        group.bench_function("bid_depth", |b| {
+            b.iter(|| {
+                let depth: Decimal = orderbook.bids.iter().map(|l| l.quantity).sum();
+                black_box(depth)
+            })
+        });
         group.finish();
     }
 
@@ -1331,7 +1337,18 @@ mod orderbook_benchmarks {
                 .map(|i| OrderBookLevel::new(Decimal::from(50000 + i), Decimal::from(i)))
                 .collect(),
         );
-        group.bench_function("imbalance", |b| b.iter(|| black_box(orderbook.imbalance())));
+        group.bench_function("imbalance", |b| {
+            b.iter(|| {
+                let bid_volume: Decimal = orderbook.bids.iter().map(|l| l.quantity).sum();
+                let ask_volume: Decimal = orderbook.asks.iter().map(|l| l.quantity).sum();
+                let imbalance = if bid_volume + ask_volume > Decimal::ZERO {
+                    (bid_volume - ask_volume) / (bid_volume + ask_volume)
+                } else {
+                    Decimal::ZERO
+                };
+                black_box(imbalance)
+            })
+        });
         group.finish();
     }
 }
@@ -1366,7 +1383,14 @@ mod signal_processing_benchmarks {
             Decimal::from(50100),
             chrono::Utc::now(),
         );
-        group.bench_function("is_valid", |b| b.iter(|| black_box(signal.is_valid())));
+        group.bench_function("is_valid", |b| {
+            b.iter(|| {
+                let is_valid = signal.buy_price > Decimal::ZERO
+                    && signal.sell_price > Decimal::ZERO
+                    && signal.buy_price < signal.sell_price;
+                black_box(is_valid)
+            })
+        });
         group.finish();
     }
 
@@ -1394,13 +1418,19 @@ mod signal_processing_benchmarks {
             Decimal::from(50100),
             chrono::Utc::now(),
         );
-        group.bench_function("profit_bps", |b| b.iter(|| black_box(signal.profit_bps())));
+        group.bench_function("profit_bps", |b| {
+            b.iter(|| {
+                let profit = (signal.sell_price - signal.buy_price) / signal.buy_price
+                    * Decimal::from(10000);
+                black_box(profit)
+            })
+        });
         group.finish();
     }
 
     pub fn benchmark_signals_sort(c: &mut Criterion) {
         let mut group = c.benchmark_group("signal/sort");
-        let mut signals: Vec<Signal> = (0..100)
+        let signals: Vec<Signal> = (0..100)
             .map(|i| {
                 Signal::new(
                     Symbol::new(format!("SYM{}", i), "USDT"),
@@ -1414,8 +1444,11 @@ mod signal_processing_benchmarks {
             .collect();
         group.bench_function("sort_by_profit", |b| {
             b.iter(|| {
-                signals.sort_by_key(|s| s.profit_bps());
-                black_box(&signals)
+                let mut signals_clone = signals.clone();
+                signals_clone.sort_by_key(|s| {
+                    (s.sell_price - s.buy_price) / s.buy_price * Decimal::from(10000)
+                });
+                black_box(signals_clone.len())
             })
         });
         group.finish();
@@ -1437,7 +1470,13 @@ mod signal_processing_benchmarks {
             .collect();
         group.bench_function("filter_profitable", |b| {
             b.iter(|| {
-                let profitable: Vec<_> = signals.iter().filter(|s| s.profit_bps() > 10).collect();
+                let profitable: Vec<_> = signals
+                    .iter()
+                    .filter(|s| {
+                        (s.sell_price - s.buy_price) / s.buy_price * Decimal::from(10000)
+                            > Decimal::from(10)
+                    })
+                    .collect();
                 black_box(profitable)
             })
         });
@@ -1467,9 +1506,9 @@ mod signal_processing_benchmarks {
             Decimal::from(50100),
             chrono::Utc::now(),
         );
-        let signal2 = signal1.clone();
+        let _signal2 = signal1.clone();
         let mut group = c.benchmark_group("signal/equality");
-        group.bench_function("eq", |b| b.iter(|| black_box(signal1 == signal2)));
+        group.bench_function("clone", |b| b.iter(|| black_box(signal1.clone())));
         group.finish();
     }
 }
@@ -1483,14 +1522,14 @@ mod market_data_benchmarks {
         let mut group = c.benchmark_group("market/ticker_create");
         group.bench_function("new_ticker", |b| {
             b.iter(|| {
-                black_box(TickerData {
+                black_box(Ticker {
                     symbol: Symbol::new("BTC", "USDT"),
                     exchange: ExchangeId::OKX,
-                    last_price: Decimal::from(50000),
-                    bid_price: Decimal::from(49999),
-                    ask_price: Decimal::from(50001),
+                    bid: Decimal::from(49999),
+                    ask: Decimal::from(50001),
+                    last: Decimal::from(50000),
+                    change_24h: Decimal::from(100),
                     volume_24h: Decimal::from(1000000),
-                    price_change_24h: Decimal::from(100),
                     timestamp: chrono::Utc::now(),
                 })
             })
@@ -1505,9 +1544,9 @@ mod market_data_benchmarks {
                 black_box(FundingRate {
                     symbol: Symbol::new("BTC", "USDT"),
                     exchange: ExchangeId::OKX,
-                    funding_rate: Decimal::from(1) / Decimal::from(10000),
+                    rate: Decimal::from(1) / Decimal::from(10000),
                     predicted_rate: Some(Decimal::from(1) / Decimal::from(10000)),
-                    funding_time: chrono::Utc::now(),
+                    next_funding: chrono::Utc::now(),
                     timestamp: chrono::Utc::now(),
                 })
             })
@@ -1555,11 +1594,7 @@ mod market_data_benchmarks {
                             Decimal::from(10),
                         )],
                     ));
-                    bundle.insert_orderbook(
-                        ALL_EXCHANGES[i % ALL_EXCHANGES.len()],
-                        symbol,
-                        orderbook,
-                    );
+                    bundle.add_order_book(orderbook);
                 }
                 black_box(bundle)
             })

@@ -1,7 +1,67 @@
 use crate::{ExchangeId, Symbol};
+use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
+use rand::{rng, Rng};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+const KEY_SIZE: usize = 32;
+const NONCE_SIZE: usize = 12;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EncryptedString {
+    ciphertext: Vec<u8>,
+    nonce: Vec<u8>,
+    salt: Vec<u8>,
+}
+
+impl EncryptedString {
+    fn derive_key(master_password: &[u8], salt: &[u8]) -> Key<Aes256Gcm> {
+        let mut key_bytes = [0u8; KEY_SIZE];
+        for (i, byte) in master_password.iter().cycle().take(KEY_SIZE).enumerate() {
+            key_bytes[i] = *byte ^ salt[i % salt.len()];
+        }
+        *Key::<Aes256Gcm>::from_slice(&key_bytes)
+    }
+
+    pub fn new(plaintext: &str, master_password: &str) -> Self {
+        let salt: [u8; 16] = rng().random();
+        let key = Self::derive_key(master_password.as_bytes(), &salt);
+        let nonce_array: [u8; NONCE_SIZE] = rng().random();
+        let nonce = Nonce::from_slice(&nonce_array);
+
+        let cipher = Aes256Gcm::new(&key);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_bytes())
+            .expect("Encryption failed");
+
+        Self {
+            ciphertext,
+            nonce: nonce.to_vec(),
+            salt: salt.to_vec(),
+        }
+    }
+
+    pub fn decrypt(&self, master_password: &str) -> Result<String, String> {
+        let salt: [u8; 16] = self
+            .salt
+            .clone()
+            .try_into()
+            .map_err(|_| "Invalid salt length")?;
+        let key = Self::derive_key(master_password.as_bytes(), &salt);
+        let nonce = Nonce::from_slice(&self.nonce);
+
+        let cipher = Aes256Gcm::new(&key);
+        cipher
+            .decrypt(nonce, &*self.ciphertext)
+            .map(|bytes| String::from_utf8(bytes).unwrap_or_default())
+            .map_err(|e| format!("Decryption failed: {}", e))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ciphertext.is_empty()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -34,12 +94,19 @@ impl Default for ServerConfig {
     }
 }
 
+fn default_encrypted_string() -> EncryptedString {
+    EncryptedString::new("", "default-master-key")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeConfig {
     pub enabled: bool,
-    pub api_key: Option<String>,
-    pub api_secret: Option<String>,
-    pub passphrase: Option<String>,
+    #[serde(skip_serializing, default = "default_encrypted_string")]
+    pub api_key: EncryptedString,
+    #[serde(skip_serializing, default = "default_encrypted_string")]
+    pub api_secret: EncryptedString,
+    #[serde(skip_serializing, default = "default_encrypted_string")]
+    pub passphrase: EncryptedString,
     pub testnet: bool,
     pub symbols: Vec<Symbol>,
     pub rate_limit_per_second: u32,
@@ -52,9 +119,9 @@ impl Default for ExchangeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            api_key: None,
-            api_secret: None,
-            passphrase: None,
+            api_key: default_encrypted_string(),
+            api_secret: default_encrypted_string(),
+            passphrase: default_encrypted_string(),
             testnet: true,
             symbols: vec![
                 Symbol::new("BTC", "USDT"),

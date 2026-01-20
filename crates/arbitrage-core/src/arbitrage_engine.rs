@@ -17,7 +17,7 @@
 //! - Emits validated signals for UI display or auto-execution
 
 use crate::{
-    confidence_scorer::ConfidenceScorer,
+    confidence_scorer::{ConfidenceScorer, NetSpreadResult},
     config::Config,
     execution_preparer::ExecutionPreparer,
     normalizer::Normalizer,
@@ -32,6 +32,7 @@ use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rustc_hash::FxHashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -125,8 +126,8 @@ pub struct ArbitrageEngine {
     profit_change_threshold_bps: i32,
     signal_ttl: Duration,
 
-    // Statistics
-    stats: Arc<DashMap<&'static str, u64>>,
+    // Statistics (atomic for lock-free concurrent access)
+    stats: Arc<DashMap<&'static str, AtomicU64>>,
 }
 
 impl ArbitrageEngine {
@@ -369,17 +370,18 @@ impl ArbitrageEngine {
         }
 
         // Stage 3: Fee calculation
-        let net_spread_bps = self.confidence_scorer.calculate_net_spread_bps(
+        let net_spread_bps = match self.confidence_scorer.calculate_net_spread_bps(
             buy_leg.price,
             sell_leg.price,
             buy_leg.exchange,
             sell_leg.exchange,
-        )?;
-
-        if net_spread_bps < 0 {
-            debug!("Signal unprofitable after fees: {} bps", net_spread_bps);
-            return Ok(None);
-        }
+        ) {
+            NetSpreadResult::Profit(bps) => bps,
+            NetSpreadResult::Unprofitable => {
+                debug!("Signal unprofitable after fees");
+                return Ok(None);
+            }
+        };
 
         // Stage 4: Risk validation
         if !self.validate_risk(&raw_signal, filter_context)? {
@@ -646,9 +648,12 @@ impl ArbitrageEngine {
         let _ = self.signal_sender.send(signal.clone());
     }
 
-    /// Increment a statistics counter
+    /// Increment a statistics counter (lock-free atomic operation)
     fn increment_stat(&self, key: &'static str) {
-        self.stats.entry(key).and_modify(|v| *v += 1).or_insert(1);
+        self.stats
+            .entry(key)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::SeqCst);
     }
 
     /// Get engine statistics
@@ -664,9 +669,21 @@ impl ArbitrageEngine {
             funding_rates_count: self.funding_rates.len(),
             cached_signals_count: self.signal_cache.len(),
             active_symbols_count: unique_symbols.len(),
-            signals_detected: self.stats.get("signals_detected").map(|v| *v).unwrap_or(0),
-            signals_filtered: self.stats.get("signals_filtered").map(|v| *v).unwrap_or(0),
-            signals_emitted: self.stats.get("signals_emitted").map(|v| *v).unwrap_or(0),
+            signals_detected: self
+                .stats
+                .get("signals_detected")
+                .map(|v| v.load(Ordering::SeqCst))
+                .unwrap_or(0),
+            signals_filtered: self
+                .stats
+                .get("signals_filtered")
+                .map(|v| v.load(Ordering::SeqCst))
+                .unwrap_or(0),
+            signals_emitted: self
+                .stats
+                .get("signals_emitted")
+                .map(|v| v.load(Ordering::SeqCst))
+                .unwrap_or(0),
             last_detection_time: Some(Utc::now()),
         }
     }
