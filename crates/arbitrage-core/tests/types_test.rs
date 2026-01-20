@@ -54,6 +54,7 @@ fn test_signal_expiry() {
         ExchangeId::BingX,
         Decimal::from(50000),
         Decimal::from(50100),
+        Utc::now(),
     );
 
     assert!(!signal.is_expired());
@@ -71,6 +72,7 @@ fn test_signal_age() {
         ExchangeId::BingX,
         Decimal::from(50000),
         Decimal::from(50100),
+        Utc::now(),
     );
 
     assert!(signal.age_seconds() >= 0);

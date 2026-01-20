@@ -14,6 +14,7 @@ mod tests {
             crate::types::ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         )
     }
 
@@ -615,6 +616,7 @@ mod tests {
                 crate::types::ExchangeId::ByBit,
                 Decimal::from(50000),
                 Decimal::from(50100 + i),
+                chrono::Utc::now(),
             );
             let quantity = Decimal::from(i + 1);
             let result = preparer.prepare_execution(&signal, quantity);

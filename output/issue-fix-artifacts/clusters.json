@@ -1,0 +1,40 @@
+{
+  "clusters": [
+    {
+      "id": "C1",
+      "name": "Division & OrderBook Validation",
+      "tasks": ["T1", "T2"],
+      "total_difficulty": 5,
+      "total_loc": 13,
+      "subagent": "validation-specialist-1",
+      "description": "Fix division by zero in confidence_scorer and empty orderbook validation in types.rs"
+    },
+    {
+      "id": "C2",
+      "name": "Fee & Timestamp Validation",
+      "tasks": ["T3", "T4", "T5"],
+      "total_difficulty": 6,
+      "total_loc": 15,
+      "subagent": "validation-specialist-2",
+      "description": "Fix negative fee validation, signal timestamp validation, and age_seconds panic"
+    },
+    {
+      "id": "C3",
+      "name": "Execution Validation & Production Guard",
+      "tasks": ["T6", "T7"],
+      "total_difficulty": 5,
+      "total_loc": 16,
+      "subagent": "execution-validator",
+      "description": "Fix expected_profit validation and add force_execute production guard"
+    },
+    {
+      "id": "C4",
+      "name": "Integration Tests",
+      "tasks": ["T8"],
+      "total_difficulty": 4,
+      "total_loc": 50,
+      "subagent": "test-engineer",
+      "description": "Create comprehensive integration tests for all validation edge cases"
+    }
+  ]
+}

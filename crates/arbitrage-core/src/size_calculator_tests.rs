@@ -13,6 +13,7 @@ mod tests {
             ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         )
     }
 
@@ -344,6 +345,7 @@ mod tests {
             ExchangeId::ByBit,
             Decimal::ZERO,
             Decimal::ZERO,
+            chrono::Utc::now(),
         );
         signal.gross_profit_percent = Decimal::ZERO;
         signal.net_profit_percent = Decimal::ZERO;
@@ -505,6 +507,7 @@ mod tests {
                 ExchangeId::ByBit,
                 Decimal::from(50000 - i * 10),
                 Decimal::from(50100 + i * 10),
+                chrono::Utc::now(),
             );
             signal.gross_profit_percent = Decimal::from(i * 10);
             signal.net_profit_percent = Decimal::from(i * 8);

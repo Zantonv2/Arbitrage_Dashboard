@@ -16,6 +16,7 @@ mod tests {
             crate::types::ExchangeId::ByBit,
             Decimal::from(50000),
             Decimal::from(50100),
+            chrono::Utc::now(),
         )
     }
 

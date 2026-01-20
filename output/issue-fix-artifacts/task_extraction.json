@@ -1,0 +1,134 @@
+{
+  "issue_number": 84,
+  "issue_title": "[CRITICAL]: Input Validation Defects - Zero/Division/Negative/Bounds Issues",
+  "atomic_tasks": [
+    {
+      "id": "T1",
+      "title": "Add effective_buy validation before division in calculate_net_spread_bps",
+      "description": "Add explicit check for effective_buy <= Decimal::ZERO before division in confidence_scorer.rs:184",
+      "file": "crates/arbitrage-core/src/confidence_scorer.rs",
+      "line": 184,
+      "acceptance_criteria": [
+        "effective_buy validation added before line 184",
+        "Function returns error or -1 when effective_buy <= 0",
+        "No division by zero possible"
+      ],
+      "difficulty": 2,
+      "loc_estimate": 5,
+      "risk_profile": "medium",
+      "dependencies": []
+    },
+    {
+      "id": "T2",
+      "title": "Modify OrderBook::is_valid() to require at least one bid and one ask level",
+      "description": "Change is_valid() in types.rs to reject empty order books",
+      "file": "crates/arbitrage-core/src/types.rs",
+      "line": 212,
+      "acceptance_criteria": [
+        "OrderBook::is_valid() returns false when bids.is_empty()",
+        "OrderBook::is_valid() returns false when asks.is_empty()",
+        "Empty order book validation prevents false positives"
+      ],
+      "difficulty": 3,
+      "loc_estimate": 8,
+      "risk_profile": "medium",
+      "dependencies": []
+    },
+    {
+      "id": "T3",
+      "title": "Add validation that fee rates must be non-negative in FeeSchedule::new()",
+      "description": "Add validation in types.rs FeeSchedule::new() to reject negative fees",
+      "file": "crates/arbitrage-core/src/types.rs",
+      "line": 484,
+      "acceptance_criteria": [
+        "FeeSchedule::new() validates maker_fee >= 0",
+        "FeeSchedule::new() validates taker_fee >= 0",
+        "Returns error or panics with clear message for negative fees"
+      ],
+      "difficulty": 2,
+      "loc_estimate": 6,
+      "risk_profile": "low",
+      "dependencies": []
+    },
+    {
+      "id": "T4",
+      "title": "Add validation in Signal::new() to reject future timestamps",
+      "description": "Validate created_at is not in the future when creating signals",
+      "file": "crates/arbitrage-core/src/types.rs",
+      "line": 359,
+      "acceptance_criteria": [
+        "Signal::new() validates created_at <= Utc::now()",
+        "Signal rejects future timestamps with clear error"
+      ],
+      "difficulty": 2,
+      "loc_estimate": 5,
+      "risk_profile": "low",
+      "dependencies": []
+    },
+    {
+      "id": "T5",
+      "title": "Fix age_seconds() to handle future timestamps safely",
+      "description": "Use num_seconds().abs() or check for negative duration in age_seconds()",
+      "file": "crates/arbitrage-core/src/types.rs",
+      "line": 392,
+      "acceptance_criteria": [
+        "age_seconds() returns 0 for future timestamps",
+        "No panic on future timestamp edge cases",
+        "Duration check prevents negative age values"
+      ],
+      "difficulty": 2,
+      "loc_estimate": 4,
+      "risk_profile": "medium",
+      "dependencies": ["T4"]
+    },
+    {
+      "id": "T6",
+      "title": "Add expected_profit validation in validate_instruction()",
+      "description": "Add check for negative expected_profit alongside worst_case_profit check",
+      "file": "crates/arbitrage-core/src/execution_preparer.rs",
+      "line": 146,
+      "acceptance_criteria": [
+        "validate_instruction() checks expected_profit <= 0",
+        "Adds validation error for negative expected_profit",
+        "Integration tests cover negative profit scenarios"
+      ],
+      "difficulty": 2,
+      "loc_estimate": 6,
+      "risk_profile": "medium",
+      "dependencies": []
+    },
+    {
+      "id": "T7",
+      "title": "Add force_execute production guard in ExecutionConfig",
+      "description": "Add configuration validation preventing force_execute in production",
+      "file": "crates/arbitrage-core/src/execution_preparer.rs",
+      "line": 9,
+      "acceptance_criteria": [
+        "ExecutionConfig validates enable_force_execute is false in production",
+        "Clear error when force_execute enabled in prod environment"
+      ],
+      "difficulty": 3,
+      "loc_estimate": 10,
+      "risk_profile": "low",
+      "dependencies": []
+    },
+    {
+      "id": "T8",
+      "title": "Add integration tests for all edge case validation scenarios",
+      "description": "Create comprehensive tests covering all validation fixes",
+      "file": "crates/arbitrage-core/tests/",
+      "line": 0,
+      "acceptance_criteria": [
+        "Tests for division by zero prevention",
+        "Tests for empty order book rejection",
+        "Tests for negative fee rejection",
+        "Tests for future timestamp handling",
+        "Tests for negative profit validation"
+      ],
+      "difficulty": 4,
+      "loc_estimate": 50,
+      "risk_profile": "low",
+      "dependencies": ["T1", "T2", "T3", "T4", "T5", "T6"]
+    }
+  ]
+}
