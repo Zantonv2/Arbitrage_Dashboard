@@ -2,6 +2,7 @@ use arbitrage_core::types::Symbol;
 use dashmap::DashMap;
 use dashmap::DashSet;
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -22,12 +23,24 @@ pub enum ConnectionState {
     Error(String),
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Display for ConnectionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectionState::Disconnected => write!(f, "Disconnected"),
+            ConnectionState::Connecting => write!(f, "Connecting"),
+            ConnectionState::Connected => write!(f, "Connected"),
+            ConnectionState::Reconnecting => write!(f, "Reconnecting"),
+            ConnectionState::Error(msg) => write!(f, "Error: {}", msg),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReconnectPolicy {
-    max_attempts: u32,
-    initial_delay_ms: u64,
-    max_delay_ms: u64,
-    backoff_multiplier: f64,
+    pub max_attempts: u32,
+    pub initial_delay_ms: u64,
+    pub max_delay_ms: u64,
+    pub backoff_multiplier: f64,
 }
 
 impl Default for ReconnectPolicy {
@@ -62,7 +75,7 @@ impl ReconnectPolicy {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WebSocketMessage {
     Subscribe(Vec<Symbol>),
     Unsubscribe(Vec<Symbol>),

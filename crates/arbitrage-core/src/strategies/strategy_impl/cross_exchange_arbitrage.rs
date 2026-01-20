@@ -28,6 +28,7 @@ use tracing::{debug, warn};
 /// - Real-time balance tracking
 /// - Transfer cost and time estimates
 /// - Exchange-specific fee schedules
+#[derive(Debug, Clone)]
 pub struct CrossExchangeArbitrageStrategy {
     config: StrategyConfig,
 }

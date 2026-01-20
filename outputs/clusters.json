@@ -1,0 +1,77 @@
+{
+  "clusters": [
+    {
+      "id": "C1",
+      "name": "Critical Path - Fix Compilation",
+      "tasks": ["T1", "T2"],
+      "description": "Fix all 59 compilation errors blocking test verification",
+      "difficulty_total": 9,
+      "loc_total": 170,
+      "risk": "high",
+      "priority": "critical",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "cargo check passes for entire workspace",
+        "Zero compilation errors"
+      ]
+    },
+    {
+      "id": "C2",
+      "name": "Test Infrastructure Validation",
+      "tasks": ["T3", "T4"],
+      "description": "Validate test_utils module and establish test baseline",
+      "difficulty_total": 5,
+      "loc_total": 60,
+      "risk": "medium",
+      "priority": "high",
+      "dependencies": ["C1"],
+      "acceptance_criteria": [
+        "cargo test compiles and runs",
+        "test_utils helper functions work",
+        "First passing test milestone achieved"
+      ]
+    },
+    {
+      "id": "C3",
+      "name": "Advanced Testing Features",
+      "tasks": ["T5", "T6"],
+      "description": "Validate mock connectors and TestFixtures factory",
+      "difficulty_total": 8,
+      "loc_total": 140,
+      "risk": "medium",
+      "priority": "high",
+      "dependencies": ["C2"],
+      "acceptance_criteria": [
+        "MockConnector and all 6 exchange mocks work",
+        "TestFixtures builders produce valid test data",
+        "All fixture presets functional"
+      ]
+    },
+    {
+      "id": "C4",
+      "name": "Final Validation & Benchmarks",
+      "tasks": ["T7", "T8"],
+      "description": "Run full test suite with coverage and benchmark validation",
+      "difficulty_total": 6,
+      "loc_total": 50,
+      "risk": "low",
+      "priority": "medium",
+      "dependencies": ["C3"],
+      "acceptance_criteria": [
+        "850+ tests pass with 99%+ pass rate",
+        "90%+ line coverage achieved",
+        "50 benchmarks run successfully",
+        "Performance baselines captured"
+      ]
+    }
+  ],
+  "execution_order": ["C1", "C2", "C3", "C4"],
+  "parallel_groups": [],
+  "summary": {
+    "total_tasks": 8,
+    "total_clusters": 4,
+    "total_difficulty": 28,
+    "total_loc_estimate": 420,
+    "estimated_time": "2-3 hours"
+  }
+}

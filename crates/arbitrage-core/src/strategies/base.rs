@@ -529,7 +529,7 @@ impl Default for ExecutionContext {
 }
 
 /// Risk limits for strategy execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RiskLimits {
     pub max_position_size: Decimal,
     pub max_daily_volume: Decimal,

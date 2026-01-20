@@ -1,8 +1,9 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
+use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
 use arbitrage_core::{
@@ -44,12 +45,10 @@ struct BitstampWsResponse {
     data: Option<Value>,
 }
 
+#[derive(Clone)]
 pub struct BitstampConnector {
-    config: ConnectorConfig,
+    pub base: ConnectorBase,
     client: Client,
-    event_sender: broadcast::Sender<ConnectionEvent>,
-    status: Arc<RwLock<ConnectionStatus>>,
-    stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
@@ -65,23 +64,18 @@ impl BitstampConnector {
             ..Default::default()
         };
 
-        let (event_sender, _) = broadcast::channel(1000);
+        let base = ConnectorBase::new(config);
         let client = Client::new();
-        let mut stats = ConnectorStats::default();
-        stats.exchange = ExchangeId::Bitstamp;
 
         Self {
-            config,
+            base,
             client,
-            event_sender,
-            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
-            stats: Arc::new(Mutex::new(stats)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
             ws_handle: Arc::new(Mutex::new(None)),
         }
     }
 
-    fn symbol_to_bitstamp(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_bitstamp(&self, symbol: &Symbol) -> String {
         format!(
             "{}{}",
             symbol.base.to_lowercase(),
@@ -89,7 +83,7 @@ impl BitstampConnector {
         )
     }
 
-    fn symbol_from_bitstamp(&self, bitstamp_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_bitstamp(&self, bitstamp_symbol: &str) -> Result<Symbol> {
         // Bitstamp uses lowercase concatenated format like "btcusd"
         // We need to parse this back to base/quote
         if bitstamp_symbol.ends_with("usd") {
@@ -115,19 +109,22 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     fn status(&self) -> ConnectionStatus {
-        match self.status.try_read() {
+        match self.base.status.try_read() {
             Ok(status) => status.clone(),
             Err(_) => ConnectionStatus::Disconnected,
         }
     }
 
     fn event_receiver(&self) -> broadcast::Receiver<ConnectionEvent> {
-        self.event_sender.subscribe()
+        self.base.event_sender.subscribe()
     }
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let bitstamp_symbol = self.symbol_to_bitstamp(symbol);
-        let url = format!("{}/order_book/{}/", self.config.rest_url, bitstamp_symbol);
+        let url = format!(
+            "{}/order_book/{}/",
+            self.base.config.rest_url, bitstamp_symbol
+        );
 
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
@@ -136,7 +133,7 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
-        let url = format!("{}/trading-pairs-info/", self.config.rest_url);
+        let url = format!("{}/trading-pairs-info/", self.base.config.rest_url);
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
@@ -157,7 +154,7 @@ impl ExchangeConnector for BitstampConnector {
         let mut tickers = HashMap::new();
         for symbol in symbols {
             let bitstamp_symbol = self.symbol_to_bitstamp(symbol);
-            let url = format!("{}/ticker/{}/", self.config.rest_url, bitstamp_symbol);
+            let url = format!("{}/ticker/{}/", self.base.config.rest_url, bitstamp_symbol);
 
             if let Ok(response) = self.client.get(&url).send().await {
                 if let Ok(data) = response.json::<Value>().await {
@@ -174,56 +171,15 @@ impl ExchangeConnector for BitstampConnector {
         &self,
         _symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        // Bitstamp spot doesn't have funding rates
         Ok(HashMap::new())
     }
 
     async fn connect(&mut self) -> Result<()> {
-        {
-            let status = self.status.read().await;
-            if *status == ConnectionStatus::Connected {
-                return Ok(());
-            }
-        }
-
-        info!("Connecting to Bitstamp WebSocket: {}", self.config.ws_url);
-        *self.status.write().await = ConnectionStatus::Connecting;
-
-        let ws_url = self.config.ws_url.clone();
-        let event_sender = self.event_sender.clone();
-        let status = self.status.clone();
-        let stats = self.stats.clone();
-        let subscribed_symbols = self.subscribed_symbols.clone();
-        let config = self.config.clone();
-
-        let handle = tokio::spawn(async move {
-            Self::websocket_task(
-                ws_url,
-                event_sender,
-                status,
-                stats,
-                subscribed_symbols,
-                config,
-            )
-            .await;
-        });
-
-        *self.ws_handle.lock().await = Some(handle);
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        Ok(())
+        self.base.connect().await
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        info!("Disconnecting from Bitstamp WebSocket");
-        *self.status.write().await = ConnectionStatus::Disconnected;
-
-        if let Some(handle) = self.ws_handle.lock().await.take() {
-            handle.abort();
-        }
-
-        self.subscribed_symbols.write().await.clear();
-        Ok(())
+        self.base.disconnect().await
     }
 
     async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
@@ -264,9 +220,8 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     async fn health_check(&self) -> Result<HealthStatus> {
-        let status = self.status.read().await.clone();
-        let stats = self.stats.lock().await;
-
+        let status = self.status();
+        let stats = self.get_stats();
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -278,10 +233,7 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     fn get_stats(&self) -> ConnectorStats {
-        match self.stats.try_lock() {
-            Ok(stats) => stats.clone(),
-            Err(_) => ConnectorStats::default(),
-        }
+        self.base.get_stats()
     }
 
     async fn force_reconnect(&mut self) -> Result<()> {
@@ -298,16 +250,17 @@ impl ExchangeConnector for BitstampConnector {
             OrderSide::Sell => "sell",
         };
 
-        let url = format!("{}/v2/{}/{}/", self.config.rest_url, side, bitstamp_symbol);
+        let url = format!(
+            "{}/v2/{}/{}/",
+            self.base.config.rest_url, side, bitstamp_symbol
+        );
 
         let mut body = serde_json::json!({
             "amount": order.quantity.to_string(),
         });
 
         match order.order_type {
-            OrderType::Market => {
-                // Market orders don't need price
-            }
+            OrderType::Market => {}
             OrderType::Limit => {
                 if let Some(price) = order.price {
                     body["price"] = serde_json::Value::String(price.to_string());
@@ -354,34 +307,24 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
-        let url = format!("{}/v2/cancel_order/", self.config.rest_url);
+        let url = format!("{}/v2/cancel_order/", self.base.config.rest_url);
 
         let body = serde_json::json!({
             "id": order_id,
         });
 
-        let response = self.client.post(&url).json(&body).send().await?;
-
-        let response_json: Value = response.json().await?;
-
-        let status = if response_json["id"].as_str().is_some() {
-            OrderStatusType::Cancelled
-        } else {
-            OrderStatusType::Rejected
-        };
+        self.client.post(&url).json(&body).send().await?;
 
         Ok(CancelResponse {
             order_id: order_id.to_string(),
-            client_order_id: response_json["client_order_id"]
-                .as_str()
-                .map(|s| s.to_string()),
-            status,
+            client_order_id: None,
+            status: OrderStatusType::Cancelled,
             timestamp: chrono::Utc::now(),
         })
     }
 
     async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
-        let url = format!("{}/order_status/", self.config.rest_url);
+        let url = format!("{}/order_status/", self.base.config.rest_url);
 
         let body = serde_json::json!({
             "id": order_id,
@@ -390,7 +333,6 @@ impl ExchangeConnector for BitstampConnector {
         let response = self.client.post(&url).json(&body).send().await?;
         let order_data: Value = response.json().await?;
 
-        // Parse symbol from transactions if available
         let order_symbol = if let Some(transactions) = order_data["transactions"].as_array() {
             if let Some(first_tx) = transactions.first() {
                 if let Some(pair) = first_tx["pair"].as_str() {
@@ -440,7 +382,7 @@ impl ExchangeConnector for BitstampConnector {
                 .map(|s| s.to_string()),
             symbol: order_symbol,
             side,
-            order_type: OrderType::Limit, // Bitstamp doesn't specify order type in status
+            order_type: OrderType::Limit,
             quantity,
             price,
             filled_quantity,
@@ -453,18 +395,16 @@ impl ExchangeConnector for BitstampConnector {
     }
 
     async fn get_balance(&self) -> Result<Balance> {
-        let url = format!("{}/v2/balance/", self.config.rest_url);
+        let url = format!("{}/v2/balance/", self.base.config.rest_url);
 
         let response = self.client.post(&url).send().await?;
         let balance_data: Value = response.json().await?;
 
         let mut balances = HashMap::new();
 
-        // Bitstamp returns balance data with _balance, _reserved, _available suffixes
         if let Some(balance_obj) = balance_data.as_object() {
             let mut assets: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-            // Collect all unique asset names
             for key in balance_obj.keys() {
                 if let Some(asset) = key.strip_suffix("_balance") {
                     assets.insert(asset.to_uppercase());
@@ -515,10 +455,10 @@ impl ExchangeConnector for BitstampConnector {
             let bitstamp_symbol = self.symbol_to_bitstamp(sym);
             format!(
                 "{}/v2/open_orders/{}/",
-                self.config.rest_url, bitstamp_symbol
+                self.base.config.rest_url, bitstamp_symbol
             )
         } else {
-            format!("{}/v2/open_orders/all/", self.config.rest_url)
+            format!("{}/v2/open_orders/all/", self.base.config.rest_url)
         };
 
         let response = self.client.post(&url).send().await?;
@@ -881,7 +821,7 @@ impl BitstampConnector {
         }
     }
 
-    fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -890,7 +830,10 @@ impl BitstampConnector {
         })?;
 
         let mut asks = Vec::new();
-        for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
+        for ask in asks_data
+            .iter()
+            .take(self.base.config.order_book_depth as usize)
+        {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
@@ -901,7 +844,10 @@ impl BitstampConnector {
         }
 
         let mut bids = Vec::new();
-        for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
+        for bid in bids_data
+            .iter()
+            .take(self.base.config.order_book_depth as usize)
+        {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;
@@ -921,7 +867,7 @@ impl BitstampConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         let last_price = parse_decimal(&data["last"])?;
         let bid_price = parse_decimal(&data["bid"])?;
         let ask_price = parse_decimal(&data["ask"])?;

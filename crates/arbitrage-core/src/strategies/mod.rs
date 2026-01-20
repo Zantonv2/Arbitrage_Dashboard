@@ -23,6 +23,18 @@ pub use base::*;
 pub use registry::StrategyRegistry;
 pub use strategies_specifics::*;
 
+// Re-export strategy modules for direct access
+pub use strategy_impl::cex_arbitrage;
+pub use strategy_impl::convergence_arbitrage;
+pub use strategy_impl::cross_exchange_arbitrage;
+pub use strategy_impl::funding_rate_arbitrage;
+pub use strategy_impl::hedged_funding;
+pub use strategy_impl::latency_arbitrage;
+pub use strategy_impl::new_listing_arbitrage;
+pub use strategy_impl::spot_perp_arbitrage;
+pub use strategy_impl::spread_capture;
+pub use strategy_impl::stablecoin_arbitrage;
+
 // Re-export all strategies
 pub use strategy_impl::{
     CexArbitrageStrategy, ConvergenceArbitrageStrategy, CrossExchangeArbitrageStrategy,

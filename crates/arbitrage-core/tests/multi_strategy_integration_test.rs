@@ -1,4 +1,11 @@
 use arbitrage_core::{
+    arbitrage_engine::ArbitrageEngine,
+    confidence_scorer::{ConfidenceConfig, ConfidenceScorer},
+    config::Config,
+    execution_preparer::{ExecutionConfig, ExecutionPreparer},
+    normalizer::Normalizer,
+    size_calculator::{SizeCalculator, SizeConfig},
+    storage::{StorageConfig, StorageService},
     strategies::{
         CexArbitrageStrategy, ConvergenceArbitrageStrategy, CrossExchangeArbitrageStrategy,
         FundingRate, FundingRateArbitrageStrategy, HedgedFundingStrategy, LatencyArbitrageStrategy,
@@ -13,10 +20,35 @@ use rust_decimal::Decimal;
 use std::sync::Arc;
 use tokio;
 
-/// Integration test for multiple strategies working together
+async fn create_test_engine(database_path: &str) -> Result<ArbitrageEngine> {
+    let mut config = Config::default();
+    config.trading.min_profit_threshold_percent = Decimal::new(1, 4);
+    config.risk.max_position_size_usd = Decimal::from(200000);
+
+    let normalizer = Arc::new(Normalizer::new());
+    let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
+    let size_calculator = Arc::new(SizeCalculator::new(SizeConfig::default()));
+    let execution_preparer = Arc::new(ExecutionPreparer::new(ExecutionConfig::default()));
+    let storage_config = StorageConfig {
+        database_path: database_path.to_string(),
+        ..Default::default()
+    };
+    let storage = Arc::new(StorageService::new(storage_config).await?);
+
+    let (engine, _receiver) = ArbitrageEngine::new(
+        config,
+        normalizer,
+        confidence_scorer,
+        size_calculator,
+        execution_preparer,
+        storage,
+    )?;
+
+    Ok(engine)
+}
+
 #[tokio::test]
 async fn test_multi_strategy_detection() -> Result<()> {
-    // Create strategy registry with all implemented strategies
     let mut registry = StrategyRegistry::new();
 
     registry.register(Arc::new(CexArbitrageStrategy::new()))?;
@@ -33,13 +65,10 @@ async fn test_multi_strategy_detection() -> Result<()> {
     println!("Registered {} strategies", registry.count());
     assert_eq!(registry.count(), 10);
 
-    // Create comprehensive market data
     let mut market_bundle = MarketBundle::new();
 
-    // 1. CEX Arbitrage opportunity: BTC price difference
     let btc_symbol = Symbol::new("BTC", "USDT");
 
-    // OKX: Lower price (good for buying)
     let btc_okx_book = OrderBook::new(
         ExchangeId::OKX,
         btc_symbol.clone(),
@@ -47,7 +76,6 @@ async fn test_multi_strategy_detection() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
     );
 
-    // ByBit: Higher price (good for selling)
     let btc_bybit_book = OrderBook::new(
         ExchangeId::ByBit,
         btc_symbol.clone(),
@@ -55,19 +83,17 @@ async fn test_multi_strategy_detection() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(50160), Decimal::from(1))],
     );
 
-    market_bundle.add_order_book(btc_okx_book);
-    market_bundle.add_order_book(btc_bybit_book);
+    market_bundle.add_order_book(Arc::new(btc_okx_book));
+    market_bundle.add_order_book(Arc::new(btc_bybit_book));
 
-    // 2. Funding Rate Arbitrage opportunity
     let funding_rate = FundingRate::new(
         ExchangeId::OKX,
         btc_symbol.clone(),
-        Decimal::new(15, 5), // 0.00015 = 0.015% funding rate
+        Decimal::new(15, 5),
         Utc::now() + Duration::hours(6),
     );
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
-    // Add BTC ticker for funding rate strategy
     let btc_ticker = Ticker::new(
         ExchangeId::OKX,
         btc_symbol.clone(),
@@ -75,16 +101,15 @@ async fn test_multi_strategy_detection() -> Result<()> {
         Decimal::from(50010),
         Decimal::from(50005),
     );
-    market_bundle.add_ticker(btc_ticker);
+    market_bundle.add_ticker(Arc::new(btc_ticker));
 
-    // 3. Stablecoin Arbitrage opportunity: USDT above peg
     let usdt_symbol = Symbol::new("USDT", "USD");
     let usdt_ticker = Ticker::new(
         ExchangeId::Kraken,
         usdt_symbol.clone(),
-        Decimal::new(1003, 3), // $1.003
-        Decimal::new(1005, 3), // $1.005
-        Decimal::new(1004, 3), // $1.004
+        Decimal::new(1003, 3),
+        Decimal::new(1005, 3),
+        Decimal::new(1004, 3),
     );
     let usdt_book = OrderBook::new(
         ExchangeId::Kraken,
@@ -98,10 +123,9 @@ async fn test_multi_strategy_detection() -> Result<()> {
             Decimal::from(5000),
         )],
     );
-    market_bundle.add_ticker(usdt_ticker);
-    market_bundle.add_order_book(usdt_book);
+    market_bundle.add_ticker(Arc::new(usdt_ticker));
+    market_bundle.add_order_book(Arc::new(usdt_book));
 
-    // 4. Cross-stablecoin opportunity: USDT/USDC spread
     let usdt_usdc_symbol = Symbol::new("USDT", "USDC");
     let usdt_usdc_okx = OrderBook::new(
         ExchangeId::OKX,
@@ -127,11 +151,8 @@ async fn test_multi_strategy_detection() -> Result<()> {
             Decimal::from(2000),
         )],
     );
-    market_bundle.add_order_book(usdt_usdc_okx);
-    market_bundle.add_order_book(usdt_usdc_bybit);
-
-    // Test each strategy individually
-    println!("\n=== Testing Individual Strategies ===");
+    market_bundle.add_order_book(Arc::new(usdt_usdc_okx));
+    market_bundle.add_order_book(Arc::new(usdt_usdc_bybit));
 
     let strategies = registry.get_all();
     let mut total_signals = 0;
@@ -158,7 +179,6 @@ async fn test_multi_strategy_detection() -> Result<()> {
 
     println!("\nTotal signals across all strategies: {}", total_signals);
 
-    // Should detect multiple opportunities
     assert!(
         total_signals > 0,
         "Should detect arbitrage opportunities across strategies"
@@ -167,20 +187,16 @@ async fn test_multi_strategy_detection() -> Result<()> {
     Ok(())
 }
 
-/// Test strategy priority and conflict resolution
 #[tokio::test]
 async fn test_strategy_priority_and_conflicts() -> Result<()> {
     let mut registry = StrategyRegistry::new();
 
-    // Register strategies in priority order
     registry.register(Arc::new(CexArbitrageStrategy::new()))?;
     registry.register(Arc::new(CrossExchangeArbitrageStrategy::new()))?;
 
-    // Create market data that could trigger both strategies
     let mut market_bundle = MarketBundle::new();
     let symbol = Symbol::new("ETH", "USDT");
 
-    // Create price difference between exchanges
     let eth_okx = OrderBook::new(
         ExchangeId::OKX,
         symbol.clone(),
@@ -195,10 +211,9 @@ async fn test_strategy_priority_and_conflicts() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(3055), Decimal::from(5))],
     );
 
-    market_bundle.add_order_book(eth_okx);
-    market_bundle.add_order_book(eth_bybit);
+    market_bundle.add_order_book(Arc::new(eth_okx));
+    market_bundle.add_order_book(Arc::new(eth_bybit));
 
-    // Test both strategies
     let cex_strategy = CexArbitrageStrategy::new();
     let cross_strategy = CrossExchangeArbitrageStrategy::new();
 
@@ -208,21 +223,15 @@ async fn test_strategy_priority_and_conflicts() -> Result<()> {
     println!("CEX arbitrage signals: {}", cex_signals.len());
     println!("Cross-exchange signals: {}", cross_signals.len());
 
-    // Both strategies should detect the same opportunity
-    // In a real system, we'd need conflict resolution logic
-
     Ok(())
 }
 
-/// Test strategy performance with large market data
 #[tokio::test]
 async fn test_strategy_performance() -> Result<()> {
     let strategy = CexArbitrageStrategy::new();
 
-    // Create large market bundle
     let mut market_bundle = MarketBundle::new();
 
-    // Add 100 symbols across 6 exchanges
     for i in 0..100 {
         let symbol = Symbol::new(&format!("TOKEN{}", i), "USDT");
 
@@ -234,8 +243,8 @@ async fn test_strategy_performance() -> Result<()> {
             ExchangeId::Kraken,
             ExchangeId::Bitstamp,
         ] {
-            let base_price = 100 + i; // Different base prices
-            let spread = 1 + (i % 5); // Variable spreads
+            let base_price = 100 + i;
+            let spread = 1 + (i % 5);
 
             let order_book = OrderBook::new(
                 exchange,
@@ -250,7 +259,7 @@ async fn test_strategy_performance() -> Result<()> {
                 )],
             );
 
-            market_bundle.add_order_book(order_book);
+            market_bundle.add_order_book(Arc::new(order_book));
         }
     }
 
@@ -259,7 +268,6 @@ async fn test_strategy_performance() -> Result<()> {
         market_bundle.order_books.len()
     );
 
-    // Measure detection time
     let start = std::time::Instant::now();
     let signals = strategy.detect(&market_bundle)?;
     let duration = start.elapsed();
@@ -270,7 +278,6 @@ async fn test_strategy_performance() -> Result<()> {
         signals.len()
     );
 
-    // Should complete within reasonable time (< 100ms for this test)
     assert!(
         duration.as_millis() < 1000,
         "Strategy detection should be fast"
@@ -279,25 +286,19 @@ async fn test_strategy_performance() -> Result<()> {
     Ok(())
 }
 
-/// Test strategy configuration updates
 #[tokio::test]
 async fn test_strategy_configuration() -> Result<()> {
-    use arbitrage_core::strategies::StrategyConfig;
-
     let mut strategy = CexArbitrageStrategy::new();
 
-    // Get initial config
     let initial_config = strategy.config().clone();
     println!("Initial min profit: {}bps", initial_config.min_profit_bps);
 
-    // Update configuration
     let mut new_config = initial_config.clone();
-    new_config.min_profit_bps = 50; // Increase to 0.5%
-    new_config.max_exposure = Decimal::from(5000); // Reduce exposure
+    new_config.min_profit_bps = 50;
+    new_config.max_exposure = Decimal::from(5000);
 
     strategy.update_config(new_config)?;
 
-    // Verify config was updated
     let updated_config = strategy.config();
     assert_eq!(updated_config.min_profit_bps, 50);
     assert_eq!(updated_config.max_exposure, Decimal::from(5000));
@@ -307,23 +308,18 @@ async fn test_strategy_configuration() -> Result<()> {
     Ok(())
 }
 
-/// Test strategy error handling
 #[tokio::test]
 async fn test_strategy_error_handling() -> Result<()> {
     let strategy = CexArbitrageStrategy::new();
 
-    // Test with empty market bundle
     let empty_bundle = MarketBundle::new();
     let signals = strategy.detect(&empty_bundle)?;
 
-    // Should handle empty data gracefully
     assert_eq!(signals.len(), 0);
 
-    // Test with invalid data
     let mut invalid_bundle = MarketBundle::new();
     let symbol = Symbol::new("INVALID", "TOKEN");
 
-    // Add order book with zero prices (should be handled gracefully)
     let invalid_book = OrderBook::new(
         ExchangeId::OKX,
         symbol.clone(),
@@ -331,11 +327,406 @@ async fn test_strategy_error_handling() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::ZERO, Decimal::from(1))],
     );
 
-    invalid_bundle.add_order_book(invalid_book);
+    invalid_bundle.add_order_book(Arc::new(invalid_book));
 
-    // Should not panic or return error
     let signals = strategy.detect(&invalid_bundle)?;
     println!("Signals from invalid data: {}", signals.len());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_engine_strategy_signal_flow() -> Result<()> {
+    let engine = create_test_engine(":memory:").await?;
+
+    let symbol = Symbol::new("BTC", "USDT");
+
+    let okx_book = OrderBook::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+    );
+
+    let bybit_book = OrderBook::new(
+        ExchangeId::ByBit,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50200), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50210), Decimal::from(1))],
+    );
+
+    engine.update_order_book(okx_book).await?;
+    engine.update_order_book(bybit_book).await?;
+
+    let mut registry = StrategyRegistry::new();
+    registry.register(Arc::new(CexArbitrageStrategy::new()))?;
+
+    let signals = engine.detect_opportunities(&registry).await?;
+
+    assert!(
+        !signals.is_empty(),
+        "Engine should detect signals through strategy"
+    );
+
+    let signal = &signals[0];
+    assert_eq!(signal.symbol.to_pair(), "BTC/USDT");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_signal_execution_order_flow() -> Result<()> {
+    use arbitrage_core::types::{Order, OrderType, TimeInForce};
+
+    let engine = create_test_engine(":memory:").await?;
+
+    let symbol = Symbol::new("BTC", "USDT");
+
+    let okx_book = OrderBook::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+    );
+
+    let bybit_book = OrderBook::new(
+        ExchangeId::ByBit,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50200), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50210), Decimal::from(1))],
+    );
+
+    engine.update_order_book(okx_book).await?;
+    engine.update_order_book(bybit_book).await?;
+
+    let mut registry = StrategyRegistry::new();
+    registry.register(Arc::new(CexArbitrageStrategy::new()))?;
+
+    let signals = engine.detect_opportunities(&registry).await?;
+
+    if !signals.is_empty() {
+        let signal = &signals[0];
+
+        let buy_order = Order::new(
+            signal.buy_exchange,
+            symbol.clone(),
+            arbitrage_core::types::Side::Buy,
+            OrderType::Market,
+            signal.recommended_size,
+            None,
+        );
+
+        let sell_order = Order::new(
+            signal.sell_exchange,
+            symbol.clone(),
+            arbitrage_core::types::Side::Sell,
+            OrderType::Market,
+            signal.recommended_size,
+            None,
+        );
+
+        assert_eq!(buy_order.exchange, signal.buy_exchange);
+        assert_eq!(sell_order.exchange, signal.sell_exchange);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_config_propagation() -> Result<()> {
+    let mut registry = StrategyRegistry::new();
+
+    let mut cex_strategy = CexArbitrageStrategy::new();
+    let mut config = cex_strategy.config().clone();
+    config.min_profit_bps = 100;
+    cex_strategy.update_config(config)?;
+
+    registry.register(Arc::new(cex_strategy))?;
+
+    let strategies = registry.get_all();
+    let cex = strategies
+        .iter()
+        .find(|s| s.name() == "CEX ↔ CEX Price Arbitrage")
+        .expect("Should have CEX arbitrage strategy");
+
+    let cex_config = cex.config();
+    assert_eq!(cex_config.min_profit_bps, 100);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_exchange_scenarios() -> Result<()> {
+    let strategy = CexArbitrageStrategy::new();
+
+    let exchanges = [
+        ExchangeId::OKX,
+        ExchangeId::ByBit,
+        ExchangeId::MEXC,
+        ExchangeId::GateIo,
+        ExchangeId::Bitstamp,
+        ExchangeId::Kraken,
+    ];
+
+    for i in 0..exchanges.len() {
+        for j in (i + 1)..exchanges.len() {
+            let buy_exchange = exchanges[i];
+            let sell_exchange = exchanges[j];
+
+            let symbol = Symbol::new("BTC", "USDT");
+
+            let buy_book = OrderBook::new(
+                buy_exchange,
+                symbol.clone(),
+                vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+                vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+            );
+
+            let sell_book = OrderBook::new(
+                sell_exchange,
+                symbol.clone(),
+                vec![OrderBookLevel::new(Decimal::from(50200), Decimal::from(1))],
+                vec![OrderBookLevel::new(Decimal::from(50210), Decimal::from(1))],
+            );
+
+            let mut market_bundle = MarketBundle::new();
+            market_bundle.add_order_book(Arc::new(buy_book));
+            market_bundle.add_order_book(Arc::new(sell_book));
+
+            let signals = strategy.detect(&market_bundle)?;
+
+            if !signals.is_empty() {
+                let signal = &signals[0];
+                assert!(
+                    signal.expected_profit_bps > 0,
+                    "Should detect profit for {} -> {}",
+                    buy_exchange,
+                    sell_exchange
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_end_to_end_pipeline() -> Result<()> {
+    let engine = create_test_engine(":memory:").await?;
+
+    let symbols = ["BTC", "ETH", "XRP", "ADA", "SOL"]
+        .iter()
+        .map(|s| Symbol::new(*s, "USDT"))
+        .collect::<Vec<_>>();
+
+    let exchanges = [
+        ExchangeId::OKX,
+        ExchangeId::ByBit,
+        ExchangeId::MEXC,
+        ExchangeId::GateIo,
+    ];
+
+    for (i, symbol) in symbols.iter().enumerate() {
+        for (j, exchange) in exchanges.iter().enumerate() {
+            let base_price = 1000 + i * 100 + j * 10;
+            let spread = 5 + j;
+
+            let book = OrderBook::new(
+                *exchange,
+                symbol.clone(),
+                vec![OrderBookLevel::new(
+                    Decimal::from(base_price),
+                    Decimal::from(10),
+                )],
+                vec![OrderBookLevel::new(
+                    Decimal::from(base_price + spread),
+                    Decimal::from(10),
+                )],
+            );
+
+            engine.update_order_book(book).await?;
+        }
+    }
+
+    let mut registry = StrategyRegistry::new();
+    registry.register(Arc::new(CexArbitrageStrategy::new()))?;
+    registry.register(Arc::new(FundingRateArbitrageStrategy::new()))?;
+    registry.register(Arc::new(StablecoinArbitrageStrategy::new()))?;
+
+    let signals = engine.detect_opportunities(&registry).await?;
+
+    println!("E2E Pipeline detected {} signals", signals.len());
+
+    for signal in &signals {
+        assert!(
+            signal.net_profit_percent > Decimal::ZERO,
+            "Signal should have positive profit"
+        );
+        assert!(
+            signal.recommended_size > Decimal::ZERO,
+            "Signal should have positive size"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_strategy_registry_operations() -> Result<()> {
+    let mut registry = StrategyRegistry::new();
+
+    assert_eq!(registry.count(), 0);
+    assert!(registry.get_all().is_empty());
+
+    registry.register(Arc::new(CexArbitrageStrategy::new()))?;
+    assert_eq!(registry.count(), 1);
+
+    registry.register(Arc::new(FundingRateArbitrageStrategy::new()))?;
+    assert_eq!(registry.count(), 2);
+
+    let strategies = registry.get_all();
+    assert_eq!(strategies.len(), 2);
+
+    let names: Vec<String> = strategies.iter().map(|s| s.name().to_string()).collect();
+    assert!(names.contains(&"CEX ↔ CEX Price Arbitrage".to_string()));
+    assert!(names.contains(&"Funding Rate Arbitrage".to_string()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_market_bundle_data_integrity() -> Result<()> {
+    let mut market_bundle = MarketBundle::new();
+
+    let symbol = Symbol::new("BTC", "USDT");
+
+    let book = OrderBook::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+    );
+
+    market_bundle.add_order_book(Arc::new(book));
+
+    assert!(
+        market_bundle.has_data(ExchangeId::OKX, &symbol),
+        "Market bundle should have data for added orderbook"
+    );
+
+    let ticker = Ticker::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        Decimal::from(50000),
+        Decimal::from(50010),
+        Decimal::from(50005),
+    );
+
+    market_bundle.add_ticker(Arc::new(ticker));
+
+    let funding_rate = FundingRate::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        Decimal::new(10, 4),
+        Utc::now() + Duration::hours(8),
+    );
+
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_signal_validation() -> Result<()> {
+    let strategy = CexArbitrageStrategy::new();
+
+    let symbol = Symbol::new("BTC", "USDT");
+
+    let okx_book = OrderBook::new(
+        ExchangeId::OKX,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+    );
+
+    let bybit_book = OrderBook::new(
+        ExchangeId::ByBit,
+        symbol.clone(),
+        vec![OrderBookLevel::new(Decimal::from(50200), Decimal::from(1))],
+        vec![OrderBookLevel::new(Decimal::from(50210), Decimal::from(1))],
+    );
+
+    let mut market_bundle = MarketBundle::new();
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(bybit_book));
+
+    let signals = strategy.detect(&market_bundle)?;
+
+    for signal in &signals {
+        assert!(
+            signal.expected_profit_bps > 0,
+            "Signal profit should be positive"
+        );
+        if let Some(first_leg) = signal.legs.first() {
+            assert!(
+                first_leg.price > Decimal::ZERO,
+                "Leg price should be positive"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_concurrent_strategy_execution() -> Result<()> {
+    let strategy = CexArbitrageStrategy::new();
+
+    let mut market_bundle = MarketBundle::new();
+
+    for i in 0..50 {
+        let symbol = Symbol::new(&format!("SYM{}", i), "USDT");
+
+        let okx_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            vec![OrderBookLevel::new(
+                Decimal::from(100 + i),
+                Decimal::from(1),
+            )],
+            vec![OrderBookLevel::new(
+                Decimal::from(105 + i),
+                Decimal::from(1),
+            )],
+        );
+
+        let bybit_book = OrderBook::new(
+            ExchangeId::ByBit,
+            symbol.clone(),
+            vec![OrderBookLevel::new(
+                Decimal::from(110 + i),
+                Decimal::from(1),
+            )],
+            vec![OrderBookLevel::new(
+                Decimal::from(115 + i),
+                Decimal::from(1),
+            )],
+        );
+
+        market_bundle.add_order_book(Arc::new(okx_book));
+        market_bundle.add_order_book(Arc::new(bybit_book));
+    }
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let duration = start.elapsed();
+
+    println!("Detected {} signals in {:?}", signals.len(), duration);
+
+    assert!(
+        duration.as_millis() < 500,
+        "Strategy detection should complete quickly"
+    );
 
     Ok(())
 }

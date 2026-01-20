@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         FilterContext, MarketBundle, SpreadCaptureStrategy, Strategy, StrategyConfig, Ticker,
@@ -58,8 +59,8 @@ async fn test_spread_capture_integration() -> Result<()> {
         Decimal::from(50000), // last
     );
 
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_ticker(okx_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
 
     // Run strategy detection
     let signals = strategy.detect(&market_bundle)?;
@@ -147,8 +148,8 @@ async fn test_spread_capture_filtering() -> Result<()> {
         Decimal::from(3000),
     );
 
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_ticker(okx_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -191,8 +192,8 @@ async fn test_spread_capture_insufficient_depth() -> Result<()> {
         Decimal::from(50000),
     );
 
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_ticker(okx_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -229,8 +230,8 @@ async fn test_spread_capture_signal_filtering() -> Result<()> {
         Decimal::from(50000),
     );
 
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_ticker(okx_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -324,10 +325,10 @@ async fn test_spread_capture_multiple_exchanges() -> Result<()> {
         Decimal::from(3000),
     );
 
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_order_book(bybit_book);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_order_book(Arc::new(bybit_book));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 

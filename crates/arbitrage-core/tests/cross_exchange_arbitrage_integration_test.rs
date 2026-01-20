@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         CrossExchangeArbitrageStrategy, FilterContext, MarketBundle, RawSignal, Strategy, TradeLeg,
@@ -33,8 +34,8 @@ async fn test_cross_exchange_arbitrage_integration() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(bybit_book);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(bybit_book));
 
     let signals = cross_exchange_strategy.detect(&market_bundle)?;
 
@@ -142,8 +143,8 @@ async fn test_cross_exchange_arbitrage_no_opportunity() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(bybit_book);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(bybit_book));
 
     let signals = cross_exchange_strategy.detect(&market_bundle)?;
 
@@ -193,10 +194,10 @@ async fn test_cross_exchange_arbitrage_multiple_symbols() -> Result<()> {
         vec![OrderBookLevel::new(Decimal::from(2990), Decimal::from(5))],
     );
 
-    market_bundle.add_order_book(btc_okx);
-    market_bundle.add_order_book(btc_bybit);
-    market_bundle.add_order_book(eth_okx);
-    market_bundle.add_order_book(eth_mexc);
+    market_bundle.add_order_book(Arc::new(btc_okx));
+    market_bundle.add_order_book(Arc::new(btc_bybit));
+    market_bundle.add_order_book(Arc::new(eth_okx));
+    market_bundle.add_order_book(Arc::new(eth_mexc));
 
     let signals = cross_exchange_strategy.detect(&market_bundle)?;
 

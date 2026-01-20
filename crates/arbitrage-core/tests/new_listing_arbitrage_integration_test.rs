@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{
         FilterContext, MarketBundle, NewListingArbitrageStrategy, RawSignal, Strategy, Ticker,
@@ -63,10 +64,10 @@ async fn test_new_listing_arbitrage_integration() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(bybit_book);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(bybit_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     let signals = new_listing_strategy.detect(&market_bundle)?;
 
@@ -188,10 +189,10 @@ async fn test_new_listing_arbitrage_established_token() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(bybit_book);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(bybit_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(bybit_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(bybit_ticker));
 
     let signals = new_listing_strategy.detect(&market_bundle)?;
 
@@ -245,10 +246,10 @@ async fn test_new_listing_arbitrage_high_volatility() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(mexc_book);
-    market_bundle.add_ticker(okx_ticker);
-    market_bundle.add_ticker(mexc_ticker);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(mexc_book));
+    market_bundle.add_ticker(Arc::new(okx_ticker));
+    market_bundle.add_ticker(Arc::new(mexc_ticker));
 
     let signals = new_listing_strategy.detect(&market_bundle)?;
 

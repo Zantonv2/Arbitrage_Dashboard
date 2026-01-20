@@ -25,6 +25,9 @@ libokx.rlib
 logs/
 *.log
 
+# Workflow outputs
+outputs/
+
 # Database
 data/
 *.db

@@ -2,48 +2,32 @@ use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, Symbol},
     Result,
 };
-use dashmap::DashMap;
-use dashmap::DashSet;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::broadcast;
-use tokio::time::{interval, Duration};
-use tracing::{debug, error, info, warn};
+use tokio::sync::RwLock;
+use tokio::time::Duration;
+use tracing::{error, info, warn};
 
 use crate::connector::{ConnectorStats, ExchangeConnector, HealthStatus};
 use crate::events::{ConnectionEvent, EventStats, MarketDataEvent};
 use crate::rate_limiter::{RateLimitConfig, UnifiedRateLimitManager};
 
-/// Configuration for exchange manager
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeManagerConfig {
-    /// Enabled exchanges
     pub enabled_exchanges: Vec<ExchangeId>,
-
-    /// Health check interval in seconds
     pub health_check_interval_seconds: u64,
-
-    /// Maximum reconnection attempts per exchange
     pub max_reconnect_attempts: u32,
-
-    /// Event buffer size
     pub event_buffer_size: usize,
-
-    /// Rate limiting configurations per exchange
     pub rate_limits: HashMap<ExchangeId, RateLimitConfig>,
-
-    /// Auto-reconnect on failures
     pub auto_reconnect: bool,
-
-    /// Parallel connection limit
     pub max_parallel_connections: usize,
 }
 
 impl Default for ExchangeManagerConfig {
     fn default() -> Self {
         let mut rate_limits = HashMap::new();
-
-        // Default rate limits for each exchange
         rate_limits.insert(
             ExchangeId::OKX,
             RateLimitConfig {
@@ -52,7 +36,6 @@ impl Default for ExchangeManagerConfig {
                 window_seconds: 60,
             },
         );
-
         rate_limits.insert(
             ExchangeId::ByBit,
             RateLimitConfig {
@@ -61,7 +44,6 @@ impl Default for ExchangeManagerConfig {
                 window_seconds: 60,
             },
         );
-
         rate_limits.insert(
             ExchangeId::MEXC,
             RateLimitConfig {
@@ -70,7 +52,6 @@ impl Default for ExchangeManagerConfig {
                 window_seconds: 60,
             },
         );
-
         rate_limits.insert(
             ExchangeId::GateIo,
             RateLimitConfig {
@@ -79,7 +60,6 @@ impl Default for ExchangeManagerConfig {
                 window_seconds: 60,
             },
         );
-
         rate_limits.insert(
             ExchangeId::Bitstamp,
             RateLimitConfig {
@@ -88,7 +68,6 @@ impl Default for ExchangeManagerConfig {
                 window_seconds: 60,
             },
         );
-
         rate_limits.insert(
             ExchangeId::Kraken,
             RateLimitConfig {
@@ -97,7 +76,6 @@ impl Default for ExchangeManagerConfig {
                 window_seconds: 60,
             },
         );
-
         Self {
             enabled_exchanges: vec![
                 ExchangeId::OKX,
@@ -117,93 +95,61 @@ impl Default for ExchangeManagerConfig {
     }
 }
 
-/// Manages all exchange connectors and provides unified interface
 pub struct ExchangeManager {
     config: ExchangeManagerConfig,
-    connectors: DashMap<ExchangeId, Box<dyn ExchangeConnector>>,
+    connectors: HashMap<ExchangeId, Arc<RwLock<Box<dyn ExchangeConnector + Send + Sync>>>>,
     event_sender: broadcast::Sender<ConnectionEvent>,
     event_receiver: broadcast::Receiver<ConnectionEvent>,
-    subscribed_symbols: DashSet<Symbol>,
-    event_stats: DashMap<ExchangeId, EventStats>,
-    rate_limiters: DashMap<ExchangeId, UnifiedRateLimitManager>,
+    subscribed_symbols: HashMap<ExchangeId, Vec<Symbol>>,
+    event_stats: HashMap<ExchangeId, EventStats>,
+    rate_limiters: HashMap<ExchangeId, UnifiedRateLimitManager>,
 }
 
 impl ExchangeManager {
-    /// Create new exchange manager
     pub fn new(config: ExchangeManagerConfig) -> Self {
         let (event_sender, event_receiver) = broadcast::channel(config.event_buffer_size);
-
         Self {
             config,
-            connectors: DashMap::new(),
+            connectors: HashMap::new(),
             event_sender,
             event_receiver,
-            subscribed_symbols: DashSet::new(),
-            event_stats: DashMap::new(),
-            rate_limiters: DashMap::new(),
+            subscribed_symbols: HashMap::new(),
+            event_stats: HashMap::new(),
+            rate_limiters: HashMap::new(),
         }
     }
 
-    /// Initialize all enabled exchange connectors
     pub async fn initialize(&mut self) -> Result<()> {
-        info!(
-            "Initializing exchange manager with {} exchanges",
-            self.config.enabled_exchanges.len()
-        );
-
-        let mut connectors = self.connectors.write();
-        let mut rate_limiters = self.rate_limiters.write();
-        let mut event_stats = self.event_stats.write();
-
         for exchange_id in &self.config.enabled_exchanges {
-            // Create connector
             let connector = crate::create_connector(*exchange_id)?;
-
-            // Initialize rate limiter
             let rate_limit_config = self
                 .config
                 .rate_limits
                 .get(exchange_id)
                 .cloned()
                 .unwrap_or_default();
-
             let mut rate_limiter = UnifiedRateLimitManager::new();
             rate_limiter.add_limiter("rest".to_string(), rate_limit_config.clone());
             rate_limiter.add_limiter("websocket".to_string(), rate_limit_config);
-
-            // Initialize event stats
             let mut stats = EventStats::default();
             stats.exchange = *exchange_id;
-
-            connectors.insert(*exchange_id, connector);
-            rate_limiters.insert(*exchange_id, rate_limiter);
-            event_stats.insert(*exchange_id, stats);
-
-            info!("Initialized connector for {}", exchange_id);
+            self.connectors
+                .insert(*exchange_id, Arc::new(RwLock::new(connector)));
+            self.rate_limiters.insert(*exchange_id, rate_limiter);
+            self.event_stats.insert(*exchange_id, stats);
         }
-
-        // Start background tasks
         self.start_health_monitor().await;
         self.start_event_processor().await;
-
         Ok(())
     }
 
-    /// Connect all exchange connectors
     pub async fn connect_all(&mut self) -> Result<()> {
-        info!("Connecting to all exchanges");
-
-        let mut connectors = self.connectors.write();
-
-        for (exchange_id, connector) in connectors.iter_mut() {
-            let exchange = *exchange_id;
+        for (exchange, connector) in self.connectors.iter_mut() {
+            let exchange = *exchange;
+            let mut connector = connector.write().await;
             info!("Connecting to {}", exchange);
-
             match connector.connect().await {
                 Ok(()) => {
-                    info!("Successfully connected to {}", exchange);
-
-                    // Send connection event
                     let _ = self.event_sender.send(ConnectionEvent::StatusChange {
                         exchange,
                         old_status: ConnectionStatus::Disconnected,
@@ -213,8 +159,6 @@ impl ExchangeManager {
                 }
                 Err(e) => {
                     error!("Failed to connect to {}: {}", exchange, e);
-
-                    // Send error event
                     let _ = self.event_sender.send(ConnectionEvent::Error {
                         exchange,
                         error: format!("Health check failed: {}", e),
@@ -223,101 +167,48 @@ impl ExchangeManager {
                 }
             }
         }
-
         Ok(())
     }
 
-    /// Subscribe to symbols across all exchanges
     pub async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!(
-            "Subscribing to {} symbols across all exchanges",
-            symbols.len()
-        );
-
-        // Update subscribed symbols
-        {
-            let mut subscribed = self.subscribed_symbols.write();
-            for symbol in symbols {
-                subscribed.insert(symbol.clone());
+        for symbol in symbols {
+            self.subscribed_symbols
+                .values_mut()
+                .for_each(|s| s.push(symbol.clone()));
+        }
+        for (exchange, connector) in self.connectors.iter_mut() {
+            let exchange = *exchange;
+            let mut connector = connector.write().await;
+            if let Err(e) = connector.subscribe_symbols(symbols).await {
+                warn!("Failed to subscribe on {}: {}", exchange, e);
             }
         }
-
-        let mut connectors = self.connectors.write();
-
-        for (exchange_id, connector) in connectors.iter_mut() {
-            let exchange = *exchange_id;
-
-            match connector.subscribe_symbols(symbols).await {
-                Ok(()) => {
-                    info!("Successfully subscribed to symbols on {}", exchange);
-
-                    // Send subscription confirmation
-                    let _ = self
-                        .event_sender
-                        .send(ConnectionEvent::SubscriptionConfirmed {
-                            exchange,
-                            symbols: symbols.to_vec(),
-                            data_type: "symbols".to_string(),
-                            timestamp: chrono::Utc::now(),
-                        });
-                }
-                Err(e) => {
-                    warn!("Failed to subscribe to symbols on {}: {}", exchange, e);
-                }
-            }
-        }
-
         Ok(())
     }
 
-    /// Unsubscribe from symbols across all exchanges
     pub async fn unsubscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
-        info!(
-            "Unsubscribing from {} symbols across all exchanges",
-            symbols.len()
-        );
-
-        // Update subscribed symbols
-        {
-            let mut subscribed = self.subscribed_symbols.write();
-            for symbol in symbols {
-                subscribed.remove(symbol);
+        for symbol in symbols {
+            self.subscribed_symbols.values_mut().for_each(|s| {
+                s.retain(|sym| sym != symbol);
+            });
+        }
+        for (exchange, connector) in self.connectors.iter_mut() {
+            let exchange = *exchange;
+            let mut connector = connector.write().await;
+            if let Err(e) = connector.unsubscribe_symbols(symbols).await {
+                warn!("Failed to unsubscribe on {}: {}", exchange, e);
             }
         }
-
-        let mut connectors = self.connectors.write();
-
-        for (exchange_id, connector) in connectors.iter_mut() {
-            let exchange = *exchange_id;
-
-            match connector.unsubscribe_symbols(symbols).await {
-                Ok(()) => {
-                    info!("Successfully unsubscribed from symbols on {}", exchange);
-                }
-                Err(e) => {
-                    warn!("Failed to unsubscribe from symbols on {}: {}", exchange, e);
-                }
-            }
-        }
-
         Ok(())
     }
 
-    /// Get unified event receiver
     pub fn get_event_receiver(&self) -> broadcast::Receiver<ConnectionEvent> {
         self.event_receiver.resubscribe()
     }
 
-    /// Get order book from specific exchange
     pub async fn get_order_book(&self, exchange: ExchangeId, symbol: &Symbol) -> Result<OrderBook> {
-        let connectors = self.connectors.read();
-
-        if let Some(connector) = connectors.get(&exchange) {
-            // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().get(&exchange) {
-                rate_limiter.acquire("rest").await?;
-            }
-
+        if let Some(connector) = self.connectors.get(&exchange) {
+            let connector = connector.read().await;
             connector.fetch_order_book(symbol).await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(
@@ -327,50 +218,31 @@ impl ExchangeManager {
         }
     }
 
-    /// Get order books from all exchanges for a symbol
     pub async fn get_order_books_all(
         &self,
         symbol: &Symbol,
     ) -> HashMap<ExchangeId, Result<OrderBook>> {
-        let connectors = self.connectors.read();
         let mut results = HashMap::new();
-
-        for (exchange_id, connector) in connectors.iter() {
-            let exchange = *exchange_id;
-
-            // Apply rate limiting
-            let rate_limit_result =
-                if let Some(rate_limiter) = self.rate_limiters.read().get(&exchange) {
-                    rate_limiter.try_acquire("rest")
-                } else {
-                    Ok(())
-                };
-
-            let result = match rate_limit_result {
-                Ok(()) => connector.fetch_order_book(symbol).await,
-                Err(e) => Err(e.into()),
-            };
-
-            results.insert(exchange, result);
+        for (exchange, connector) in self.connectors.iter() {
+            let exchange = *exchange;
+            let connector = connector.read().await;
+            results.insert(exchange, connector.fetch_order_book(symbol).await);
         }
-
         results
     }
 
-    /// Get health status of all exchanges
     pub async fn get_health_status(&self) -> HashMap<ExchangeId, HealthStatus> {
-        let connectors = self.connectors.read();
         let mut status_map = HashMap::new();
-
-        for (exchange_id, connector) in connectors.iter() {
+        for (exchange, connector) in self.connectors.iter() {
+            let exchange = *exchange;
+            let connector = connector.read().await;
             match connector.health_check().await {
                 Ok(status) => {
-                    status_map.insert(*exchange_id, status);
+                    status_map.insert(exchange, status);
                 }
-                Err(e) => {
-                    warn!("Health check failed for {}: {}", exchange_id, e);
+                Err(_) => {
                     status_map.insert(
-                        *exchange_id,
+                        exchange,
                         HealthStatus {
                             is_connected: false,
                             last_message_time: None,
@@ -383,34 +255,29 @@ impl ExchangeManager {
                 }
             }
         }
-
         status_map
     }
 
-    /// Get statistics for all exchanges
     pub async fn get_stats(&self) -> HashMap<ExchangeId, ConnectorStats> {
-        let connectors = self.connectors.read();
         let mut stats_map = HashMap::new();
-
-        for (exchange_id, connector) in connectors.iter() {
-            let stats = connector.get_stats();
-            stats_map.insert(*exchange_id, stats);
+        for (exchange, connector) in self.connectors.iter() {
+            let exchange = *exchange;
+            let connector = connector.read().await;
+            stats_map.insert(exchange, connector.get_stats());
         }
-
         stats_map
     }
 
-    /// Get event statistics
     pub async fn get_event_stats(&self) -> HashMap<ExchangeId, EventStats> {
-        self.event_stats.read().clone()
+        self.event_stats
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect()
     }
 
-    /// Force reconnection for specific exchange
     pub async fn force_reconnect(&mut self, exchange: ExchangeId) -> Result<()> {
-        let mut connectors = self.connectors.write();
-
-        if let Some(connector) = connectors.get_mut(&exchange) {
-            info!("Force reconnecting to {}", exchange);
+        if let Some(connector) = self.connectors.get_mut(&exchange) {
+            let mut connector = connector.write().await;
             connector.force_reconnect().await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(
@@ -420,41 +287,25 @@ impl ExchangeManager {
         }
     }
 
-    /// Start health monitoring background task
     async fn start_health_monitor(&self) {
         let connectors = self.connectors.clone();
         let event_sender = self.event_sender.clone();
         let interval_seconds = self.config.health_check_interval_seconds;
 
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(interval_seconds));
-
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_seconds));
             loop {
                 interval.tick().await;
-
-                let connectors_read = connectors.read();
-                for (exchange_id, connector) in connectors_read.iter() {
-                    let exchange = *exchange_id;
-
-                    match connector.health_check().await {
-                        Ok(health) => {
-                            if !health.is_connected {
-                                warn!("Exchange {} is not connected", exchange);
-
-                                let _ = event_sender.send(ConnectionEvent::StatusChange {
-                                    exchange,
-                                    old_status: ConnectionStatus::Connected,
-                                    new_status: ConnectionStatus::Disconnected,
-                                    timestamp: chrono::Utc::now(),
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            error!("Health check failed for {}: {}", exchange, e);
-
-                            let _ = event_sender.send(ConnectionEvent::Error {
+                for (exchange, connector) in connectors.iter() {
+                    let exchange = *exchange;
+                    let connector = connector.read().await;
+                    let sender = event_sender.clone();
+                    if let Ok(health) = connector.health_check().await {
+                        if !health.is_connected {
+                            let _ = sender.send(ConnectionEvent::StatusChange {
                                 exchange,
-                                error: format!("Health check failed: {}", e),
+                                old_status: ConnectionStatus::Connected,
+                                new_status: ConnectionStatus::Disconnected,
                                 timestamp: chrono::Utc::now(),
                             });
                         }
@@ -464,14 +315,11 @@ impl ExchangeManager {
         });
     }
 
-    /// Start event processing background task
     async fn start_event_processor(&self) {
-        let event_stats = self.event_stats.clone();
+        let mut event_stats = self.event_stats.clone();
         let mut event_receiver = self.event_receiver.resubscribe();
-
         tokio::spawn(async move {
             while let Ok(event) = event_receiver.recv().await {
-                // Update event statistics
                 if let ConnectionEvent::MarketData(ref market_event) = event {
                     let exchange = match market_event {
                         MarketDataEvent::OrderBook { exchange, .. } => *exchange,
@@ -481,66 +329,47 @@ impl ExchangeManager {
                         MarketDataEvent::Statistics { exchange, .. } => *exchange,
                         MarketDataEvent::Raw { exchange, .. } => *exchange,
                     };
-
-                    if let Ok(stats) = event_stats.write() {
-                        if let Some(exchange_stats) = stats.get_mut(&exchange) {
-                            exchange_stats.update(&event);
-                        }
+                    if let Some(exchange_stats) = event_stats.get_mut(&exchange) {
+                        exchange_stats.update(&event);
                     }
                 }
-
-                debug!("Processed event: {:?}", event);
             }
         });
     }
 
-    /// Add a connector to the manager
     pub async fn add_connector(&mut self, connector: Box<dyn ExchangeConnector>) -> Result<()> {
         let exchange_id = connector.exchange_id();
-        let mut connectors = self.connectors.write();
-        connectors.insert(exchange_id, connector);
-
-        info!("Added connector for {}", exchange_id);
+        self.connectors
+            .insert(exchange_id, Arc::new(RwLock::new(connector)));
         Ok(())
     }
 
-    /// Get a connector for a specific exchange
     pub async fn get_connector(
         &self,
         exchange: &ExchangeId,
-    ) -> Option<Box<dyn ExchangeConnector + '_>> {
-        // This is a simplified version - in practice we'd need to handle the lifetime properly
-        // For now, we'll return None and handle this in the OrderExecutor differently
-        None
+    ) -> Option<Arc<RwLock<Box<dyn ExchangeConnector + Send + Sync>>>> {
+        self.connectors.get(exchange).map(|e| Arc::clone(e))
     }
 
-    /// Check if an exchange is connected
     pub async fn is_exchange_connected(&self, exchange: &ExchangeId) -> bool {
-        let connectors = self.connectors.read();
-        if let Some(connector) = connectors.get(exchange) {
-            match connector.health_check().await {
-                Ok(health) => health.is_connected,
-                Err(_) => false,
-            }
+        if let Some(connector) = self.connectors.get(exchange) {
+            let connector = connector.read().await;
+            connector
+                .health_check()
+                .await
+                .map_or(false, |h| h.is_connected)
         } else {
             false
         }
     }
 
-    /// Place order on specific exchange
     pub async fn place_order(
         &self,
         exchange: &ExchangeId,
         order: &crate::connector::OrderRequest,
     ) -> Result<crate::connector::OrderResponse> {
-        let connectors = self.connectors.read();
-
-        if let Some(connector) = connectors.get(exchange) {
-            // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
-                rate_limiter.acquire("rest").await?;
-            }
-
+        if let Some(connector) = self.connectors.get(exchange) {
+            let connector = connector.read().await;
             connector.place_order(order).await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(
@@ -550,20 +379,13 @@ impl ExchangeManager {
         }
     }
 
-    /// Cancel order on specific exchange
     pub async fn cancel_order(
         &self,
         exchange: &ExchangeId,
         order_id: &str,
     ) -> Result<crate::connector::CancelResponse> {
-        let connectors = self.connectors.read();
-
-        if let Some(connector) = connectors.get(exchange) {
-            // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
-                rate_limiter.acquire("rest").await?;
-            }
-
+        if let Some(connector) = self.connectors.get(exchange) {
+            let connector = connector.read().await;
             connector.cancel_order(order_id).await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(
@@ -573,20 +395,13 @@ impl ExchangeManager {
         }
     }
 
-    /// Get order status from specific exchange
     pub async fn get_order_status(
         &self,
         exchange: &ExchangeId,
         order_id: &str,
     ) -> Result<crate::connector::OrderStatus> {
-        let connectors = self.connectors.read();
-
-        if let Some(connector) = connectors.get(exchange) {
-            // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
-                rate_limiter.acquire("rest").await?;
-            }
-
+        if let Some(connector) = self.connectors.get(exchange) {
+            let connector = connector.read().await;
             connector.get_order_status(order_id).await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(
@@ -596,16 +411,9 @@ impl ExchangeManager {
         }
     }
 
-    /// Get balance from specific exchange
     pub async fn get_balance(&self, exchange: &ExchangeId) -> Result<crate::connector::Balance> {
-        let connectors = self.connectors.read();
-
-        if let Some(connector) = connectors.get(exchange) {
-            // Apply rate limiting
-            if let Some(rate_limiter) = self.rate_limiters.read().get(exchange) {
-                rate_limiter.acquire("rest").await?;
-            }
-
+        if let Some(connector) = self.connectors.get(exchange) {
+            let connector = connector.read().await;
             connector.get_balance().await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(

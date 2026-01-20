@@ -55,7 +55,7 @@ pub struct SizeTier {
 }
 
 /// What factor limited the position size
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LimitingFactor {
     OrderBookDepth,
     ExchangeMinimum,
@@ -68,7 +68,24 @@ pub enum LimitingFactor {
     RateLimit,
 }
 
+impl std::fmt::Display for LimitingFactor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LimitingFactor::OrderBookDepth => write!(f, "OrderBookDepth"),
+            LimitingFactor::ExchangeMinimum => write!(f, "ExchangeMinimum"),
+            LimitingFactor::ExchangeMaximum => write!(f, "ExchangeMaximum"),
+            LimitingFactor::UserPositionLimit => write!(f, "UserPositionLimit"),
+            LimitingFactor::SlippageTolerance => write!(f, "SlippageTolerance"),
+            LimitingFactor::InsufficientDepth => write!(f, "InsufficientDepth"),
+            LimitingFactor::InventoryLimit => write!(f, "InventoryLimit"),
+            LimitingFactor::FeeImpact => write!(f, "FeeImpact"),
+            LimitingFactor::RateLimit => write!(f, "RateLimit"),
+        }
+    }
+}
+
 /// Calculator for optimal trade sizes
+#[derive(Debug, Clone)]
 pub struct SizeCalculator {
     config: SizeConfig,
 }

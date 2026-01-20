@@ -330,6 +330,11 @@ impl ConfidenceScorer {
             .map(|f| f.get_fee_rate(is_maker))
             .unwrap_or_else(|| Decimal::new(1, 3)) // Default 0.1%
     }
+
+    /// Get minimum confidence threshold
+    pub fn get_min_confidence_threshold(&self) -> Decimal {
+        self.config.min_confidence_threshold
+    }
 }
 
 impl Default for ConfidenceScorer {

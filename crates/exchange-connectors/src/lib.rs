@@ -4,6 +4,7 @@ pub mod connector_trait;
 pub mod errors;
 pub mod events;
 pub mod exchange_manager;
+pub mod mock;
 pub mod rate_limiter;
 pub mod rest_client;
 pub mod utils;
@@ -15,12 +16,14 @@ pub use connections::{
     OKXConnector,
 };
 pub use connector::ExchangeConnector;
-pub use connector_trait::{
-    ConnectorBase, ExchangeConnector as ExchangeConnectorTrait, TradingConnector,
-};
+pub use connector_trait::{ConnectorBase, ExchangeConnector as ExchangeConnectorTrait};
 pub use errors::{ErrorContext, ExchangeErrorMapper};
 pub use events::{ConnectionEvent, MarketDataEvent};
 pub use exchange_manager::{ExchangeManager, ExchangeManagerConfig};
+pub use mock::{
+    MockBitstampConnector, MockByBitConnector, MockConnector, MockGateIOConnector,
+    MockKrakenConnector, MockMEXCConnector, MockOKXConnector,
+};
 pub use rate_limiter::{RateLimitConfig, RateLimiter, UnifiedRateLimitManager};
 pub use rest_client::{
     create_rest_client_config, ExchangeRestClient, RestClientConfig, RestClientManager,
@@ -33,7 +36,9 @@ pub use websocket_pool::{
 use arbitrage_core::{types::ExchangeId, Result};
 
 /// Create a connector for the specified exchange
-pub fn create_connector(exchange_id: ExchangeId) -> Result<Box<dyn ExchangeConnector>> {
+pub fn create_connector(
+    exchange_id: ExchangeId,
+) -> Result<Box<dyn ExchangeConnector + Send + Sync + 'static>> {
     match exchange_id {
         ExchangeId::OKX => Ok(Box::new(OKXConnector::new())),
         ExchangeId::ByBit => Ok(Box::new(BybitConnector::new())),

@@ -14,6 +14,9 @@ keywords = ["crypto", "arbitrage", "trading", "desktop", "rust"]
 categories = ["finance", "gui"]
 
 [workspace.dependencies]
+# Benchmarking
+criterion = "0.5"
+
 # Core async runtime
 tokio = { version = "1.42", features = ["full"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }

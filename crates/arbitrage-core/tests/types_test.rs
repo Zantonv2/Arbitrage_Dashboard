@@ -1,3 +1,4 @@
+use arbitrage_core::test_utils::fixtures::{invalid_btc_order_book, valid_btc_order_book};
 use arbitrage_core::types::*;
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -25,54 +26,16 @@ fn test_symbol_from_pair_invalid() {
 
 #[test]
 fn test_order_book_validity() {
-    let symbol = Symbol::new("BTC", "USDT");
-
-    // Valid order book
-    let valid_book = OrderBook {
-        exchange: ExchangeId::ByBit,
-        symbol: symbol.clone(),
-        bids: vec![
-            OrderBookLevel::new(Decimal::from(50000), Decimal::from(1)),
-            OrderBookLevel::new(Decimal::from(49999), Decimal::from(2)),
-        ],
-        asks: vec![
-            OrderBookLevel::new(Decimal::from(50001), Decimal::from(1)),
-            OrderBookLevel::new(Decimal::from(50002), Decimal::from(2)),
-        ],
-        timestamp: Utc::now(),
-        sequence: None,
-    };
+    let valid_book = valid_btc_order_book();
     assert!(valid_book.is_valid());
 
-    // Invalid order book (bid > ask)
-    let invalid_book = OrderBook {
-        exchange: ExchangeId::ByBit,
-        symbol,
-        bids: vec![OrderBookLevel::new(Decimal::from(50002), Decimal::from(1))],
-        asks: vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))],
-        timestamp: Utc::now(),
-        sequence: None,
-    };
+    let invalid_book = invalid_btc_order_book();
     assert!(!invalid_book.is_valid());
 }
 
 #[test]
 fn test_order_book_best_prices() {
-    let symbol = Symbol::new("BTC", "USDT");
-    let book = OrderBook {
-        exchange: ExchangeId::ByBit,
-        symbol,
-        bids: vec![
-            OrderBookLevel::new(Decimal::from(50000), Decimal::from(1)),
-            OrderBookLevel::new(Decimal::from(49999), Decimal::from(2)),
-        ],
-        asks: vec![
-            OrderBookLevel::new(Decimal::from(50001), Decimal::from(1)),
-            OrderBookLevel::new(Decimal::from(50002), Decimal::from(2)),
-        ],
-        timestamp: Utc::now(),
-        sequence: None,
-    };
+    let book = valid_btc_order_book();
 
     assert_eq!(book.best_bid().unwrap().price, Decimal::from(50000));
     assert_eq!(book.best_ask().unwrap().price, Decimal::from(50001));

@@ -1,7 +1,7 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
@@ -53,8 +53,9 @@ struct KrakenWsResponse {
     pair: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct KrakenConnector {
-    config: ConnectorConfig,
+    pub config: ConnectorConfig,
     client: Client,
     event_sender: broadcast::Sender<ConnectionEvent>,
     status: Arc<RwLock<ConnectionStatus>>,
@@ -90,11 +91,11 @@ impl KrakenConnector {
         }
     }
 
-    fn symbol_to_kraken(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_kraken(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::Slash)
     }
 
-    fn symbol_from_kraken(&self, kraken_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_kraken(&self, kraken_symbol: &str) -> Result<Symbol> {
         parse_symbol(kraken_symbol, SymbolFormat::Slash)
     }
 }
@@ -920,7 +921,7 @@ impl KrakenConnector {
         parse_symbol(kraken_symbol, SymbolFormat::Slash)
     }
 
-    fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -960,7 +961,7 @@ impl KrakenConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         // Kraken ticker format: c=[price, lot_volume], v=[today, 24h], ...
         let last_price = data["c"]
             .as_array()

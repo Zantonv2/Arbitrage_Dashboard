@@ -317,7 +317,10 @@ mod tests {
         let value = json!(42.5);
         let result = parse_decimal_value(&value);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), rust_decimal::Decimal::from(42.5));
+        assert_eq!(
+            result.unwrap(),
+            rust_decimal::Decimal::from_str("42.5").unwrap()
+        );
     }
 
     #[test]
@@ -325,7 +328,10 @@ mod tests {
         let value = json!("42.5");
         let result = parse_decimal_value(&value);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), rust_decimal::Decimal::from(42.5));
+        assert_eq!(
+            result.unwrap(),
+            rust_decimal::Decimal::from_str("42.5").unwrap()
+        );
     }
 
     #[test]

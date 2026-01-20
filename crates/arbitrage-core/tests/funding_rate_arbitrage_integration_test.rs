@@ -71,7 +71,7 @@ async fn test_funding_rate_arbitrage_integration() -> Result<()> {
 
     // Create market bundle with funding rate
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     // Add ticker for spot price
     let ticker = arbitrage_core::strategies::Ticker::new(
@@ -81,7 +81,7 @@ async fn test_funding_rate_arbitrage_integration() -> Result<()> {
         Decimal::from(50010), // ask
         Decimal::from(50005), // last
     );
-    market_bundle.add_ticker(ticker);
+    market_bundle.add_ticker(Arc::new(ticker));
 
     // Test strategy detection directly
     let funding_strategy = FundingRateArbitrageStrategy::new();
@@ -126,7 +126,7 @@ async fn test_funding_rate_arbitrage_negative_funding() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     // Add ticker
     let ticker = arbitrage_core::strategies::Ticker::new(
@@ -136,7 +136,7 @@ async fn test_funding_rate_arbitrage_negative_funding() -> Result<()> {
         Decimal::from(3005),
         Decimal::from(3002),
     );
-    market_bundle.add_ticker(ticker);
+    market_bundle.add_ticker(Arc::new(ticker));
 
     let signals = funding_strategy.detect(&market_bundle)?;
 
@@ -226,7 +226,7 @@ async fn test_funding_rate_arbitrage_insufficient_time() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_funding_rate(funding_rate);
+    market_bundle.add_funding_rate(Arc::new(funding_rate));
 
     let ticker = arbitrage_core::strategies::Ticker::new(
         ExchangeId::OKX,
@@ -235,7 +235,7 @@ async fn test_funding_rate_arbitrage_insufficient_time() -> Result<()> {
         Decimal::from(50010),
         Decimal::from(50005),
     );
-    market_bundle.add_ticker(ticker);
+    market_bundle.add_ticker(Arc::new(ticker));
 
     let signals = funding_strategy.detect(&market_bundle)?;
 
