@@ -49,6 +49,7 @@ struct MexcMarketData {
     t: Option<i64>,
 }
 
+#[derive(Clone)]
 pub struct MEXCConnector {
     pub base: ConnectorBase,
     client: Client,
@@ -78,11 +79,11 @@ impl MEXCConnector {
         }
     }
 
-    fn symbol_to_mexc(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_mexc(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::NoSeparator)
     }
 
-    fn symbol_from_mexc(&self, mexc_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_mexc(&self, mexc_symbol: &str) -> Result<Symbol> {
         parse_symbol(mexc_symbol, SymbolFormat::NoSeparator)
     }
 }
@@ -922,7 +923,7 @@ impl MEXCConnector {
         parse_symbol(mexc_symbol, SymbolFormat::NoSeparator)
     }
 
-    fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -968,7 +969,7 @@ impl MEXCConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         Ok(TickerData {
             symbol: symbol.clone(),
             exchange: ExchangeId::MEXC,
@@ -981,7 +982,7 @@ impl MEXCConnector {
         })
     }
 
-    fn parse_funding_rate(&self, data: &Value, symbol: &Symbol) -> Result<FundingRate> {
+    pub fn parse_funding_rate(&self, data: &Value, symbol: &Symbol) -> Result<FundingRate> {
         let funding_rate = parse_decimal(&data["data"]["fundingRate"])?;
 
         Ok(FundingRate {

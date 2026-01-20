@@ -153,7 +153,7 @@ mod rate_limiter_basic_tests {
 
         assert_eq!(status.available_tokens, 19);
         assert_eq!(status.max_tokens, 20);
-        assert!(status.max_rate > 0.0);
+        assert!(status.max_rate > 0);
     }
 
     #[test]
@@ -559,11 +559,12 @@ mod rate_limiter_edge_cases {
             burst_capacity: 50,
             window_seconds: 60,
         };
+        let config_clone = config.clone();
         let limiter = RateLimiter::new(config);
 
         let mut handles = Vec::new();
         for _ in 0..10 {
-            let limiter_clone = RateLimiter::new(config.clone());
+            let limiter_clone = RateLimiter::new(config_clone.clone());
             handles.push(std::thread::spawn(move || limiter_clone.try_acquire()));
         }
 
@@ -581,13 +582,13 @@ mod rate_limiter_edge_cases {
 #[cfg(test)]
 mod exchange_connector_rate_limits {
     use exchange_connectors::connections::{
-        BybitConnector, GateIoConnector, KrakenConnector, MEXCConnector, OKXConnector,
+        BybitConnector, GateioConnector, KrakenConnector, MEXCConnector, OKXConnector,
     };
 
     #[test]
     fn test_okx_rate_limit_config() {
         let connector = OKXConnector::new();
-        let config = connector.config();
+        let config = &connector.base.config;
         assert_eq!(config.rate_limit_per_second, 20);
         assert_eq!(config.rate_limit_burst, 40);
     }
@@ -595,7 +596,7 @@ mod exchange_connector_rate_limits {
     #[test]
     fn test_bybit_rate_limit_config() {
         let connector = BybitConnector::new();
-        let config = connector.config();
+        let config = &connector.config;
         assert_eq!(config.rate_limit_per_second, 60);
         assert_eq!(config.rate_limit_burst, 120);
     }
@@ -603,15 +604,15 @@ mod exchange_connector_rate_limits {
     #[test]
     fn test_mexc_rate_limit_config() {
         let connector = MEXCConnector::new();
-        let config = connector.config();
+        let config = &connector.base.config;
         assert_eq!(config.rate_limit_per_second, 20);
         assert_eq!(config.rate_limit_burst, 40);
     }
 
     #[test]
     fn test_gateio_rate_limit_config() {
-        let connector = GateIoConnector::new();
-        let config = connector.config();
+        let connector = GateioConnector::new();
+        let config = &connector.config;
         assert_eq!(config.rate_limit_per_second, 10);
         assert_eq!(config.rate_limit_burst, 20);
     }
@@ -619,7 +620,7 @@ mod exchange_connector_rate_limits {
     #[test]
     fn test_kraken_rate_limit_config() {
         let connector = KrakenConnector::new();
-        let config = connector.config();
+        let config = &connector.config;
         assert_eq!(config.rate_limit_per_second, 15);
         assert_eq!(config.rate_limit_burst, 30);
     }

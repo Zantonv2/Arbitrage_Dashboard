@@ -45,6 +45,7 @@ struct BitstampWsResponse {
     data: Option<Value>,
 }
 
+#[derive(Clone)]
 pub struct BitstampConnector {
     pub base: ConnectorBase,
     client: Client,
@@ -74,7 +75,7 @@ impl BitstampConnector {
         }
     }
 
-    fn symbol_to_bitstamp(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_bitstamp(&self, symbol: &Symbol) -> String {
         format!(
             "{}{}",
             symbol.base.to_lowercase(),
@@ -82,7 +83,7 @@ impl BitstampConnector {
         )
     }
 
-    fn symbol_from_bitstamp(&self, bitstamp_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_bitstamp(&self, bitstamp_symbol: &str) -> Result<Symbol> {
         // Bitstamp uses lowercase concatenated format like "btcusd"
         // We need to parse this back to base/quote
         if bitstamp_symbol.ends_with("usd") {
@@ -820,7 +821,7 @@ impl BitstampConnector {
         }
     }
 
-    fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -866,7 +867,7 @@ impl BitstampConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         let last_price = parse_decimal(&data["last"])?;
         let bid_price = parse_decimal(&data["bid"])?;
         let ask_price = parse_decimal(&data["ask"])?;

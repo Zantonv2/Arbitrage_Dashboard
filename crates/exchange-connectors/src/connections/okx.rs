@@ -66,6 +66,7 @@ struct OkxMarketDataArg {
     inst_id: String,
 }
 
+#[derive(Clone)]
 pub struct OKXConnector {
     pub base: ConnectorBase,
     client: Client,
@@ -95,11 +96,11 @@ impl OKXConnector {
         }
     }
 
-    fn symbol_to_okx(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_okx(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::Dash)
     }
 
-    fn symbol_from_okx(&self, okx_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_okx(&self, okx_symbol: &str) -> Result<Symbol> {
         parse_symbol(okx_symbol, SymbolFormat::Dash)
     }
 }
@@ -1002,7 +1003,7 @@ impl OKXConnector {
         parse_symbol(okx_symbol, SymbolFormat::Dash)
     }
 
-    fn parse_order_book(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -1058,7 +1059,7 @@ impl OKXConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<TickerData> {
         Ok(TickerData {
             symbol: symbol.clone(),
             exchange: ExchangeId::OKX,
@@ -1071,7 +1072,11 @@ impl OKXConnector {
         })
     }
 
-    fn parse_funding_rate(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<FundingRate> {
+    pub fn parse_funding_rate(
+        &self,
+        data: &serde_json::Value,
+        symbol: &Symbol,
+    ) -> Result<FundingRate> {
         let funding_rate = parse_decimal(&data["fundingRate"])?;
         let funding_time = parse_timestamp(&data["fundingTime"])?;
         let predicted_rate = parse_decimal(&data["nextFundingRate"]).ok();

@@ -2,7 +2,7 @@
 mod tests {
     use arbitrage_core::Result;
     use exchange_connectors::rate_limiter::{
-        RateLimitConfig, RateLimiter, RateLimitStatus, UnifiedRateLimitManager,
+        RateLimitConfig, RateLimitStatus, RateLimiter, UnifiedRateLimitManager,
     };
     use std::collections::HashMap;
 
@@ -233,16 +233,22 @@ mod tests {
         let mut manager = UnifiedRateLimitManager::new();
 
         manager.add_limiter("endpoint1".to_string(), RateLimitConfig::default());
-        manager.add_limiter("endpoint2".to_string(), RateLimitConfig {
-            requests_per_second: 20,
-            burst_capacity: 40,
-            window_seconds: 30,
-        });
-        manager.add_limiter("endpoint3".to_string(), RateLimitConfig {
-            requests_per_second: 5,
-            burst_capacity: 10,
-            window_seconds: 120,
-        });
+        manager.add_limiter(
+            "endpoint2".to_string(),
+            RateLimitConfig {
+                requests_per_second: 20,
+                burst_capacity: 40,
+                window_seconds: 30,
+            },
+        );
+        manager.add_limiter(
+            "endpoint3".to_string(),
+            RateLimitConfig {
+                requests_per_second: 5,
+                burst_capacity: 10,
+                window_seconds: 120,
+            },
+        );
 
         let status = manager.get_all_status();
         assert_eq!(status.len(), 3);
@@ -252,16 +258,22 @@ mod tests {
     fn test_unified_manager_acquire_all_endpoints() {
         let mut manager = UnifiedRateLimitManager::new();
 
-        manager.add_limiter("endpoint1".to_string(), RateLimitConfig {
-            requests_per_second: 10,
-            burst_capacity: 10,
-            window_seconds: 60,
-        });
-        manager.add_limiter("endpoint2".to_string(), RateLimitConfig {
-            requests_per_second: 20,
-            burst_capacity: 20,
-            window_seconds: 60,
-        });
+        manager.add_limiter(
+            "endpoint1".to_string(),
+            RateLimitConfig {
+                requests_per_second: 10,
+                burst_capacity: 10,
+                window_seconds: 60,
+            },
+        );
+        manager.add_limiter(
+            "endpoint2".to_string(),
+            RateLimitConfig {
+                requests_per_second: 20,
+                burst_capacity: 20,
+                window_seconds: 60,
+            },
+        );
 
         // Acquire from both
         assert!(manager.try_acquire("endpoint1").is_ok());
@@ -308,8 +320,8 @@ mod tests {
             max_tokens: 20,
             current_rate: 5.0,
             max_rate: 10,
-: 300,
-            requests_in_window        };
+            requests_in_window: 300,
+        };
         let debug_str = format!("{:?}", status);
         assert!(debug_str.contains("available_tokens"));
         assert!(debug_str.contains("current_rate"));
@@ -345,18 +357,24 @@ mod tests {
     fn test_unified_manager_replace_existing_limiter() {
         let mut manager = UnifiedRateLimitManager::new();
 
-        manager.add_limiter("same_endpoint".to_string(), RateLimitConfig {
-            requests_per_second: 10,
-            burst_capacity: 20,
-            window_seconds: 60,
-        });
+        manager.add_limiter(
+            "same_endpoint".to_string(),
+            RateLimitConfig {
+                requests_per_second: 10,
+                burst_capacity: 20,
+                window_seconds: 60,
+            },
+        );
 
         // Replace with new config
-        manager.add_limiter("same_endpoint".to_string(), RateLimitConfig {
-            requests_per_second: 50,
-            burst_capacity: 100,
-            window_seconds: 30,
-        });
+        manager.add_limiter(
+            "same_endpoint".to_string(),
+            RateLimitConfig {
+                requests_per_second: 50,
+                burst_capacity: 100,
+                window_seconds: 30,
+            },
+        );
 
         let status = manager.get_all_status();
         assert_eq!(status.len(), 1);
