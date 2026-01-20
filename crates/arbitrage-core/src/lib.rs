@@ -10,10 +10,29 @@ pub mod size_calculator;
 pub mod storage;
 pub mod symbol_discovery;
 pub mod symbol_manager;
+pub mod test_utils;
 pub mod types;
 
 // Strategies folder (Potential 8-22% profit)
 pub mod strategies;
+
+#[cfg(test)]
+pub mod property_tests;
+
+#[cfg(test)]
+pub mod unit_tests;
+
+#[cfg(test)]
+mod confidence_scorer_tests;
+
+#[cfg(test)]
+mod normalizer_tests;
+
+#[cfg(test)]
+mod execution_preparer_tests;
+
+#[cfg(test)]
+mod size_calculator_tests;
 
 pub use error::{ArbitrageError, Result};
 pub use types::*;

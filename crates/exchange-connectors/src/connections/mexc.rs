@@ -1,8 +1,9 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
+use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
 use arbitrage_core::{
@@ -48,12 +49,10 @@ struct MexcMarketData {
     t: Option<i64>,
 }
 
+#[derive(Clone)]
 pub struct MEXCConnector {
-    config: ConnectorConfig,
+    pub base: ConnectorBase,
     client: Client,
-    event_sender: broadcast::Sender<ConnectionEvent>,
-    status: Arc<RwLock<ConnectionStatus>>,
-    stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
@@ -69,27 +68,22 @@ impl MEXCConnector {
             ..Default::default()
         };
 
-        let (event_sender, _) = broadcast::channel(1000);
+        let base = ConnectorBase::new(config);
         let client = Client::new();
-        let mut stats = ConnectorStats::default();
-        stats.exchange = ExchangeId::MEXC;
 
         Self {
-            config,
+            base,
             client,
-            event_sender,
-            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
-            stats: Arc::new(Mutex::new(stats)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
             ws_handle: Arc::new(Mutex::new(None)),
         }
     }
 
-    fn symbol_to_mexc(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_mexc(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::NoSeparator)
     }
 
-    fn symbol_from_mexc(&self, mexc_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_mexc(&self, mexc_symbol: &str) -> Result<Symbol> {
         parse_symbol(mexc_symbol, SymbolFormat::NoSeparator)
     }
 }
@@ -101,21 +95,21 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     fn status(&self) -> ConnectionStatus {
-        match self.status.try_read() {
+        match self.base.status.try_read() {
             Ok(status) => status.clone(),
             Err(_) => ConnectionStatus::Disconnected,
         }
     }
 
     fn event_receiver(&self) -> broadcast::Receiver<ConnectionEvent> {
-        self.event_sender.subscribe()
+        self.base.event_sender.subscribe()
     }
 
     async fn fetch_order_book(&self, symbol: &Symbol) -> Result<OrderBook> {
         let mexc_symbol = self.symbol_to_mexc(symbol);
         let url = format!(
             "{}/api/v3/depth?symbol={}&limit={}",
-            self.config.rest_url, mexc_symbol, self.config.order_book_depth
+            self.base.config.rest_url, mexc_symbol, self.base.config.order_book_depth
         );
 
         let response = self.client.get(&url).send().await?;
@@ -125,7 +119,7 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
-        let url = format!("{}/api/v3/exchangeInfo", self.config.rest_url);
+        let url = format!("{}/api/v3/exchangeInfo", self.base.config.rest_url);
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
@@ -133,12 +127,9 @@ impl ExchangeConnector for MEXCConnector {
         if let Some(symbols_array) = data["symbols"].as_array() {
             for item in symbols_array {
                 if let Some(symbol_str) = item["symbol"].as_str() {
-                    // MEXC uses status "1" for trading enabled (not "TRADING")
-                    // Also check isSpotTradingAllowed for spot trading
                     let status = item["status"].as_str().unwrap_or("");
                     let is_spot_allowed = item["isSpotTradingAllowed"].as_bool().unwrap_or(false);
 
-                    // Accept status "1" (enabled) or "TRADING" for compatibility
                     if (status == "1" || status == "TRADING") && is_spot_allowed {
                         if let Ok(symbol) = self.symbol_from_mexc(symbol_str) {
                             symbols.push(symbol);
@@ -151,7 +142,7 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
-        let url = format!("{}/api/v3/ticker/bookTicker", self.config.rest_url);
+        let url = format!("{}/api/v3/ticker/bookTicker", self.base.config.rest_url);
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
@@ -181,7 +172,7 @@ impl ExchangeConnector for MEXCConnector {
             let mexc_symbol = format!("{}_USDT", symbol.base.to_uppercase());
             let url = format!(
                 "{}/api/v1/contract/funding_rate/{}",
-                self.config.rest_url, mexc_symbol
+                self.base.config.rest_url, mexc_symbol
             );
 
             if let Ok(response) = self.client.get(&url).send().await {
@@ -196,63 +187,11 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
-        // Check if already connected
-        {
-            let status = self.status.read().await;
-            if *status == ConnectionStatus::Connected {
-                return Ok(());
-            }
-        }
-
-        info!("Connecting to MEXC WebSocket: {}", self.config.ws_url);
-
-        // Update status to connecting
-        *self.status.write().await = ConnectionStatus::Connecting;
-
-        // Start WebSocket connection task
-        let ws_url = self.config.ws_url.clone();
-        let event_sender = self.event_sender.clone();
-        let status = self.status.clone();
-        let stats = self.stats.clone();
-        let subscribed_symbols = self.subscribed_symbols.clone();
-        let config = self.config.clone();
-
-        let handle = tokio::spawn(async move {
-            Self::websocket_task(
-                ws_url,
-                event_sender,
-                status,
-                stats,
-                subscribed_symbols,
-                config,
-            )
-            .await;
-        });
-
-        // Store the handle
-        *self.ws_handle.lock().await = Some(handle);
-
-        // Wait for connection to establish (increased from 100ms for reliability)
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
-        Ok(())
+        self.base.connect().await
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        info!("Disconnecting from MEXC WebSocket");
-
-        // Update status
-        *self.status.write().await = ConnectionStatus::Disconnected;
-
-        // Cancel WebSocket task if running
-        if let Some(handle) = self.ws_handle.lock().await.take() {
-            handle.abort();
-        }
-
-        // Clear subscribed symbols
-        self.subscribed_symbols.write().await.clear();
-
-        Ok(())
+        self.base.disconnect().await
     }
 
     async fn subscribe_symbols(&mut self, symbols: &[Symbol]) -> Result<()> {
@@ -287,13 +226,6 @@ impl ExchangeConnector for MEXCConnector {
         // Add symbols to subscription list
         self.subscribe_symbols(symbols).await?;
 
-        // Send subscription message if connected
-        let status = self.status.read().await;
-        if *status == ConnectionStatus::Connected {
-            // The actual subscription will be handled by the WebSocket task
-            // when it detects new symbols in the subscribed_symbols list
-        }
-
         Ok(())
     }
 
@@ -306,9 +238,8 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     async fn health_check(&self) -> Result<HealthStatus> {
-        let status = self.status.read().await.clone();
-        let stats = self.stats.lock().await;
-
+        let status = self.status();
+        let stats = self.get_stats();
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
             last_message_time: Some(stats.last_update),
@@ -320,10 +251,7 @@ impl ExchangeConnector for MEXCConnector {
     }
 
     fn get_stats(&self) -> ConnectorStats {
-        match self.stats.try_lock() {
-            Ok(stats) => stats.clone(),
-            Err(_) => ConnectorStats::default(),
-        }
+        self.base.get_stats()
     }
 
     async fn force_reconnect(&mut self) -> Result<()> {
@@ -338,10 +266,8 @@ impl ExchangeConnector for MEXCConnector {
     ) -> Result<crate::connector::OrderResponse> {
         use crate::connector::{OrderResponse, OrderStatusType};
 
-        // MEXC API endpoint for placing orders
-        let url = format!("{}/api/v3/order", self.config.rest_url);
+        let url = format!("{}/api/v3/order", self.base.config.rest_url);
 
-        // Convert our order request to MEXC format
         let mexc_order = serde_json::json!({
             "symbol": format!("{}{}", order.symbol.base, order.symbol.quote),
             "side": match order.side {
@@ -358,7 +284,6 @@ impl ExchangeConnector for MEXCConnector {
             "newClientOrderId": order.client_order_id.as_deref().unwrap_or(""),
         });
 
-        // Make authenticated request to MEXC
         let response = self
             .client
             .post(&url)
@@ -383,7 +308,6 @@ impl ExchangeConnector for MEXCConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        // Parse MEXC response
         let order_id = response_json
             .get("orderId")
             .and_then(|id| id.as_u64())
@@ -403,13 +327,10 @@ impl ExchangeConnector for MEXCConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
-        use crate::connector::{CancelResponse, OrderStatusType};
-
-        let url = format!("{}/api/v3/order", self.config.rest_url);
+    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+        let url = format!("{}/api/v3/order", self.base.config.rest_url);
 
         let cancel_request = serde_json::json!({
-            "symbol": "BTCUSDT", // This should be dynamic
             "orderId": order_id,
         });
 
@@ -426,26 +347,25 @@ impl ExchangeConnector for MEXCConnector {
                 ))
             })?;
 
-        let status = if response.status().is_success() {
-            OrderStatusType::Cancelled
-        } else {
-            OrderStatusType::Rejected
-        };
+        if !response.status().is_success() {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(
+                "MEXC cancel order failed with status: {}",
+                response.status()
+            )));
+        }
 
         Ok(CancelResponse {
             order_id: order_id.to_string(),
             client_order_id: None,
-            status,
+            status: OrderStatusType::Cancelled,
             timestamp: chrono::Utc::now(),
         })
     }
 
-    async fn get_order_status(&self, order_id: &str) -> Result<crate::connector::OrderStatus> {
-        use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
-
+    async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus> {
         let url = format!(
-            "{}/api/v3/order?symbol=BTCUSDT&orderId={}",
-            self.config.rest_url, order_id
+            "{}/api/v3/order?orderId={}",
+            self.base.config.rest_url, order_id
         );
 
         let response = self.client.get(&url).send().await.map_err(|e| {
@@ -466,8 +386,17 @@ impl ExchangeConnector for MEXCConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        // Parse response and create OrderStatus
-        let symbol = arbitrage_core::types::Symbol::new("BTC", "USDT");
+        let symbol_str = response_json
+            .get("symbol")
+            .and_then(|s| s.as_str())
+            .unwrap_or("BTCUSDT");
+        let symbol = if symbol_str.ends_with("USDT") {
+            let base = &symbol_str[..symbol_str.len() - 4];
+            arbitrage_core::types::Symbol::new(base, "USDT")
+        } else {
+            arbitrage_core::types::Symbol::new("BTC", "USDT")
+        };
+
         let side = match response_json.get("side").and_then(|s| s.as_str()) {
             Some("BUY") => OrderSide::Buy,
             Some("SELL") => OrderSide::Sell,
@@ -486,6 +415,14 @@ impl ExchangeConnector for MEXCConnector {
             .and_then(|s| rust_decimal::Decimal::from_str(s).ok())
             .unwrap_or_default();
 
+        let status = match response_json.get("status").and_then(|s| s.as_str()) {
+            Some("NEW") => OrderStatusType::New,
+            Some("PARTIALLY_FILLED") => OrderStatusType::PartiallyFilled,
+            Some("FILLED") => OrderStatusType::Filled,
+            Some("CANCELED") => OrderStatusType::Cancelled,
+            _ => OrderStatusType::New,
+        };
+
         Ok(OrderStatus {
             order_id: order_id.to_string(),
             client_order_id: response_json
@@ -503,7 +440,7 @@ impl ExchangeConnector for MEXCConnector {
             filled_quantity,
             remaining_quantity: quantity - filled_quantity,
             average_price: None,
-            status: OrderStatusType::New,
+            status,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         })
@@ -512,7 +449,7 @@ impl ExchangeConnector for MEXCConnector {
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
         use crate::connector::{AssetBalance, Balance};
 
-        let url = format!("{}/api/v3/account", self.config.rest_url);
+        let url = format!("{}/api/v3/account", self.base.config.rest_url);
 
         let response = self.client.get(&url).send().await.map_err(|e| {
             arbitrage_core::ArbitrageError::Network(format!(
@@ -575,7 +512,7 @@ impl ExchangeConnector for MEXCConnector {
     ) -> Result<Vec<crate::connector::OrderStatus>> {
         use crate::connector::{OrderSide, OrderStatus, OrderStatusType, OrderType};
 
-        let mut url = format!("{}/api/v3/openOrders", self.config.rest_url);
+        let mut url = format!("{}/api/v3/openOrders", self.base.config.rest_url);
 
         if let Some(sym) = symbol {
             url.push_str(&format!("?symbol={}{}", sym.base, sym.quote));
@@ -986,7 +923,7 @@ impl MEXCConnector {
         parse_symbol(mexc_symbol, SymbolFormat::NoSeparator)
     }
 
-    fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -995,7 +932,10 @@ impl MEXCConnector {
         })?;
 
         let mut asks = Vec::new();
-        for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
+        for ask in asks_data
+            .iter()
+            .take(self.base.config.order_book_depth as usize)
+        {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
@@ -1006,7 +946,10 @@ impl MEXCConnector {
         }
 
         let mut bids = Vec::new();
-        for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
+        for bid in bids_data
+            .iter()
+            .take(self.base.config.order_book_depth as usize)
+        {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;
@@ -1026,7 +969,7 @@ impl MEXCConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         Ok(TickerData {
             symbol: symbol.clone(),
             exchange: ExchangeId::MEXC,
@@ -1039,7 +982,7 @@ impl MEXCConnector {
         })
     }
 
-    fn parse_funding_rate(&self, data: &Value, symbol: &Symbol) -> Result<FundingRate> {
+    pub fn parse_funding_rate(&self, data: &Value, symbol: &Symbol) -> Result<FundingRate> {
         let funding_rate = parse_decimal(&data["data"]["fundingRate"])?;
 
         Ok(FundingRate {

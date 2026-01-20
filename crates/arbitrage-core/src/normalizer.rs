@@ -8,6 +8,7 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 /// Normalizes exchange-specific data to canonical format
+#[derive(Debug, Clone)]
 pub struct Normalizer {
     symbol_mappings: HashMap<Symbol, SymbolMapping>,
     fee_schedules: HashMap<ExchangeId, FeeSchedule>,
@@ -64,6 +65,16 @@ impl Normalizer {
     pub fn get_min_precision(&self, symbol: &Symbol) -> Option<u32> {
         let mapping = self.symbol_mappings.get(symbol)?;
         mapping.precision.values().min().copied()
+    }
+
+    /// Get count of symbol mappings (for testing)
+    pub fn get_symbol_mapping_count(&self) -> usize {
+        self.symbol_mappings.len()
+    }
+
+    /// Check if symbols are equivalent (public method for testing)
+    pub fn check_symbols_equivalent(&self, symbol1: &str, symbol2: &str) -> bool {
+        self.are_symbols_equivalent(symbol1, symbol2)
     }
 
     /// Format quantity to exchange-specific precision

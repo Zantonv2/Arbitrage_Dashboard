@@ -1,7 +1,7 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
@@ -40,8 +40,9 @@ struct GateioWsResponse {
     error: Option<Value>,
 }
 
+#[derive(Clone)]
 pub struct GateioConnector {
-    config: ConnectorConfig,
+    pub config: ConnectorConfig,
     client: Client,
     event_sender: broadcast::Sender<ConnectionEvent>,
     status: Arc<RwLock<ConnectionStatus>>,
@@ -77,11 +78,11 @@ impl GateioConnector {
         }
     }
 
-    fn symbol_to_gateio(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_gateio(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::Underscore)
     }
 
-    fn symbol_from_gateio(&self, gateio_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_gateio(&self, gateio_symbol: &str) -> Result<Symbol> {
         parse_symbol(gateio_symbol, SymbolFormat::Underscore)
     }
 }
@@ -810,7 +811,7 @@ impl GateioConnector {
         parse_symbol(gateio_symbol, SymbolFormat::Underscore)
     }
 
-    fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
+    pub fn parse_order_book(&self, data: &Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
@@ -850,7 +851,7 @@ impl GateioConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
         let last_price = parse_decimal(&data["last"])?;
         let bid_price = parse_decimal(&data["highest_bid"])?;
         let ask_price = parse_decimal(&data["lowest_ask"])?;

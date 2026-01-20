@@ -27,6 +27,7 @@ use std::collections::HashMap;
 /// - Stablecoin tickers from all exchanges
 /// - Order book depth for liquidity validation
 /// - Cross-stablecoin pairs (USDT/USDC, etc.)
+#[derive(Debug, Clone)]
 pub struct StablecoinArbitrageStrategy {
     config: StrategyConfig,
 }

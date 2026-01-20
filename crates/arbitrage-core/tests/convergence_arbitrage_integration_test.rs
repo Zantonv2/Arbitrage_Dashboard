@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{ConvergenceArbitrageStrategy, FilterContext, MarketBundle, Strategy, Ticker},
     types::{ExchangeId, Symbol},
@@ -36,8 +37,8 @@ async fn test_convergence_arbitrage_integration() -> Result<()> {
         Decimal::from(2000), // last - BTC/ETH ratio = 50000/2000 = 25 (high divergence)
     );
 
-    market_bundle.add_ticker(btc_ticker);
-    market_bundle.add_ticker(eth_ticker);
+    market_bundle.add_ticker(Arc::new(btc_ticker));
+    market_bundle.add_ticker(Arc::new(eth_ticker));
 
     // Run strategy detection
     let signals = strategy.detect(&market_bundle)?;
@@ -163,8 +164,8 @@ async fn test_convergence_arbitrage_no_opportunity() -> Result<()> {
         Decimal::ONE,
     );
 
-    market_bundle.add_ticker(usdt_ticker);
-    market_bundle.add_ticker(usdc_ticker);
+    market_bundle.add_ticker(Arc::new(usdt_ticker));
+    market_bundle.add_ticker(Arc::new(usdc_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -206,8 +207,8 @@ async fn test_convergence_arbitrage_filtering() -> Result<()> {
         Decimal::from(2800),
     );
 
-    market_bundle.add_ticker(btc_ticker);
-    market_bundle.add_ticker(eth_ticker);
+    market_bundle.add_ticker(Arc::new(btc_ticker));
+    market_bundle.add_ticker(Arc::new(eth_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -284,8 +285,8 @@ async fn test_convergence_arbitrage_different_quotes() -> Result<()> {
         Decimal::from(3000),
     );
 
-    market_bundle.add_ticker(btc_ticker);
-    market_bundle.add_ticker(eth_ticker);
+    market_bundle.add_ticker(Arc::new(btc_ticker));
+    market_bundle.add_ticker(Arc::new(eth_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -325,8 +326,8 @@ async fn test_convergence_arbitrage_same_assets() -> Result<()> {
         Decimal::from(50000),
     );
 
-    market_bundle.add_ticker(btc_usdt_ticker);
-    market_bundle.add_ticker(btc_usd_ticker);
+    market_bundle.add_ticker(Arc::new(btc_usdt_ticker));
+    market_bundle.add_ticker(Arc::new(btc_usd_ticker));
 
     let signals = strategy.detect(&market_bundle)?;
 
@@ -383,10 +384,10 @@ async fn test_convergence_arbitrage_multiple_exchanges() -> Result<()> {
         Decimal::from(2450),
     );
 
-    market_bundle.add_ticker(btc_okx);
-    market_bundle.add_ticker(eth_okx);
-    market_bundle.add_ticker(btc_bybit);
-    market_bundle.add_ticker(eth_bybit);
+    market_bundle.add_ticker(Arc::new(btc_okx));
+    market_bundle.add_ticker(Arc::new(eth_okx));
+    market_bundle.add_ticker(Arc::new(btc_bybit));
+    market_bundle.add_ticker(Arc::new(eth_bybit));
 
     let signals = strategy.detect(&market_bundle)?;
 

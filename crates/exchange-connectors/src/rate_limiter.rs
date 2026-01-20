@@ -27,7 +27,7 @@ impl Default for RateLimitConfig {
 }
 
 /// Token bucket rate limiter implementation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RateLimiter {
     config: RateLimitConfig,
     tokens: Arc<Mutex<f64>>,

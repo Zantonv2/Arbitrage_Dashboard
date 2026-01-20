@@ -131,6 +131,32 @@ pub trait ExchangeConnector: Send + Sync {
         self.connect().await
     }
 
+    async fn place_order(&self, _request: &OrderRequest) -> Result<OrderResponse> {
+        Err(ArbitrageError::NotImplemented(
+            "place_order not implemented".to_string(),
+        ))
+    }
+    async fn cancel_order(&self, _order_id: &str, _symbol: &Symbol) -> Result<()> {
+        Err(ArbitrageError::NotImplemented(
+            "cancel_order not implemented".to_string(),
+        ))
+    }
+    async fn get_order_status(&self, _order_id: &str, _symbol: &Symbol) -> Result<OrderStatus> {
+        Err(ArbitrageError::NotImplemented(
+            "get_order_status not implemented".to_string(),
+        ))
+    }
+    async fn get_balance(&self) -> Result<Balance> {
+        Err(ArbitrageError::NotImplemented(
+            "get_balance not implemented".to_string(),
+        ))
+    }
+    async fn get_open_orders(&self, _symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>> {
+        Err(ArbitrageError::NotImplemented(
+            "get_open_orders not implemented".to_string(),
+        ))
+    }
+
     fn parse_order_book(
         &self,
         data: &Value,
@@ -226,39 +252,11 @@ pub trait ExchangeConnector: Send + Sync {
     }
 }
 
-#[async_trait]
-pub trait TradingConnector: ExchangeConnector {
-    async fn place_order(&self, request: &OrderRequest) -> Result<OrderResponse>;
-    async fn cancel_order(&self, order_id: &str, symbol: &Symbol) -> Result<()>;
-    async fn get_order_status(&self, order_id: &str, symbol: &Symbol) -> Result<OrderStatus>;
-    async fn get_balance(&self) -> Result<Balance>;
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> Result<Vec<OrderStatus>>;
-
-    fn format_order_url(&self, path: &str) -> String;
-    fn format_cancel_url(&self, order_id: &str, symbol: &Symbol) -> String;
-    fn format_status_url(&self, order_id: &str, symbol: &Symbol) -> String;
-    fn format_balance_url(&self) -> String;
-    fn format_open_orders_url(&self, symbol: Option<&Symbol>) -> String;
-
-    fn format_order_request(&self, request: &OrderRequest) -> Result<Value>;
-    fn parse_order_response(&self, data: &Value) -> Result<OrderResponse>;
-    fn parse_order_status(&self, data: &Value) -> Result<OrderStatus>;
-    fn parse_balance(&self, data: &Value) -> Result<Balance>;
-    fn parse_open_orders(&self, data: &Value) -> Result<Vec<OrderStatus>>;
-
-    fn map_error(&self, error: ArbitrageError, operation: &str) -> ArbitrageError {
-        ArbitrageError::Exchange(format!("{} failed on {}: {}", operation, self.id(), error))
-    }
-
-    async fn get(&self, url: &str) -> Result<Value>;
-    async fn post(&self, url: &str, body: &Value) -> Result<Value>;
-    async fn delete(&self, url: &str) -> Result<()>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rust_decimal::Decimal;
+    use std::str::FromStr;
 
     fn create_test_connector_base() -> ConnectorBase {
         let config = ConnectorConfig {
@@ -378,8 +376,14 @@ mod tests {
         assert_eq!(order_book.bids.len(), 3);
         assert_eq!(order_book.asks.len(), 3);
 
-        assert_eq!(order_book.bids[0].price, Decimal::new(50000, 2));
-        assert_eq!(order_book.bids[0].quantity, Decimal::new(15, 1));
+        assert_eq!(
+            order_book.bids[0].price,
+            Decimal::from_str("50000.00").unwrap()
+        );
+        assert_eq!(
+            order_book.bids[0].quantity,
+            Decimal::from_str("1.5").unwrap()
+        );
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData, TimeInForce,
+    OrderStatusType, OrderType, TickerData,
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{
@@ -51,8 +51,9 @@ struct BybitMarketData {
     cts: Option<u64>,
 }
 
+#[derive(Clone)]
 pub struct BybitConnector {
-    config: ConnectorConfig,
+    pub config: ConnectorConfig,
     client: Client,
     event_sender: broadcast::Sender<ConnectionEvent>,
     status: Arc<RwLock<ConnectionStatus>>,
@@ -88,11 +89,11 @@ impl BybitConnector {
         }
     }
 
-    fn symbol_to_bybit(&self, symbol: &Symbol) -> String {
+    pub fn symbol_to_bybit(&self, symbol: &Symbol) -> String {
         format_symbol(symbol, SymbolFormat::NoSeparator)
     }
 
-    fn symbol_from_bybit(&self, bybit_symbol: &str) -> Result<Symbol> {
+    pub fn symbol_from_bybit(&self, bybit_symbol: &str) -> Result<Symbol> {
         parse_symbol(bybit_symbol, SymbolFormat::NoSeparator)
     }
 }
@@ -1092,7 +1093,7 @@ impl BybitConnector {
         parse_symbol(bybit_symbol, SymbolFormat::NoSeparator)
     }
 
-    fn parse_order_book(
+    pub fn parse_order_book(
         &self,
         data: &serde_json::Map<String, serde_json::Value>,
         symbol: &Symbol,
@@ -1136,7 +1137,7 @@ impl BybitConnector {
         })
     }
 
-    fn parse_ticker(&self, data: &serde_json::Value) -> Result<TickerData> {
+    pub fn parse_ticker(&self, data: &serde_json::Value) -> Result<TickerData> {
         let symbol_str = data["symbol"].as_str().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing symbol".to_string())
         })?;
@@ -1154,7 +1155,11 @@ impl BybitConnector {
         })
     }
 
-    fn parse_funding_rate(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<FundingRate> {
+    pub fn parse_funding_rate(
+        &self,
+        data: &serde_json::Value,
+        symbol: &Symbol,
+    ) -> Result<FundingRate> {
         let funding_rate = parse_decimal(&data["fundingRate"])?;
         let funding_time = parse_timestamp(&data["fundingRateTimestamp"])?;
 

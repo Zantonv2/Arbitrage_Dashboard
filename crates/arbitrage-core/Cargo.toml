@@ -7,6 +7,43 @@ license.workspace = true
 repository.workspace = true
 description = "Core data structures and business logic for the arbitrage dashboard"
 
+[features]
+default = ["all-exchanges", "all-strategies", "tracing", "metrics", "test-utils"]
+all-exchanges = ["okx", "bybit", "mexc", "gateio", "bitstamp", "kraken"]
+okx = []
+bybit = []
+mexc = []
+gateio = []
+bitstamp = []
+kraken = []
+all-strategies = [
+    "cex-arbitrage",
+    "funding-rate-arbitrage",
+    "stablecoin-arbitrage",
+    "cross-exchange-arbitrage",
+    "new-listing-arbitrage",
+    "spot-perp-arbitrage",
+    "convergence-arbitrage",
+    "hedged-funding",
+    "latency-arbitrage",
+    "spread-capture",
+]
+cex-arbitrage = []
+funding-rate-arbitrage = []
+stablecoin-arbitrage = []
+cross-exchange-arbitrage = []
+new-listing-arbitrage = []
+spot-perp-arbitrage = []
+convergence-arbitrage = []
+hedged-funding = []
+latency-arbitrage = []
+spread-capture = []
+test-utils = []
+tracing = []
+metrics = []
+simulator = []
+dev = ["test-utils"]
+
 [dependencies]
 # Workspace dependencies
 tokio = { workspace = true }
@@ -29,3 +66,4 @@ rustc-hash = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tokio-test = "0.4"
+criterion = { workspace = true }

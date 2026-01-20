@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use arbitrage_core::{
     strategies::{MarketBundle, StablecoinArbitrageStrategy, Strategy, Ticker},
     types::{ExchangeId, OrderBook, OrderBookLevel, Symbol},
@@ -38,8 +39,8 @@ async fn test_stablecoin_peg_arbitrage() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_ticker(ticker);
-    market_bundle.add_order_book(order_book);
+    market_bundle.add_ticker(Arc::new(ticker));
+    market_bundle.add_order_book(Arc::new(order_book));
 
     let signals = stablecoin_strategy.detect(&market_bundle)?;
 
@@ -91,8 +92,8 @@ async fn test_stablecoin_below_peg() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_ticker(ticker);
-    market_bundle.add_order_book(order_book);
+    market_bundle.add_ticker(Arc::new(ticker));
+    market_bundle.add_order_book(Arc::new(order_book));
 
     let signals = stablecoin_strategy.detect(&market_bundle)?;
 
@@ -148,8 +149,8 @@ async fn test_cross_stablecoin_arbitrage() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_order_book(okx_book);
-    market_bundle.add_order_book(bybit_book);
+    market_bundle.add_order_book(Arc::new(okx_book));
+    market_bundle.add_order_book(Arc::new(bybit_book));
 
     let signals = stablecoin_strategy.detect(&market_bundle)?;
 
@@ -248,8 +249,8 @@ async fn test_stablecoin_small_deviation() -> Result<()> {
     );
 
     let mut market_bundle = MarketBundle::new();
-    market_bundle.add_ticker(ticker);
-    market_bundle.add_order_book(order_book);
+    market_bundle.add_ticker(Arc::new(ticker));
+    market_bundle.add_order_book(Arc::new(order_book));
 
     let signals = stablecoin_strategy.detect(&market_bundle)?;
 
@@ -311,10 +312,10 @@ async fn test_multiple_stablecoins() -> Result<()> {
         )],
     );
 
-    market_bundle.add_ticker(usdt_ticker);
-    market_bundle.add_order_book(usdt_book);
-    market_bundle.add_ticker(dai_ticker);
-    market_bundle.add_order_book(dai_book);
+    market_bundle.add_ticker(Arc::new(usdt_ticker));
+    market_bundle.add_order_book(Arc::new(usdt_book));
+    market_bundle.add_ticker(Arc::new(dai_ticker));
+    market_bundle.add_order_book(Arc::new(dai_book));
 
     let signals = stablecoin_strategy.detect(&market_bundle)?;
 

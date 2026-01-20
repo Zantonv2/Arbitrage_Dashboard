@@ -18,6 +18,12 @@ pub mod hedged_funding;
 pub mod latency_arbitrage;
 pub mod spread_capture;
 
+#[cfg(test)]
+mod strategy_tests;
+
+#[cfg(test)]
+mod general_strategy_tests;
+
 // Re-exports
 pub use cex_arbitrage::CexArbitrageStrategy;
 pub use convergence_arbitrage::ConvergenceArbitrageStrategy;
