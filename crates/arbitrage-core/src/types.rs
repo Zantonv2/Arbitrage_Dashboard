@@ -544,6 +544,30 @@ impl ToBps for Decimal {
     }
 }
 
+/// Trait for calculating mid price from market data
+pub trait MidPrice {
+    fn mid_price(&self) -> Option<Decimal>;
+}
+
+impl MidPrice for crate::strategies::Ticker {
+    fn mid_price(&self) -> Option<Decimal> {
+        if self.bid.is_zero() && self.ask.is_zero() {
+            None
+        } else {
+            Some((self.bid + self.ask) / Decimal::from(2))
+        }
+    }
+}
+
+impl MidPrice for OrderBook {
+    fn mid_price(&self) -> Option<Decimal> {
+        match (self.best_ask(), self.best_bid()) {
+            (Some(ask), Some(bid)) => Some((ask.price + bid.price) / Decimal::from(2)),
+            _ => None,
+        }
+    }
+}
+
 /// Exchange constants for convenience
 pub mod exchange_constants {
     use super::ExchangeId;
