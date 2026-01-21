@@ -330,7 +330,9 @@ impl RawSignal {
 
     /// Get total notional value of all legs
     pub fn total_notional(&self) -> Decimal {
-        self.legs.iter().map(|leg| leg.price * leg.quantity).sum()
+        self.legs.iter().fold(Decimal::ZERO, |acc, leg| {
+            acc.saturating_add(leg.price.saturating_mul(leg.quantity))
+        })
     }
 
     /// Get unique exchanges involved in this signal

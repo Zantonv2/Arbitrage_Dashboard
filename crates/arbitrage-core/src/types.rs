@@ -327,9 +327,8 @@ impl OrderBook {
         }
 
         let slippage_ratio = (vwap_price - best_price).abs() / best_price;
-        (slippage_ratio * Decimal::from(10000))
-            .to_i32()
-            .unwrap_or(0)
+        let slippage_bps = slippage_ratio.saturating_mul(Decimal::from(10000));
+        slippage_bps.to_i32().unwrap_or(i32::MAX)
     }
 }
 
