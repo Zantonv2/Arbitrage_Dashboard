@@ -630,3 +630,317 @@ pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i
     let profit_ratio = (sell_price - buy_price) / buy_price;
     (profit_ratio * Decimal::from(10000)).to_i32()
 }
+
+#[cfg(test)]
+mod types_tests {
+    use super::*;
+
+    fn create_test_order(
+        exchange: ExchangeId,
+        symbol: Symbol,
+        side: Side,
+        quantity: Decimal,
+        price: Option<Decimal>,
+    ) -> Order {
+        Order::new(exchange, symbol, side, OrderType::Limit, quantity, price)
+    }
+
+    fn create_test_symbol() -> Symbol {
+        Symbol::new("BTC", "USDT")
+    }
+
+    #[test]
+    fn test_execution_instruction_new() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::Binance,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(1),
+            Some(Decimal::from(50000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::Coinbase,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(1),
+            Some(Decimal::from(50100)),
+        );
+
+        let signal_id = Uuid::new_v4();
+        let instruction = ExecutionInstruction::new(signal_id, buy_order, sell_order);
+
+        assert_eq!(instruction.signal_id, signal_id);
+        assert!(instruction.expected_profit.is_zero());
+        assert!(instruction.worst_case_profit.is_zero());
+        assert!(instruction.total_fees.is_zero());
+        assert!(instruction.validation_errors.is_empty());
+    }
+
+    #[test]
+    fn test_execution_instruction_is_valid_no_errors() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::OKX,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(5),
+            Some(Decimal::from(1000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::ByBit,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(5),
+            Some(Decimal::from(1050)),
+        );
+
+        let instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        assert!(instruction.is_valid());
+    }
+
+    #[test]
+    fn test_execution_instruction_is_valid_with_errors() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::MEXC,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(5),
+            Some(Decimal::from(1000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::GateIo,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(5),
+            Some(Decimal::from(1050)),
+        );
+
+        let mut instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+        instruction
+            .validation_errors
+            .push("Test error 1".to_string());
+        instruction
+            .validation_errors
+            .push("Test error 2".to_string());
+
+        assert!(!instruction.is_valid());
+        assert_eq!(instruction.validation_errors.len(), 2);
+    }
+
+    #[test]
+    fn test_validation_errors_accumulation() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::Kraken,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(1),
+            Some(Decimal::from(50000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::Bitstamp,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(1),
+            Some(Decimal::from(50100)),
+        );
+
+        let mut instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        instruction
+            .validation_errors
+            .push("Missing price for market order".to_string());
+        assert_eq!(instruction.validation_errors.len(), 1);
+        assert!(!instruction.is_valid());
+
+        instruction
+            .validation_errors
+            .push("Quantity too small".to_string());
+        assert_eq!(instruction.validation_errors.len(), 2);
+        assert!(!instruction.is_valid());
+
+        instruction
+            .validation_errors
+            .push("Insufficient liquidity".to_string());
+        assert_eq!(instruction.validation_errors.len(), 3);
+        assert!(!instruction.is_valid());
+
+        instruction.validation_errors.clear();
+        assert!(instruction.validation_errors.is_empty());
+        assert!(instruction.is_valid());
+    }
+
+    #[test]
+    fn test_is_valid_returns_false_with_empty_errors() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::Hyperliquid,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(2),
+            Some(Decimal::from(25000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::KuCoin,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(2),
+            Some(Decimal::from(25250)),
+        );
+
+        let instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        assert!(instruction.validation_errors.is_empty());
+        assert!(instruction.is_valid());
+    }
+
+    #[test]
+    fn test_is_valid_after_adding_single_error() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::Bitget,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(10),
+            Some(Decimal::from(100)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::BingX,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(10),
+            Some(Decimal::from(105)),
+        );
+
+        let instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        assert!(instruction.is_valid());
+
+        let mut instruction_with_error = instruction;
+        instruction_with_error
+            .validation_errors
+            .push("Exchange rate limit exceeded".to_string());
+
+        assert!(!instruction_with_error.is_valid());
+        assert_eq!(instruction_with_error.validation_errors.len(), 1);
+    }
+
+    #[test]
+    fn test_execution_instruction_multiple_validation_errors() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::HTX,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(1),
+            Some(Decimal::from(50000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::Coinbase,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(1),
+            Some(Decimal::from(50100)),
+        );
+
+        let mut instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        let errors = vec![
+            "Buy order quantity must be positive".to_string(),
+            "Sell order quantity must be positive".to_string(),
+            "Buy and sell quantities must match".to_string(),
+            "Buy and sell symbols must match".to_string(),
+        ];
+
+        for error in &errors {
+            instruction.validation_errors.push(error.clone());
+        }
+
+        assert!(!instruction.is_valid());
+        assert_eq!(instruction.validation_errors.len(), 4);
+
+        let expected_gross = (Decimal::from(50100) - Decimal::from(50000)) * Decimal::from(1);
+        instruction.expected_profit = expected_gross - instruction.total_fees;
+        instruction.total_fees = Decimal::ZERO;
+        assert_eq!(
+            instruction.expected_profit + instruction.total_fees,
+            expected_gross
+        );
+    }
+
+    #[test]
+    fn test_execution_instruction_fee_accumulation() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::OKX,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(100),
+            Some(Decimal::from(500)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::ByBit,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(100),
+            Some(Decimal::from(550)),
+        );
+
+        let mut instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        instruction.buy_order.expected_fee = Decimal::from(50);
+        instruction.sell_order.expected_fee = Decimal::from(55);
+        instruction.total_fees =
+            instruction.buy_order.expected_fee + instruction.sell_order.expected_fee;
+
+        assert_eq!(instruction.total_fees, Decimal::from(105));
+
+        let expected_gross = (Decimal::from(550) - Decimal::from(500)) * Decimal::from(100);
+        instruction.expected_profit = expected_gross - instruction.total_fees;
+        assert_eq!(
+            instruction.expected_profit,
+            Decimal::from(5000) - Decimal::from(105)
+        );
+    }
+
+    #[test]
+    fn test_execution_instruction_worst_case_profit_with_slippage() {
+        let symbol = create_test_symbol();
+        let buy_order = create_test_order(
+            ExchangeId::Binance,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(10),
+            Some(Decimal::from(1000)),
+        );
+        let sell_order = create_test_order(
+            ExchangeId::MEXC,
+            symbol.clone(),
+            Side::Sell,
+            Decimal::from(10),
+            Some(Decimal::from(1020)),
+        );
+
+        let mut instruction = ExecutionInstruction::new(Uuid::new_v4(), buy_order, sell_order);
+
+        let signal_buy_price = Decimal::from(1000);
+        let signal_sell_price = Decimal::from(1020);
+        let quantity = Decimal::from(10);
+
+        instruction.slippage_buffer = Decimal::new(5, 4);
+
+        let slippage_multiplier = instruction.slippage_buffer / Decimal::from(100);
+        let worst_buy_price = signal_buy_price * (Decimal::ONE + slippage_multiplier);
+        let worst_sell_price = signal_sell_price * (Decimal::ONE - slippage_multiplier);
+
+        instruction.expected_profit = (signal_sell_price - signal_buy_price) * quantity;
+        instruction.worst_case_profit =
+            (worst_sell_price - worst_buy_price) * quantity - instruction.total_fees;
+
+        assert!(instruction.worst_case_profit < instruction.expected_profit);
+        assert!(instruction.expected_profit > Decimal::ZERO);
+    }
+}

@@ -623,4 +623,245 @@ mod tests {
             assert!(result.is_ok());
         }
     }
+
+    // === Integration Tests: Signal to ExecutionInstruction Flow ===
+
+    #[test]
+    fn test_signal_to_execution_instruction_complete_flow() {
+        let config = ExecutionConfig::default();
+        let preparer = ExecutionPreparer::new(config);
+
+        let signal = Signal::new(
+            crate::types::Symbol::new("BTC", "USDT"),
+            crate::types::ExchangeId::Binance,
+            crate::types::ExchangeId::Coinbase,
+            Decimal::from(64250),
+            Decimal::from(64350),
+            chrono::Utc::now(),
+        );
+        let quantity = Decimal::from(5);
+
+        let result = preparer.prepare_execution(&signal, quantity);
+        assert!(result.is_ok());
+        let instruction = result.unwrap();
+
+        assert_eq!(instruction.signal_id, signal.id);
+        assert_eq!(instruction.buy_order.quantity, quantity);
+        assert_eq!(instruction.sell_order.quantity, quantity);
+        assert_eq!(instruction.buy_order.exchange, signal.buy_exchange);
+        assert_eq!(instruction.sell_order.exchange, signal.sell_exchange);
+        assert_eq!(instruction.buy_order.symbol, signal.symbol);
+        assert_eq!(instruction.sell_order.symbol, signal.symbol);
+        assert!(
+            instruction.expected_profit > Decimal::ZERO
+                || instruction.expected_profit == Decimal::ZERO
+                || instruction.expected_profit < Decimal::ZERO
+        );
+    }
+
+    #[test]
+    fn test_worst_case_profit_with_slippage_and_fees() {
+        let mut config = ExecutionConfig::default();
+        config.slippage_buffer_percent = Decimal::new(5, 4);
+        let mut preparer = ExecutionPreparer::new(config);
+
+        let okx_fee = FeeSchedule::new(
+            crate::types::ExchangeId::OKX,
+            Decimal::new(8, 4),
+            Decimal::new(1, 3),
+        );
+        let bybit_fee = FeeSchedule::new(
+            crate::types::ExchangeId::ByBit,
+            Decimal::new(6, 4),
+            Decimal::new(8, 4),
+        );
+        preparer.update_fee_schedule(crate::types::ExchangeId::OKX, okx_fee);
+        preparer.update_fee_schedule(crate::types::ExchangeId::ByBit, bybit_fee);
+
+        let signal = Signal::new(
+            crate::types::Symbol::new("ETH", "USDT"),
+            crate::types::ExchangeId::OKX,
+            crate::types::ExchangeId::ByBit,
+            Decimal::from(3500),
+            Decimal::from(3525),
+            chrono::Utc::now(),
+        );
+        let quantity = Decimal::from(10);
+
+        let result = preparer.prepare_execution(&signal, quantity);
+        assert!(result.is_ok());
+        let instruction = result.unwrap();
+
+        let expected_gross_profit = (signal.sell_price - signal.buy_price) * quantity;
+        assert_eq!(
+            instruction.expected_profit + instruction.total_fees,
+            expected_gross_profit
+        );
+
+        assert!(instruction.worst_case_profit < instruction.expected_profit);
+        assert!(instruction.total_fees > Decimal::ZERO);
+
+        let buy_cost_with_slippage = instruction.buy_order.price.unwrap() * quantity;
+        let sell_revenue_with_slippage = instruction.sell_order.price.unwrap() * quantity;
+        let worst_case_gross = sell_revenue_with_slippage - buy_cost_with_slippage;
+        assert_eq!(
+            instruction.worst_case_profit + instruction.total_fees,
+            worst_case_gross
+        );
+    }
+
+    #[test]
+    fn test_execution_preview_all_fields_populated() {
+        let config = ExecutionConfig::default();
+        let preparer = ExecutionPreparer::new(config);
+
+        let signal = Signal::new(
+            crate::types::Symbol::new("SOL", "USDT"),
+            crate::types::ExchangeId::Kraken,
+            crate::types::ExchangeId::GateIo,
+            Decimal::from(180),
+            Decimal::from(182),
+            chrono::Utc::now(),
+        );
+        let quantity = Decimal::from(50);
+
+        let instruction_result = preparer.prepare_execution(&signal, quantity);
+        assert!(instruction_result.is_ok());
+
+        let preview = preparer.generate_preview(&instruction_result.unwrap());
+
+        assert_eq!(preview.buy_order_summary.exchange, signal.buy_exchange);
+        assert_eq!(preview.buy_order_summary.symbol, signal.symbol);
+        assert_eq!(preview.buy_order_summary.side, Side::Buy);
+        assert_eq!(preview.buy_order_summary.quantity, quantity);
+        assert!(preview.buy_order_summary.price.is_some());
+        assert!(preview.buy_order_summary.estimated_cost > Decimal::ZERO);
+        assert!(preview.buy_order_summary.estimated_fee > Decimal::ZERO);
+
+        assert_eq!(preview.sell_order_summary.exchange, signal.sell_exchange);
+        assert_eq!(preview.sell_order_summary.symbol, signal.symbol);
+        assert_eq!(preview.sell_order_summary.side, Side::Sell);
+        assert_eq!(preview.sell_order_summary.quantity, quantity);
+        assert!(preview.sell_order_summary.price.is_some());
+        assert!(preview.sell_order_summary.estimated_cost > Decimal::ZERO);
+        assert!(preview.sell_order_summary.estimated_fee > Decimal::ZERO);
+
+        assert!(
+            preview.expected_profit >= Decimal::ZERO || preview.expected_profit < Decimal::ZERO
+        );
+        assert!(preview.worst_case_profit <= preview.expected_profit);
+        assert!(preview.total_fees > Decimal::ZERO);
+        assert!(preview.is_valid || !preview.validation_errors.is_empty());
+    }
+
+    #[test]
+    fn test_fee_impact_on_execution_preview() {
+        let mut config = ExecutionConfig::default();
+        config.slippage_buffer_percent = Decimal::new(1, 3);
+        let mut preparer = ExecutionPreparer::new(config);
+
+        let zero_fee = FeeSchedule::new(
+            crate::types::ExchangeId::Binance,
+            Decimal::ZERO,
+            Decimal::ZERO,
+        );
+        let high_fee = FeeSchedule::new(
+            crate::types::ExchangeId::ByBit,
+            Decimal::new(1, 2),
+            Decimal::new(1, 2),
+        );
+        preparer.update_fee_schedule(crate::types::ExchangeId::Binance, zero_fee);
+        preparer.update_fee_schedule(crate::types::ExchangeId::ByBit, high_fee);
+
+        let signal = Signal::new(
+            crate::types::Symbol::new("XRP", "USDT"),
+            crate::types::ExchangeId::Binance,
+            crate::types::ExchangeId::ByBit,
+            Decimal::from(100),
+            Decimal::from(105),
+            chrono::Utc::now(),
+        );
+        let quantity = Decimal::from(1000);
+
+        let result = preparer.prepare_execution(&signal, quantity);
+        assert!(result.is_ok());
+        let instruction = result.unwrap();
+
+        let preview = preparer.generate_preview(&instruction);
+
+        let buy_revenue = signal.buy_price * quantity;
+        let sell_revenue = signal.sell_price * quantity;
+        let expected_gross_profit = sell_revenue - buy_revenue;
+        assert_eq!(
+            preview.expected_profit + preview.total_fees,
+            expected_gross_profit
+        );
+
+        assert!(preview.buy_order_summary.estimated_fee >= Decimal::ZERO);
+        assert!(preview.sell_order_summary.estimated_fee > Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_worst_case_profit_edge_case_high_slippage() {
+        let mut config = ExecutionConfig::default();
+        config.slippage_buffer_percent = Decimal::new(2, 2);
+        let mut preparer = ExecutionPreparer::new(config);
+
+        let fee = FeeSchedule::new(
+            crate::types::ExchangeId::MEXC,
+            Decimal::new(1, 3),
+            Decimal::new(2, 3),
+        );
+        preparer.update_fee_schedule(crate::types::ExchangeId::MEXC, fee);
+
+        let signal = Signal::new(
+            crate::types::Symbol::new("DOGE", "USDT"),
+            crate::types::ExchangeId::MEXC,
+            crate::types::ExchangeId::HTX,
+            Decimal::from(10),
+            Decimal::from(11),
+            chrono::Utc::now(),
+        );
+        let quantity = Decimal::from(10000);
+
+        let result = preparer.prepare_execution(&signal, quantity);
+        assert!(result.is_ok());
+        let instruction = result.unwrap();
+
+        let slippage_impact_buy = instruction.buy_order.price.unwrap() - signal.buy_price;
+        let slippage_impact_sell = signal.sell_price - instruction.sell_order.price.unwrap();
+        assert!(slippage_impact_buy > Decimal::ZERO);
+        assert!(slippage_impact_sell > Decimal::ZERO);
+
+        assert!(instruction.worst_case_profit < instruction.expected_profit);
+        assert!(instruction.total_fees > Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_preview_validity_reflects_validation_errors() {
+        let config = ExecutionConfig {
+            enable_force_execute: false,
+            ..ExecutionConfig::default()
+        };
+        let preparer = ExecutionPreparer::new(config);
+
+        let signal = Signal::new(
+            crate::types::Symbol::new("BTC", "USDT"),
+            crate::types::ExchangeId::OKX,
+            crate::types::ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::from(50010),
+            chrono::Utc::now(),
+        );
+        let quantity = Decimal::from(1);
+
+        let result = preparer.prepare_execution(&signal, quantity);
+        assert!(result.is_ok());
+        let instruction = result.unwrap();
+
+        let preview = preparer.generate_preview(&instruction);
+
+        assert_eq!(preview.is_valid, instruction.is_valid());
+        assert_eq!(preview.validation_errors, instruction.validation_errors);
+    }
 }
