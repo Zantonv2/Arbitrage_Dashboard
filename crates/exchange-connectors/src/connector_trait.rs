@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use rust_decimal::Decimal;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -11,9 +10,8 @@ use arbitrage_core::{
 };
 
 use crate::connector::{
-    Balance, CancelResponse, ConnectorConfig, ConnectorStats, FundingRate, HealthStatus,
-    OrderRequest, OrderResponse, OrderSide, OrderStatus, OrderStatusType, OrderType, TickerData,
-    TimeInForce,
+    Balance, ConnectorConfig, ConnectorStats, FundingRate, HealthStatus, OrderRequest,
+    OrderResponse, OrderStatus, TickerData,
 };
 use crate::events::ConnectionEvent;
 
@@ -28,8 +26,10 @@ pub struct ConnectorBase {
 impl ConnectorBase {
     pub fn new(config: ConnectorConfig) -> Self {
         let (event_sender, _) = broadcast::channel(1000);
-        let mut stats = ConnectorStats::default();
-        stats.exchange = config.exchange_id;
+        let stats = ConnectorStats {
+            exchange: config.exchange_id,
+            ..Default::default()
+        };
 
         Self {
             config,

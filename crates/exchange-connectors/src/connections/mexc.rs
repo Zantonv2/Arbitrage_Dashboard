@@ -1,7 +1,6 @@
 use crate::connector::{
-    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
-    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData,
+    CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus,
+    OrderSide, OrderStatus, OrderStatusType, OrderType, TickerData,
 };
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
@@ -25,6 +24,7 @@ use tracing::{debug, error, info, warn};
 
 /// MEXC WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct MexcSubscription {
     method: String,
     params: Vec<String>,
@@ -54,7 +54,14 @@ pub struct MEXCConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Default for MEXCConnector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MEXCConnector {
@@ -390,8 +397,7 @@ impl ExchangeConnector for MEXCConnector {
             .get("symbol")
             .and_then(|s| s.as_str())
             .unwrap_or("BTCUSDT");
-        let symbol = if symbol_str.ends_with("USDT") {
-            let base = &symbol_str[..symbol_str.len() - 4];
+        let symbol = if let Some(base) = symbol_str.strip_suffix("USDT") {
             arbitrage_core::types::Symbol::new(base, "USDT")
         } else {
             arbitrage_core::types::Symbol::new("BTC", "USDT")
@@ -550,8 +556,7 @@ impl ExchangeConnector for MEXCConnector {
                     .get("symbol")
                     .and_then(|s| s.as_str())
                     .unwrap_or("BTCUSDT");
-                let order_symbol = if symbol_str.ends_with("USDT") {
-                    let base = &symbol_str[..symbol_str.len() - 4];
+                let order_symbol = if let Some(base) = symbol_str.strip_suffix("USDT") {
                     arbitrage_core::types::Symbol::new(base, "USDT")
                 } else {
                     arbitrage_core::types::Symbol::new("BTC", "USDT")
@@ -603,6 +608,7 @@ impl ExchangeConnector for MEXCConnector {
     }
 }
 
+#[allow(dead_code)]
 impl MEXCConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
@@ -892,7 +898,7 @@ impl MEXCConnector {
         let ask_qty = parse_decimal(&d["A"])?;
 
         let timestamp = if let Some(t) = data.get("t").and_then(|t| t.as_i64()) {
-            chrono::DateTime::from_timestamp_millis(t).unwrap_or_else(|| chrono::Utc::now())
+            chrono::DateTime::from_timestamp_millis(t).unwrap_or_else(chrono::Utc::now)
         } else {
             chrono::Utc::now()
         };

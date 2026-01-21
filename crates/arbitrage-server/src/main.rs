@@ -81,12 +81,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Start server
             if let Err(e) = server.run().await {
                 error!("Server error: {}", e);
-                return Err(e.into());
+                return Err(e);
             }
         }
         Err(e) => {
             error!("Failed to initialize server: {}", e);
-            return Err(e.into());
+            return Err(e);
         }
     }
 

@@ -7,10 +7,9 @@ use serde_json::Value;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tracing::{debug, error, info, warn};
 
@@ -101,6 +100,7 @@ struct WebSocketPoolInner {
     message_sender: mpsc::UnboundedSender<WebSocketMessage>,
     event_sender: broadcast::Sender<WebSocketEvent>,
     heartbeat_interval_ms: u64,
+    #[allow(dead_code)]
     last_heartbeat: Arc<DashMap<(), Instant>>,
     message_queue: Arc<DashMap<usize, (String, Instant)>>,
     queue_counter: Arc<DashMap<(), usize>>,
@@ -379,7 +379,7 @@ impl WebSocketPool {
                     }
                 }
             }
-            tokio_tungstenite::tungstenite::Message::Ping(data) => {
+            tokio_tungstenite::tungstenite::Message::Ping(_data) => {
                 debug!("Received ping");
             }
             tokio_tungstenite::tungstenite::Message::Pong(_) => {

@@ -103,7 +103,7 @@ impl BaseRestClient {
             )));
         }
 
-        response.json().await.map_err(|e| ArbitrageError::from(e))
+        response.json().await.map_err(ArbitrageError::from)
     }
 }
 
@@ -115,14 +115,14 @@ impl ExchangeRestClient for BaseRestClient {
 
     async fn get<T: DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
         self.execute_request(endpoint, "GET", || {
-            self.client.get(&self.build_url(endpoint))
+            self.client.get(self.build_url(endpoint))
         })
         .await
     }
 
     async fn post<T: DeserializeOwned>(&self, endpoint: &str, body: &Value) -> Result<T> {
         self.execute_request(endpoint, "POST", || {
-            self.client.post(&self.build_url(endpoint)).json(body)
+            self.client.post(self.build_url(endpoint)).json(body)
         })
         .await
     }
@@ -174,7 +174,7 @@ impl RestClientManager {
 }
 
 pub fn create_rest_client_config(
-    exchange_id: ExchangeId,
+    _exchange_id: ExchangeId,
     base_url: String,
     requests_per_second: u32,
     burst_capacity: u32,

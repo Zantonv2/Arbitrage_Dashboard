@@ -131,8 +131,10 @@ impl ExchangeManager {
             let mut rate_limiter = UnifiedRateLimitManager::new();
             rate_limiter.add_limiter("rest".to_string(), rate_limit_config.clone());
             rate_limiter.add_limiter("websocket".to_string(), rate_limit_config);
-            let mut stats = EventStats::default();
-            stats.exchange = *exchange_id;
+            let stats = EventStats {
+                exchange: *exchange_id,
+                ..Default::default()
+            };
             self.connectors
                 .insert(*exchange_id, Arc::new(RwLock::new(connector)));
             self.rate_limiters.insert(*exchange_id, rate_limiter);
@@ -348,16 +350,13 @@ impl ExchangeManager {
         &self,
         exchange: &ExchangeId,
     ) -> Option<Arc<RwLock<Box<dyn ExchangeConnector + Send + Sync>>>> {
-        self.connectors.get(exchange).map(|e| Arc::clone(e))
+        self.connectors.get(exchange).map(Arc::clone)
     }
 
     pub async fn is_exchange_connected(&self, exchange: &ExchangeId) -> bool {
         if let Some(connector) = self.connectors.get(exchange) {
             let connector = connector.read().await;
-            connector
-                .health_check()
-                .await
-                .map_or(false, |h| h.is_connected)
+            connector.health_check().await.is_ok_and(|h| h.is_connected)
         } else {
             false
         }

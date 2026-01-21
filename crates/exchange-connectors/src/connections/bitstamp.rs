@@ -5,7 +5,7 @@ use crate::connector::{
 };
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+use crate::utils::{parse_decimal, ExponentialBackoff};
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
@@ -25,6 +25,7 @@ use tracing::{debug, error, info, warn};
 
 /// Bitstamp WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct BitstampSubscription {
     event: String,
     data: BitstampSubscriptionData,
@@ -32,6 +33,7 @@ struct BitstampSubscription {
 
 /// Bitstamp subscription data
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct BitstampSubscriptionData {
     channel: String,
 }
@@ -50,7 +52,14 @@ pub struct BitstampConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Default for BitstampConnector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BitstampConnector {
@@ -84,19 +93,13 @@ impl BitstampConnector {
     }
 
     pub fn symbol_from_bitstamp(&self, bitstamp_symbol: &str) -> Result<Symbol> {
-        // Bitstamp uses lowercase concatenated format like "btcusd"
-        // We need to parse this back to base/quote
-        if bitstamp_symbol.ends_with("usd") {
-            let base = &bitstamp_symbol[..bitstamp_symbol.len() - 3];
+        if let Some(base) = bitstamp_symbol.strip_suffix("usd") {
             Ok(arbitrage_core::types::Symbol::new(base, "USD"))
-        } else if bitstamp_symbol.ends_with("eur") {
-            let base = &bitstamp_symbol[..bitstamp_symbol.len() - 3];
+        } else if let Some(base) = bitstamp_symbol.strip_suffix("eur") {
             Ok(arbitrage_core::types::Symbol::new(base, "EUR"))
-        } else if bitstamp_symbol.ends_with("btc") {
-            let base = &bitstamp_symbol[..bitstamp_symbol.len() - 3];
+        } else if let Some(base) = bitstamp_symbol.strip_suffix("btc") {
             Ok(arbitrage_core::types::Symbol::new(base, "BTC"))
         } else {
-            // Default fallback
             Ok(arbitrage_core::types::Symbol::new("BTC", "USD"))
         }
     }
@@ -522,6 +525,7 @@ impl ExchangeConnector for BitstampConnector {
     }
 }
 
+#[allow(dead_code)]
 impl BitstampConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
@@ -807,14 +811,11 @@ impl BitstampConnector {
     }
 
     fn symbol_from_bitstamp_static(bitstamp_symbol: &str) -> Result<Symbol> {
-        if bitstamp_symbol.ends_with("usd") {
-            let base = &bitstamp_symbol[..bitstamp_symbol.len() - 3];
+        if let Some(base) = bitstamp_symbol.strip_suffix("usd") {
             Ok(arbitrage_core::types::Symbol::new(base, "USD"))
-        } else if bitstamp_symbol.ends_with("eur") {
-            let base = &bitstamp_symbol[..bitstamp_symbol.len() - 3];
+        } else if let Some(base) = bitstamp_symbol.strip_suffix("eur") {
             Ok(arbitrage_core::types::Symbol::new(base, "EUR"))
-        } else if bitstamp_symbol.ends_with("btc") {
-            let base = &bitstamp_symbol[..bitstamp_symbol.len() - 3];
+        } else if let Some(base) = bitstamp_symbol.strip_suffix("btc") {
             Ok(arbitrage_core::types::Symbol::new(base, "BTC"))
         } else {
             Ok(arbitrage_core::types::Symbol::new("BTC", "USD"))

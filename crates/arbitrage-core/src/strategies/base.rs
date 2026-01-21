@@ -38,7 +38,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Maximum acceptable age for market data in milliseconds
 const DEFAULT_MAX_DATA_AGE_MS: u64 = 5000;
@@ -482,7 +482,6 @@ impl MarketBundle {
         max_age_ms: u64,
     ) -> bool {
         let max_age = Duration::milliseconds(max_age_ms as i64);
-        let now = Utc::now();
 
         if let Some(age) = self.get_data_age(exchange, symbol) {
             return age <= max_age;

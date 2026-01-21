@@ -35,7 +35,7 @@ use rustc_hash::FxHashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ============================================================================
 // Types
@@ -73,6 +73,10 @@ struct CachedSignal {
     profit_bps: i32,
 }
 
+type OrderBookMap = DashMap<(ExchangeId, Arc<Symbol>), Arc<OrderBook>>;
+type TickerMap = DashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>;
+type FundingRateMap = DashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>;
+
 /// Engine statistics for monitoring
 #[derive(Debug, Clone, Default)]
 pub struct EngineStats {
@@ -101,9 +105,9 @@ pub struct EngineStats {
 /// 3. Processing raw signals through the validation pipeline
 /// 4. Emitting validated signals for execution or display
 pub struct ArbitrageEngine {
-    order_books: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<OrderBook>>>,
-    tickers: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>>,
-    funding_rates: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>>,
+    order_books: Arc<OrderBookMap>,
+    tickers: Arc<TickerMap>,
+    funding_rates: Arc<FundingRateMap>,
 
     // Signal deduplication cache
     signal_cache: Arc<DashMap<OpportunityKey, CachedSignal>>,
@@ -648,15 +652,6 @@ impl ArbitrageEngine {
         Ok(true)
     }
 
-    /// Handle statistics retrieval failure with logging and metrics
-    fn handle_stats_retrieval_failure(&self, error_message: &str) {
-        self.increment_stats_retrieval_failure();
-        error!(
-            target: "statistics",
-            "Statistics retrieval failed: {}", error_message
-        );
-    }
-
     /// Check if signal should be emitted (deduplication)
     fn should_emit_signal(&self, key: &OpportunityKey, profit_bps: i32) -> bool {
         if let Some(cached) = self.signal_cache.get(key) {
@@ -707,11 +702,6 @@ impl ArbitrageEngine {
             .entry(Box::leak(key.into_boxed_str()))
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Increment counter for statistics retrieval failures
-    fn increment_stats_retrieval_failure(&self) {
-        self.increment_stat("statistics_retrieval_failures");
     }
 
     /// Get engine statistics

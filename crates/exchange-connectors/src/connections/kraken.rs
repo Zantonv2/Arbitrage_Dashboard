@@ -61,7 +61,14 @@ pub struct KrakenConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Default for KrakenConnector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl KrakenConnector {
@@ -77,8 +84,10 @@ impl KrakenConnector {
 
         let (event_sender, _) = broadcast::channel(1000);
         let client = Client::new();
-        let mut stats = ConnectorStats::default();
-        stats.exchange = ExchangeId::Kraken;
+        let stats = ConnectorStats {
+            exchange: ExchangeId::Kraken,
+            ..Default::default()
+        };
 
         Self {
             config,
@@ -396,7 +405,7 @@ impl ExchangeConnector for KrakenConnector {
 
         let status = if response_json["error"]
             .as_array()
-            .map_or(true, |arr| arr.is_empty())
+            .is_none_or(|arr| arr.is_empty())
         {
             OrderStatusType::Cancelled
         } else {
@@ -962,11 +971,10 @@ impl KrakenConnector {
     }
 
     pub fn parse_ticker(&self, data: &Value, symbol: &Symbol) -> Result<TickerData> {
-        // Kraken ticker format: c=[price, lot_volume], v=[today, 24h], ...
         let last_price = data["c"]
             .as_array()
             .and_then(|arr| arr.first())
-            .map(|v| parse_decimal(v))
+            .map(parse_decimal)
             .transpose()?
             .ok_or_else(|| {
                 arbitrage_core::ArbitrageError::ExchangeConnection("Missing last price".to_string())
@@ -975,7 +983,7 @@ impl KrakenConnector {
         let bid_price = data["b"]
             .as_array()
             .and_then(|arr| arr.first())
-            .map(|v| parse_decimal(v))
+            .map(parse_decimal)
             .transpose()?
             .ok_or_else(|| {
                 arbitrage_core::ArbitrageError::ExchangeConnection("Missing bid price".to_string())
@@ -984,7 +992,7 @@ impl KrakenConnector {
         let ask_price = data["a"]
             .as_array()
             .and_then(|arr| arr.first())
-            .map(|v| parse_decimal(v))
+            .map(parse_decimal)
             .transpose()?
             .ok_or_else(|| {
                 arbitrage_core::ArbitrageError::ExchangeConnection("Missing ask price".to_string())
@@ -993,7 +1001,7 @@ impl KrakenConnector {
         let volume_24h = data["v"]
             .as_array()
             .and_then(|arr| arr.get(1))
-            .map(|v| parse_decimal(v))
+            .map(parse_decimal)
             .transpose()?
             .unwrap_or_default();
 

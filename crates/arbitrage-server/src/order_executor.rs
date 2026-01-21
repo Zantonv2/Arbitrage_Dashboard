@@ -8,9 +8,7 @@ use arbitrage_core::{
     ArbitrageError, Result,
 };
 use exchange_connectors::{
-    connector::{
-        ExchangeConnector, OrderRequest, OrderResponse, OrderSide, OrderType, TimeInForce,
-    },
+    connector::{OrderRequest, OrderResponse, OrderSide, OrderType, TimeInForce},
     exchange_manager::ExchangeManager,
 };
 use rust_decimal::Decimal;

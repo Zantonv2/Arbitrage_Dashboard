@@ -1,13 +1,12 @@
 use crate::connector::{
-    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
-    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData,
+    CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus,
+    OrderStatus, OrderStatusType, TickerData,
 };
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{
     format_symbol, parse_decimal, parse_json_with_retry, parse_symbol, parse_timestamp,
-    ExponentialBackoff, ParsingFailureTracker, SymbolFormat, MAX_PARSE_RETRIES,
+    ExponentialBackoff, SymbolFormat,
 };
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
@@ -29,6 +28,7 @@ use tracing::{debug, error, info, warn};
 
 /// OKX WebSocket subscription message
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct OkxSubscription {
     op: String,
     args: Vec<OkxSubscriptionArg>,
@@ -36,6 +36,7 @@ struct OkxSubscription {
 
 /// OKX WebSocket subscription argument
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct OkxSubscriptionArg {
     channel: String,
     #[serde(rename = "instId")]
@@ -44,6 +45,7 @@ struct OkxSubscriptionArg {
 
 /// OKX WebSocket response message
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct OkxWsResponse {
     event: Option<String>,
     code: Option<String>,
@@ -54,6 +56,7 @@ struct OkxWsResponse {
 
 /// OKX WebSocket market data message
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct OkxMarketData {
     arg: OkxMarketDataArg,
     action: Option<String>,
@@ -62,6 +65,7 @@ struct OkxMarketData {
 
 /// OKX market data argument
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct OkxMarketDataArg {
     channel: String,
     #[serde(rename = "instId")]
@@ -73,8 +77,15 @@ pub struct OKXConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
+}
+
+impl Default for OKXConnector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OKXConnector {
@@ -709,6 +720,7 @@ impl ExchangeConnector for OKXConnector {
     }
 }
 
+#[allow(dead_code)]
 impl OKXConnector {
     async fn websocket_task(
         ws_url: String,

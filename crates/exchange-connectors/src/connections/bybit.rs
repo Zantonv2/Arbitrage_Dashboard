@@ -1,12 +1,10 @@
 use crate::connector::{
-    AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
-    FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
-    OrderStatusType, OrderType, TickerData,
+    ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus, TickerData,
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{
     format_symbol, parse_decimal, parse_json_with_retry, parse_symbol, parse_timestamp,
-    ExponentialBackoff, ParsingFailureTracker, SymbolFormat, MAX_PARSE_RETRIES,
+    ExponentialBackoff, SymbolFormat,
 };
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
@@ -35,6 +33,7 @@ struct BybitSubscription {
 
 /// ByBit WebSocket response message
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct BybitWsResponse {
     success: Option<bool>,
     ret_msg: Option<String>,
@@ -47,6 +46,7 @@ struct BybitWsResponse {
 struct BybitMarketData {
     topic: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     data_type: String,
     ts: u64,
     data: Value,
@@ -61,8 +61,15 @@ pub struct BybitConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
+}
+
+impl Default for BybitConnector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BybitConnector {
@@ -78,8 +85,10 @@ impl BybitConnector {
 
         let (event_sender, _) = broadcast::channel(1000);
         let client = Client::new();
-        let mut stats = ConnectorStats::default();
-        stats.exchange = ExchangeId::ByBit;
+        let stats = ConnectorStats {
+            exchange: ExchangeId::ByBit,
+            ..Default::default()
+        };
 
         Self {
             config,
@@ -543,8 +552,7 @@ impl ExchangeConnector for BybitConnector {
                 .and_then(|s| s.as_str())
                 .unwrap_or("BTCUSDT");
             // ByBit uses concatenated symbols like BTCUSDT, need to parse
-            let symbol = if symbol_str.ends_with("USDT") {
-                let base = &symbol_str[..symbol_str.len() - 4];
+            let symbol = if let Some(base) = symbol_str.strip_suffix("USDT") {
                 arbitrage_core::types::Symbol::new(base, "USDT")
             } else {
                 arbitrage_core::types::Symbol::new("BTC", "USDT")
@@ -730,8 +738,7 @@ impl ExchangeConnector for BybitConnector {
                     .get("symbol")
                     .and_then(|s| s.as_str())
                     .unwrap_or("BTCUSDT");
-                let order_symbol = if symbol_str.ends_with("USDT") {
-                    let base = &symbol_str[..symbol_str.len() - 4];
+                let order_symbol = if let Some(base) = symbol_str.strip_suffix("USDT") {
                     arbitrage_core::types::Symbol::new(base, "USDT")
                 } else {
                     arbitrage_core::types::Symbol::new("BTC", "USDT")
@@ -1088,11 +1095,10 @@ impl BybitConnector {
         }
 
         let timestamp = if let Some(cts) = market_data.cts {
-            chrono::DateTime::from_timestamp_millis(cts as i64)
-                .unwrap_or_else(|| chrono::Utc::now())
+            chrono::DateTime::from_timestamp_millis(cts as i64).unwrap_or_else(chrono::Utc::now)
         } else {
             chrono::DateTime::from_timestamp_millis(market_data.ts as i64)
-                .unwrap_or_else(|| chrono::Utc::now())
+                .unwrap_or_else(chrono::Utc::now)
         };
 
         Ok(OrderBook {

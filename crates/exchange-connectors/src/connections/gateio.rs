@@ -51,21 +51,29 @@ pub struct GateioConnector {
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
+impl Default for GateioConnector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GateioConnector {
     pub fn new() -> Self {
         let config = ConnectorConfig {
             exchange_id: ExchangeId::GateIo,
             ws_url: "wss://api.gateio.ws/ws/v4/".to_string(),
-            rest_url: "https://api.gateio.ws".to_string(),
-            rate_limit_per_second: 10,
+            rest_url: "https://api.gateio.io".to_string(),
+            rate_limit_per_second: 20,
             rate_limit_burst: 20,
             ..Default::default()
         };
 
         let (event_sender, _) = broadcast::channel(1000);
         let client = Client::new();
-        let mut stats = ConnectorStats::default();
-        stats.exchange = ExchangeId::GateIo;
+        let stats = ConnectorStats {
+            exchange: ExchangeId::GateIo,
+            ..Default::default()
+        };
 
         Self {
             config,

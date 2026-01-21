@@ -29,31 +29,32 @@ pub fn parse_timestamp(value: &Value) -> Result<DateTime<Utc>> {
                 } else if let Some(dt) = DateTime::from_timestamp(timestamp, 0) {
                     Ok(dt)
                 } else {
-                    Err(
-                        ArbitrageError::ParsingError(format!("Invalid timestamp: {}", timestamp))
-                            .into(),
-                    )
+                    Err(ArbitrageError::ParsingError(format!(
+                        "Invalid timestamp: {}",
+                        timestamp
+                    )))
                 }
             } else {
-                Err(
-                    ArbitrageError::ParsingError("Timestamp is not a valid integer".to_string())
-                        .into(),
-                )
+                Err(ArbitrageError::ParsingError(
+                    "Timestamp is not a valid integer".to_string(),
+                ))
             }
         }
         Value::String(s) => s.parse::<DateTime<Utc>>().map_err(|e| {
-            ArbitrageError::ParsingError(format!("Failed to parse timestamp string: {}", e)).into()
+            ArbitrageError::ParsingError(format!("Failed to parse timestamp string: {}", e))
         }),
-        _ => Err(ArbitrageError::ParsingError("Invalid timestamp format".to_string()).into()),
+        _ => Err(ArbitrageError::ParsingError(
+            "Invalid timestamp format".to_string(),
+        )),
     }
 }
 
 /// Parse decimal from string or number
 pub fn parse_decimal(value: &Value) -> Result<Decimal> {
     match value {
-        Value::String(s) => s.parse::<Decimal>().map_err(|e| {
-            ArbitrageError::ParsingError(format!("Failed to parse decimal: {}", e)).into()
-        }),
+        Value::String(s) => s
+            .parse::<Decimal>()
+            .map_err(|e| ArbitrageError::ParsingError(format!("Failed to parse decimal: {}", e))),
         Value::Number(n) => {
             if let Some(f) = n.as_f64() {
                 Decimal::try_from(f).map_err(|e| {
@@ -61,15 +62,16 @@ pub fn parse_decimal(value: &Value) -> Result<Decimal> {
                         "Failed to convert float to decimal: {}",
                         e
                     ))
-                    .into()
                 })
             } else {
-                Err(ArbitrageError::ParsingError("Timestamp is not an integer".to_string()).into())
+                Err(ArbitrageError::ParsingError(
+                    "Timestamp is not an integer".to_string(),
+                ))
             }
         }
-        _ => {
-            Err(ArbitrageError::ParsingError("Value is not a string or number".to_string()).into())
-        }
+        _ => Err(ArbitrageError::ParsingError(
+            "Value is not a string or number".to_string(),
+        )),
     }
 }
 
@@ -118,8 +120,7 @@ pub fn parse_symbol(symbol_str: &str, format: SymbolFormat) -> Result<Symbol> {
                 return Err(ArbitrageError::InvalidSymbol(format!(
                     "Invalid dash format: {}",
                     symbol_str
-                ))
-                .into());
+                )));
             }
             (parts[0], parts[1])
         }
@@ -129,8 +130,7 @@ pub fn parse_symbol(symbol_str: &str, format: SymbolFormat) -> Result<Symbol> {
                 return Err(ArbitrageError::InvalidSymbol(format!(
                     "Invalid underscore format: {}",
                     symbol_str
-                ))
-                .into());
+                )));
             }
             (parts[0], parts[1])
         }
@@ -140,8 +140,7 @@ pub fn parse_symbol(symbol_str: &str, format: SymbolFormat) -> Result<Symbol> {
                 return Err(ArbitrageError::InvalidSymbol(format!(
                     "Invalid dot format: {}",
                     symbol_str
-                ))
-                .into());
+                )));
             }
             (parts[0], parts[1])
         }
@@ -151,8 +150,7 @@ pub fn parse_symbol(symbol_str: &str, format: SymbolFormat) -> Result<Symbol> {
                 return Err(ArbitrageError::InvalidSymbol(format!(
                     "Invalid slash format: {}",
                     symbol_str
-                ))
-                .into());
+                )));
             }
             (parts[0], parts[1])
         }
@@ -173,8 +171,7 @@ pub fn parse_symbol(symbol_str: &str, format: SymbolFormat) -> Result<Symbol> {
             return Err(ArbitrageError::InvalidSymbol(format!(
                 "Cannot parse symbol: {}",
                 symbol_str
-            ))
-            .into());
+            )));
         }
     };
 

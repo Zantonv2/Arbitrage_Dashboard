@@ -29,8 +29,10 @@ impl MockConnector {
     pub fn new(exchange_id: ExchangeId) -> Self {
         let (event_sender, _) = broadcast::channel(1000);
         let stats = ConnectorStats::default();
-        let mut config = ConnectorConfig::default();
-        config.exchange_id = exchange_id;
+        let config = ConnectorConfig {
+            exchange_id,
+            ..Default::default()
+        };
 
         Self {
             config,
@@ -330,6 +332,12 @@ impl ExchangeConnector for MockConnector {
 macro_rules! impl_mock_connector {
     ($name:ident, $exchange_id:expr, $price:expr) => {
         pub struct $name;
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
 
         impl $name {
             pub fn new() -> Self {
