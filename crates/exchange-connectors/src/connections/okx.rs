@@ -6,7 +6,8 @@ use crate::connector::{
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{
-    format_symbol, parse_decimal, parse_symbol, parse_timestamp, ExponentialBackoff, SymbolFormat,
+    format_symbol, parse_decimal, parse_json_with_retry, parse_symbol, parse_timestamp,
+    ExponentialBackoff, ParsingFailureTracker, SymbolFormat, MAX_PARSE_RETRIES,
 };
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, RwLock};
@@ -72,6 +74,7 @@ pub struct OKXConnector {
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    parsing_failures: Arc<AtomicU64>,
 }
 
 impl OKXConnector {
@@ -93,6 +96,7 @@ impl OKXConnector {
             client,
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
             ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -102,6 +106,10 @@ impl OKXConnector {
 
     pub fn symbol_from_okx(&self, okx_symbol: &str) -> Result<Symbol> {
         parse_symbol(okx_symbol, SymbolFormat::Dash)
+    }
+
+    pub fn get_parsing_failure_count(&self) -> u64 {
+        self.parsing_failures.load(Ordering::SeqCst)
     }
 }
 
@@ -130,7 +138,14 @@ impl ExchangeConnector for OKXConnector {
         );
 
         let response = self.client.get(&url).send().await?;
-        let data: serde_json::Value = response.json().await?;
+        let bytes = response.bytes().await?;
+        let data = parse_json_with_retry(
+            &bytes,
+            ExchangeId::OKX,
+            "fetch_order_book",
+            Some(&self.parsing_failures),
+        )
+        .await?;
 
         if let Some(data_array) = data["data"].as_array() {
             if let Some(book) = data_array.first() {
@@ -149,7 +164,14 @@ impl ExchangeConnector for OKXConnector {
             self.base.config.rest_url
         );
         let response = self.client.get(&url).send().await?;
-        let data: serde_json::Value = response.json().await?;
+        let bytes = response.bytes().await?;
+        let data = parse_json_with_retry(
+            &bytes,
+            ExchangeId::OKX,
+            "fetch_symbols",
+            Some(&self.parsing_failures),
+        )
+        .await?;
 
         let mut symbols = Vec::new();
         if let Some(data_array) = data["data"].as_array() {

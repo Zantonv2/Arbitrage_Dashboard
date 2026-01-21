@@ -33,11 +33,15 @@ use crate::{
     ArbitrageError, ExchangeId, ExecutionInstruction, OrderBook, OrderType, Result, Side, Signal,
     Symbol,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{debug, warn};
+
+/// Maximum acceptable age for market data in milliseconds
+const DEFAULT_MAX_DATA_AGE_MS: u64 = 5000;
 
 /// Core strategy trait that all arbitrage strategies must implement.
 ///
@@ -90,6 +94,42 @@ pub trait Strategy: Send + Sync {
     /// `Ok(true)` if signal passes filters, `Ok(false)` if rejected,
     /// or an error if filtering failed.
     fn filter(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool>;
+
+    /// Checks the health of exchanges involved in a signal.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The signal to check
+    /// * `market_bundle` - Market bundle containing data freshness info
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if all exchanges in signal are healthy, `Ok(false)` if any are unhealthy.
+    fn check_exchange_health(
+        &self,
+        signal: &RawSignal,
+        market_bundle: &MarketBundle,
+    ) -> Result<bool> {
+        let exchanges = signal.get_exchanges();
+        let mut unhealthy_exchanges: Vec<ExchangeId> = Vec::new();
+
+        for &exchange in &exchanges {
+            if !market_bundle.is_healthy(exchange, &signal.symbol) {
+                unhealthy_exchanges.push(exchange);
+            }
+        }
+
+        if !unhealthy_exchanges.is_empty() {
+            warn!(
+                target: "exchange_health",
+                "Signal {} rejected: unhealthy exchanges {:?}",
+                signal.strategy_id, unhealthy_exchanges
+            );
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
 
     /// Plans execution for a validated signal.
     ///
@@ -163,16 +203,23 @@ pub trait ArbitrageStrategy: Strategy {
     /// 4. Profit exceeds minimum threshold
     /// 5. Total notional doesn't exceed max exposure
     /// 6. Inventory validation (via hook)
+    /// 7. Exchange health validation (via hook)
     ///
     /// # Arguments
     ///
     /// * `signal` - The signal to validate
     /// * `context` - Filter constraints
+    /// * `market_bundle` - Market bundle for health checks
     ///
     /// # Returns
     ///
     /// `Ok(true)` if signal passes all checks, `Ok(false)` otherwise.
-    fn validate_signal(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool> {
+    fn validate_signal(
+        &self,
+        signal: &RawSignal,
+        context: &FilterContext,
+        market_bundle: &MarketBundle,
+    ) -> Result<bool> {
         if !signal.is_valid() {
             return Ok(false);
         }
@@ -195,7 +242,29 @@ pub trait ArbitrageStrategy: Strategy {
             return Ok(false);
         }
 
+        if !self.validate_exchange_health(signal, market_bundle)? {
+            return Ok(false);
+        }
+
         self.validate_inventory(signal, context)
+    }
+
+    /// Validates exchange health for all exchanges in a signal.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The signal to check
+    /// * `market_bundle` - Market bundle containing data freshness info
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if all exchanges are healthy, `Ok(false)` otherwise.
+    fn validate_exchange_health(
+        &self,
+        signal: &RawSignal,
+        market_bundle: &MarketBundle,
+    ) -> Result<bool> {
+        self.check_exchange_health(signal, market_bundle)
     }
 
     /// Validates inventory constraints.
@@ -374,6 +443,73 @@ impl MarketBundle {
             .iter()
             .filter(|((_, s), _)| *s == target_symbol)
             .map(|(_, t)| t)
+            .collect()
+    }
+
+    /// Checks if an exchange has fresh data for a symbol.
+    ///
+    /// An exchange is considered healthy if it has order book or ticker data
+    /// that is no older than the specified maximum age.
+    ///
+    /// # Arguments
+    ///
+    /// * `exchange` - The exchange to check
+    /// * `symbol` - The trading symbol
+    /// * `max_age_ms` - Maximum acceptable age in milliseconds (default: 5000)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the exchange has fresh data, `false` otherwise.
+    pub fn is_healthy(&self, exchange: ExchangeId, symbol: &Symbol) -> bool {
+        self.is_healthy_with_max_age(exchange, symbol, DEFAULT_MAX_DATA_AGE_MS)
+    }
+
+    /// Checks if an exchange has fresh data with custom max age.
+    ///
+    /// # Arguments
+    ///
+    /// * `exchange` - The exchange to check
+    /// * `symbol` - The trading symbol
+    /// * `max_age_ms` - Maximum acceptable age in milliseconds
+    ///
+    /// # Returns
+    ///
+    /// `true` if the exchange has fresh data, `false` otherwise.
+    pub fn is_healthy_with_max_age(
+        &self,
+        exchange: ExchangeId,
+        symbol: &Symbol,
+        max_age_ms: u64,
+    ) -> bool {
+        let max_age = Duration::milliseconds(max_age_ms as i64);
+        let now = Utc::now();
+
+        if let Some(age) = self.get_data_age(exchange, symbol) {
+            return age <= max_age;
+        }
+
+        false
+    }
+
+    /// Gets health status for all exchanges with data for a symbol.
+    ///
+    /// # Arguments
+    ///
+    /// * `symbol` - The trading symbol
+    /// * `max_age_ms` - Maximum acceptable age in milliseconds (default: 5000)
+    ///
+    /// # Returns
+    ///
+    /// A vector of tuples containing (exchange, is_healthy).
+    pub fn get_exchange_health_status(
+        &self,
+        symbol: &Symbol,
+        max_age_ms: u64,
+    ) -> Vec<(ExchangeId, bool)> {
+        let exchanges = self.get_exchanges_for_symbol(symbol);
+        exchanges
+            .into_iter()
+            .map(|ex| (ex, self.is_healthy_with_max_age(ex, symbol, max_age_ms)))
             .collect()
     }
 }

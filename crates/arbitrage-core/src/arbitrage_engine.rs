@@ -35,7 +35,7 @@ use rustc_hash::FxHashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ============================================================================
 // Types
@@ -84,6 +84,8 @@ pub struct EngineStats {
     pub signals_detected: u64,
     pub signals_filtered: u64,
     pub signals_emitted: u64,
+    pub signals_from_unhealthy_exchanges: u64,
+    pub statistics_retrieval_failures: u64,
     pub last_detection_time: Option<DateTime<Utc>>,
 }
 
@@ -332,14 +334,15 @@ impl ArbitrageEngine {
     /// Process a raw signal through the complete validation pipeline
     ///
     /// Pipeline stages:
-    /// 1. Strategy filtering (strategy-specific rules)
+    /// 1. Strategy-specific filtering
     /// 2. Deduplication check
-    /// 3. Fee calculation (net profit after fees)
-    /// 4. Risk validation (exposure limits, inventory)
-    /// 5. Size calculation (order book depth analysis)
-    /// 6. Confidence scoring (multi-factor scoring)
-    /// 7. Threshold check (min profit, min confidence)
-    /// 8. Storage and emission
+    /// 3. Exchange health validation
+    /// 4. Fee calculation (net profit after fees)
+    /// 5. Risk validation (exposure limits, inventory)
+    /// 6. Size calculation (order book depth analysis)
+    /// 7. Confidence scoring (multi-factor scoring)
+    /// 8. Threshold check (min profit, min confidence)
+    /// 9. Storage and emission
     async fn process_signal_pipeline(
         &self,
         raw_signal: RawSignal,
@@ -369,7 +372,16 @@ impl ArbitrageEngine {
             return Ok(None);
         }
 
-        // Stage 3: Fee calculation
+        // Stage 3: Exchange health validation
+        if !self.validate_exchange_health(&raw_signal, market_bundle)? {
+            for leg in &raw_signal.legs {
+                self.increment_unhealthy_exchange_signals(leg.exchange);
+            }
+            debug!("Signal rejected due to unhealthy exchanges");
+            return Ok(None);
+        }
+
+        // Stage 4: Fee calculation
         let net_spread_bps = match self.confidence_scorer.calculate_net_spread_bps(
             buy_leg.price,
             sell_leg.price,
@@ -613,6 +625,38 @@ impl ArbitrageEngine {
         Ok(true)
     }
 
+    /// Validate exchange health for all exchanges in a signal
+    fn validate_exchange_health(
+        &self,
+        raw_signal: &RawSignal,
+        market_bundle: &MarketBundle,
+    ) -> Result<bool> {
+        let exchanges = raw_signal.get_exchanges();
+        let max_age_ms = self.config.trading.stale_orderbook_threshold_ms;
+
+        for &exchange in &exchanges {
+            if !market_bundle.is_healthy_with_max_age(exchange, &raw_signal.symbol, max_age_ms) {
+                warn!(
+                    target: "exchange_health",
+                    "Exchange {} is unhealthy for signal on {}",
+                    exchange, raw_signal.symbol
+                );
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Handle statistics retrieval failure with logging and metrics
+    fn handle_stats_retrieval_failure(&self, error_message: &str) {
+        self.increment_stats_retrieval_failure();
+        error!(
+            target: "statistics",
+            "Statistics retrieval failed: {}", error_message
+        );
+    }
+
     /// Check if signal should be emitted (deduplication)
     fn should_emit_signal(&self, key: &OpportunityKey, profit_bps: i32) -> bool {
         if let Some(cached) = self.signal_cache.get(key) {
@@ -656,6 +700,20 @@ impl ArbitrageEngine {
             .fetch_add(1, Ordering::SeqCst);
     }
 
+    /// Increment counter for signals from unhealthy exchanges
+    fn increment_unhealthy_exchange_signals(&self, exchange: ExchangeId) {
+        let key = format!("signals_unhealthy_{}", exchange);
+        self.stats
+            .entry(Box::leak(key.into_boxed_str()))
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Increment counter for statistics retrieval failures
+    fn increment_stats_retrieval_failure(&self) {
+        self.increment_stat("statistics_retrieval_failures");
+    }
+
     /// Get engine statistics
     pub fn get_stats(&self) -> EngineStats {
         let mut unique_symbols = FxHashSet::default();
@@ -682,6 +740,16 @@ impl ArbitrageEngine {
             signals_emitted: self
                 .stats
                 .get("signals_emitted")
+                .map(|v| v.load(Ordering::SeqCst))
+                .unwrap_or(0),
+            signals_from_unhealthy_exchanges: self
+                .stats
+                .get("signals_from_unhealthy_exchanges")
+                .map(|v| v.load(Ordering::SeqCst))
+                .unwrap_or(0),
+            statistics_retrieval_failures: self
+                .stats
+                .get("statistics_retrieval_failures")
                 .map(|v| v.load(Ordering::SeqCst))
                 .unwrap_or(0),
             last_detection_time: Some(Utc::now()),

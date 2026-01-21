@@ -4,12 +4,16 @@ use exchange_connectors::{
         bitstamp::BitstampConnector, bybit::BybitConnector, gateio::GateioConnector,
         kraken::KrakenConnector, mexc::MEXCConnector, okx::OKXConnector,
     },
-    connector::ExchangeConnector,
+    connector::{ConnectorConfig, ExchangeConnector},
     events::ConnectionEvent,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
+use warp;
 
 /// Test configuration for each exchange
 struct TestConfig {
@@ -793,4 +797,266 @@ async fn test_individual_kraken_connector() {
         "Kraken connector success rate {:.1}% is below 70%",
         results.success_rate()
     );
+}
+
+#[cfg(test)]
+mod disconnected_exchange_tests {
+    use super::*;
+    use exchange_connectors::connector::ExchangeConnector;
+    use reqwest::Client;
+    use std::net::{SocketAddr, TcpListener};
+    use tokio::net::TcpListener as AsyncTcpListener;
+    use tokio::time::timeout;
+    use warp::Filter;
+
+    async fn start_mock_server() -> String {
+        let route = warp::any().map(|| warp::reply::html("OK"));
+
+        let addr = AsyncTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = addr.local_addr().port();
+
+        tokio::spawn(warp::serve(route).run(addr));
+
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_orderbook_from_disconnected_exchange() {
+        let url = start_mock_server().await;
+
+        let mut config = ConnectorConfig::default();
+        config.exchange_id = ExchangeId::OKX;
+        config.rest_url = url;
+        config.order_book_depth = 10;
+
+        let connector = OKXConnector {
+            base: ConnectorBase::new(config),
+            client: Client::new(),
+            subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
+        };
+
+        let symbol = Symbol::new("BTC", "USDT");
+        let result = timeout(Duration::from_secs(5), connector.fetch_order_book(&symbol)).await;
+
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Should fail when exchange is disconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_health_check_when_disconnected() {
+        let url = start_mock_server().await;
+
+        let mut config = ConnectorConfig::default();
+        config.exchange_id = ExchangeId::OKX;
+        config.rest_url = url;
+
+        let connector = OKXConnector {
+            base: ConnectorBase::new(config),
+            client: Client::new(),
+            subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
+        };
+
+        let health = connector.health_check().await;
+
+        assert!(
+            health.is_ok(),
+            "Health check should not panic when disconnected"
+        );
+    }
+}
+
+#[cfg(test)]
+mod malformed_response_tests {
+    use super::*;
+    use exchange_connectors::connector::ExchangeConnector;
+    use reqwest::Client;
+    use tokio::time::timeout;
+    use warp::Filter;
+
+    async fn start_malformed_server() -> String {
+        let malformed_routes = warp::path("api").and(warp::any().map(|| {
+            warp::reply::with_status(
+                r#"{"invalid": "json", "missing": ["required", "fields"], "prices": "not_numbers"}"#,
+                warp::http::StatusCode::OK,
+            )
+        }));
+
+        let addr = AsyncTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = addr.local_addr().port();
+
+        tokio::spawn(warp::serve(malformed_routes).run(addr));
+
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    async fn start_empty_server() -> String {
+        let empty_routes = warp::path("api")
+            .and(warp::any().map(|| warp::reply::with_status(r#"{}"#, warp::http::StatusCode::OK)));
+
+        let addr = AsyncTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = addr.local_addr().port();
+
+        tokio::spawn(warp::serve(empty_routes).run(addr));
+
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    async fn start_truncated_json_server() -> String {
+        let truncated_routes = warp::path("api").and(warp::any().map(|| {
+            warp::reply::with_status(
+                r#"{"data": [{"bid": "50000", "ask": "50001"#,
+                warp::http::StatusCode::OK,
+            )
+        }));
+
+        let addr = AsyncTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = addr.local_addr().port();
+
+        tokio::spawn(warp::serve(truncated_routes).run(addr));
+
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    #[tokio::test]
+    async fn test_parse_malformed_orderbook_response() {
+        let url = start_malformed_server().await;
+
+        let mut config = ConnectorConfig::default();
+        config.exchange_id = ExchangeId::OKX;
+        config.rest_url = url;
+        config.order_book_depth = 10;
+
+        let connector = OKXConnector {
+            base: ConnectorBase::new(config),
+            client: Client::new(),
+            subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
+        };
+
+        let symbol = Symbol::new("BTC", "USDT");
+        let result = timeout(Duration::from_secs(5), connector.fetch_order_book(&symbol)).await;
+
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Should fail with malformed JSON response"
+        );
+
+        let failure_count = connector.get_parsing_failure_count();
+        assert!(failure_count > 0, "Should track parsing failures");
+    }
+
+    #[tokio::test]
+    async fn test_parse_empty_response() {
+        let url = start_empty_server().await;
+
+        let mut config = ConnectorConfig::default();
+        config.exchange_id = ExchangeId::OKX;
+        config.rest_url = url;
+        config.order_book_depth = 10;
+
+        let connector = OKXConnector {
+            base: ConnectorBase::new(config),
+            client: Client::new(),
+            subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
+        };
+
+        let symbol = Symbol::new("BTC", "USDT");
+        let result = timeout(Duration::from_secs(5), connector.fetch_order_book(&symbol)).await;
+
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Should fail with empty JSON response"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_truncated_json_response() {
+        let url = start_truncated_json_server().await;
+
+        let mut config = ConnectorConfig::default();
+        config.exchange_id = ExchangeId::OKX;
+        config.rest_url = url;
+        config.order_book_depth = 10;
+
+        let connector = OKXConnector {
+            base: ConnectorBase::new(config),
+            client: Client::new(),
+            subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
+        };
+
+        let symbol = Symbol::new("BTC", "USDT");
+        let result = timeout(Duration::from_secs(5), connector.fetch_order_book(&symbol)).await;
+
+        assert!(
+            result.is_err() || result.unwrap().is_err(),
+            "Should fail with truncated JSON"
+        );
+
+        let failure_count = connector.get_parsing_failure_count();
+        assert!(
+            failure_count > 0,
+            "Should track parsing failures for truncated JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_logic_on_parsing_failure() {
+        let attempt_counter = Arc::new(Mutex::new(0u32));
+        let counter_clone = attempt_counter.clone();
+
+        let routes = warp::path("api").and(warp::any().map(move || {
+            let mut count = counter_clone.lock().unwrap();
+            *count += 1;
+
+            if *count < 3 {
+                warp::reply::with_status("{invalid json", warp::http::StatusCode::OK)
+            } else {
+                warp::reply::with_status(
+                    r#"{"data": [{"bid": "50000", "ask": "50001"}]}"#,
+                    warp::http::StatusCode::OK,
+                )
+            }
+        }));
+
+        let addr = AsyncTcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = addr.local_addr().port();
+
+        tokio::spawn(warp::serve(routes).run(addr));
+
+        let mut config = ConnectorConfig::default();
+        config.exchange_id = ExchangeId::OKX;
+        config.rest_url = format!("http://127.0.0.1:{}", port);
+        config.order_book_depth = 10;
+
+        let connector = OKXConnector {
+            base: ConnectorBase::new(config),
+            client: Client::new(),
+            subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
+            ws_handle: Arc::new(Mutex::new(None)),
+            parsing_failures: Arc::new(AtomicU64::new(0)),
+        };
+
+        let symbol = Symbol::new("BTC", "USDT");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let result = timeout(Duration::from_secs(10), connector.fetch_order_book(&symbol)).await;
+
+        let attempts = *attempt_counter.lock().unwrap();
+        assert!(
+            attempts >= 3,
+            "Should retry at least 3 times on parsing failures"
+        );
+    }
 }
