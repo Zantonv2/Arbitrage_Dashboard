@@ -1,3 +1,49 @@
+//! Persistent storage for signals and executions.
+//!
+//! This module provides SQLite-based storage for persisting arbitrage signals
+//! and execution results. It supports querying, filtering, and statistics retrieval.
+//!
+//! # Features
+//!
+//! - **Signal Storage**: Persist detected arbitrage signals with metadata
+//! - **Execution Tracking**: Track execution instructions and results
+//! - **Querying**: Flexible filtering by status, symbol, exchange, time range
+//! - **Statistics**: Get storage statistics and status counts
+//! - **Automatic Cleanup**: Maintain size limits by removing old records
+//!
+//! # Example
+//!
+//! ```rust
+//! use arbitrage_core::storage::{StorageService, StorageConfig, SignalQuery};
+//! use arbitrage_core::types::{ExchangeId, Signal, Symbol};
+//! use rust_decimal::Decimal;
+//! use chrono::Utc;
+//!
+//! async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//!     let config = StorageConfig::default();
+//!     let storage = StorageService::new(config).await?;
+//!
+//!     // Store a signal
+//!     let symbol = Symbol::new("BTC", "USDT");
+//!     let signal = Signal::new(
+//!         symbol,
+//!         ExchangeId::Binance,
+//!         ExchangeId::ByBit,
+//!         Decimal::from(50000),
+//!         Decimal::from(50100),
+//!         Utc::now(),
+//!     );
+//!
+//!     storage.store_signal(signal, Decimal::from(85), SignalStatus::Detected).await?;
+//!
+//!     // Query signals
+//!     let query = SignalQuery::default();
+//!     let signals = storage.query_signals(&query).await?;
+//!
+//!     Ok(())
+//! }
+//! ```
+
 use crate::{
     types::{ExecutionInstruction, Signal},
     ArbitrageError, Result,
@@ -8,12 +54,16 @@ use sqlx::{sqlite::SqlitePool, Row};
 use std::str::FromStr;
 use uuid::Uuid;
 
-/// Storage configuration
+/// Storage configuration for the SQLite-based storage service.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageConfig {
+    /// Path to the SQLite database file
     pub database_path: String,
+    /// Maximum number of signals to retain
     pub max_signal_history: usize,
+    /// Maximum number of executions to retain
     pub max_execution_history: usize,
+    /// Enable SQLite compression (if supported)
     pub enable_compression: bool,
 }
 
@@ -28,36 +78,59 @@ impl Default for StorageConfig {
     }
 }
 
-/// Stored signal record
+/// Stored signal record with metadata.
+///
+/// Combines the signal data with storage-specific information like
+/// timestamp, confidence score, and processing status.
 #[derive(Debug, Clone)]
 pub struct StoredSignal {
+    /// The signal data
     pub signal: Signal,
+    /// When the signal was stored
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// The confidence score at storage time
     pub confidence_score: Decimal,
+    /// Current processing status
     pub status: SignalStatus,
 }
 
-/// Stored execution record
+/// Stored execution record with results.
+///
+/// Combines the execution instruction with storage-specific information
+/// including actual results and execution metrics.
 #[derive(Debug, Clone)]
 pub struct StoredExecution {
+    /// The execution instruction
     pub instruction: ExecutionInstruction,
+    /// When the execution was stored
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Current execution status
     pub status: ExecutionStatus,
+    /// Actual profit realized (if completed)
     pub actual_profit: Option<Decimal>,
+    /// Execution time in milliseconds
     pub execution_time_ms: Option<u64>,
 }
 
-/// Signal processing status
+/// Signal processing status.
+///
+/// Represents the current state of a signal in the processing pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SignalStatus {
+    /// Signal was detected but not yet processed
     Detected,
+    /// Signal was filtered out by strategy criteria
     Filtered,
+    /// Signal was executed
     Executed,
+    /// Signal expired before execution
     Expired,
+    /// Signal processing failed
     Failed,
 }
 
 impl SignalStatus {
+    /// Converts status to database string representation.
     pub(crate) fn to_string(&self) -> &'static str {
         match self {
             SignalStatus::Detected => "detected",
@@ -68,6 +141,7 @@ impl SignalStatus {
         }
     }
 
+    /// Parses status from database string.
     pub(crate) fn from_string(s: &str) -> Result<Self> {
         match s {
             "detected" => Ok(SignalStatus::Detected),
@@ -83,17 +157,25 @@ impl SignalStatus {
     }
 }
 
-/// Execution status
+/// Execution status.
+///
+/// Represents the current state of an execution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExecutionStatus {
+    /// Execution submitted, awaiting results
     Pending,
+    /// Partially filled
     PartiallyFilled,
+    /// Fully completed
     Completed,
+    /// Execution failed
     Failed,
+    /// Execution was cancelled
     Cancelled,
 }
 
 impl ExecutionStatus {
+    /// Converts status to database string representation.
     pub(crate) fn to_string(&self) -> &'static str {
         match self {
             ExecutionStatus::Pending => "pending",
@@ -104,6 +186,7 @@ impl ExecutionStatus {
         }
     }
 
+    /// Parses status from database string.
     pub(crate) fn from_string(s: &str) -> Result<Self> {
         match s {
             "pending" => Ok(ExecutionStatus::Pending),
@@ -119,14 +202,22 @@ impl ExecutionStatus {
     }
 }
 
-/// Query parameters for retrieving signals
+/// Query parameters for retrieving signals.
+///
+/// Provides flexible filtering capabilities for signal queries.
 #[derive(Debug, Clone)]
 pub struct SignalQuery {
+    /// Maximum number of results to return
     pub limit: Option<usize>,
+    /// Filter by signal status
     pub status_filter: Option<SignalStatus>,
+    /// Filter by symbol (base or quote)
     pub symbol_filter: Option<String>,
+    /// Filter by exchange (buy or sell)
     pub exchange_filter: Option<crate::types::ExchangeId>,
+    /// Minimum confidence score filter
     pub min_confidence: Option<Decimal>,
+    /// Time range filter (start, end)
     pub time_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
 }
 
@@ -143,13 +234,41 @@ impl Default for SignalQuery {
     }
 }
 
-/// Storage service for persisting signals and executions using SQLite
+/// Storage service for persisting signals and executions.
+///
+/// Provides async methods for all storage operations including
+/// querying, inserting, updating, and statistics retrieval.
+///
+/// # Database Schema
+///
+/// The service creates two main tables:
+/// - **signals**: Stores detected arbitrage signals
+/// - **executions**: Stores execution instructions and results
+///
+/// Both tables include indexes on timestamp, status, and symbol for
+/// efficient querying.
+#[derive(Debug, Clone)]
 pub struct StorageService {
+    /// Storage configuration
     config: StorageConfig,
+    /// SQLite connection pool
     pool: SqlitePool,
 }
 
 impl StorageService {
+    /// Creates a new StorageService and initializes the database.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Storage configuration
+    ///
+    /// # Returns
+    ///
+    /// `Result<StorageService>` on success
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if database connection or table creation fails.
     pub async fn new(config: StorageConfig) -> Result<Self> {
         let database_url = format!("sqlite:{}", config.database_path);
 
@@ -163,14 +282,24 @@ impl StorageService {
         Ok(service)
     }
 
-    /// Initialize database tables
+    /// Initializes database tables and indexes.
+    ///
+    /// Creates the signals and executions tables if they don't exist,
+    /// along with indexes for efficient querying.
+    ///
+    /// # Returns
+    ///
+    /// `Result<()>` on success
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if table creation fails.
     pub async fn initialize_database(&self) -> Result<()> {
         let mut tx =
             self.pool.begin().await.map_err(|e| {
                 ArbitrageError::Storage(format!("Failed to begin transaction: {}", e))
             })?;
 
-        // Create signals table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS signals (
@@ -200,7 +329,6 @@ impl StorageService {
         .await
         .map_err(|e| ArbitrageError::Storage(format!("Failed to create signals table: {}", e)))?;
 
-        // Create executions table
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS executions (
@@ -220,7 +348,6 @@ impl StorageService {
             ArbitrageError::Storage(format!("Failed to create executions table: {}", e))
         })?;
 
-        // Create indexes for better query performance
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp)")
             .execute(&mut *tx)
             .await
@@ -249,7 +376,25 @@ impl StorageService {
         Ok(())
     }
 
-    /// Store a detected signal
+    /// Stores a detected signal.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The signal to store
+    /// * `confidence_score` - The confidence score at detection time
+    /// * `status` - The initial signal status
+    ///
+    /// # Returns
+    ///
+    /// `Result<()>` on success
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the insert fails.
+    ///
+    /// # Side Effects
+    ///
+    /// May trigger cleanup of old signals if history limit is exceeded.
     pub async fn store_signal(
         &self,
         signal: Signal,
@@ -284,20 +429,32 @@ impl StorageService {
         .bind(signal.expected_slippage.to_string())
         .bind(signal.expires_at.to_rfc3339())
         .bind(metadata_json)
-        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
         .bind(confidence_score.to_string())
         .bind(status.to_string())
         .execute(&self.pool)
         .await
         .map_err(|e| ArbitrageError::Storage(format!("Failed to store signal: {}", e)))?;
 
-        // Cleanup old signals if needed
         self.cleanup_old_signals().await?;
 
         Ok(())
     }
 
-    /// Store an execution instruction
+    /// Stores an execution instruction.
+    ///
+    /// # Arguments
+    ///
+    /// * `instruction` - The execution instruction to store
+    /// * `status` - The initial execution status
+    ///
+    /// # Returns
+    ///
+    /// `Result<()>` on success
+    ///
+    /// # Side Effects
+    ///
+    /// May trigger cleanup of old executions if history limit is exceeded.
     pub async fn store_execution(
         &self,
         instruction: ExecutionInstruction,
@@ -316,7 +473,7 @@ impl StorageService {
         )
         .bind(instruction.signal_id.to_string())
         .bind(instruction_json)
-        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
         .bind(status.to_string())
         .bind(None::<String>)
         .bind(None::<i64>)
@@ -324,13 +481,21 @@ impl StorageService {
         .await
         .map_err(|e| ArbitrageError::Storage(format!("Failed to store execution: {}", e)))?;
 
-        // Cleanup old executions if needed
         self.cleanup_old_executions().await?;
 
         Ok(())
     }
 
-    /// Update signal status
+    /// Updates the status of a signal.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal_id` - The ID of the signal to update
+    /// * `status` - The new status
+    ///
+    /// # Returns
+    ///
+    /// `Result<()>` on success
     pub async fn update_signal_status(&self, signal_id: Uuid, status: SignalStatus) -> Result<()> {
         sqlx::query("UPDATE signals SET status = ? WHERE id = ?")
             .bind(status.to_string())
@@ -344,7 +509,18 @@ impl StorageService {
         Ok(())
     }
 
-    /// Update execution status and results
+    /// Updates execution status and results.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal_id` - The signal ID associated with the execution
+    /// * `status` - The new execution status
+    /// * `actual_profit` - The realized profit (if available)
+    /// * `execution_time_ms` - The execution time in milliseconds
+    ///
+    /// # Returns
+    ///
+    /// `Result<()>` on success
     pub async fn update_execution_status(
         &self,
         signal_id: Uuid,
@@ -372,7 +548,45 @@ impl StorageService {
         Ok(())
     }
 
-    /// Query signals with filters
+    /// Queries signals with flexible filtering.
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - The query parameters including filters and limits
+    ///
+    /// # Returns
+    ///
+    /// `Result<Vec<StoredSignal>>` containing matching signals ordered by timestamp descending
+    ///
+    /// # Filtering
+    ///
+    /// The query supports filtering by:
+    /// - Status (exact match)
+    /// - Symbol (partial match on base or quote)
+    /// - Exchange (match on buy or sell)
+    /// - Minimum confidence score
+    /// - Time range (between start and end)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use arbitrage_core::storage::{StorageService, StorageConfig, SignalQuery};
+    /// use arbitrage_core::types::ExchangeId;
+    /// use chrono::{Utc, Duration};
+    ///
+    /// async fn query_example(storage: &StorageService) -> Result<(), Box<dyn std::error::Error>> {
+    ///     let query = SignalQuery {
+    ///         limit: Some(50),
+    ///         status_filter: Some(arbitrage_core::storage::SignalStatus::Detected),
+    ///         min_confidence: Some(rust_decimal::Decimal::from(50)),
+    ///         time_range: Some((Utc::now() - Duration::hours(1), Utc::now())),
+    ///         ..Default::default()
+    ///     };
+    ///
+    ///     let signals = storage.query_signals(&query).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn query_signals(&self, query: &SignalQuery) -> Result<Vec<StoredSignal>> {
         let mut sql = "SELECT * FROM signals WHERE 1=1".to_string();
         let mut params: Vec<String> = Vec::new();
@@ -432,7 +646,15 @@ impl StorageService {
         Ok(results)
     }
 
-    /// Get execution by signal ID
+    /// Gets execution by signal ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal_id` - The signal ID to look up
+    ///
+    /// # Returns
+    ///
+    /// `Result<Option<StoredExecution>>` - The execution if found
     pub async fn get_execution(&self, signal_id: Uuid) -> Result<Option<StoredExecution>> {
         let row = sqlx::query("SELECT * FROM executions WHERE signal_id = ?")
             .bind(signal_id.to_string())
@@ -447,7 +669,11 @@ impl StorageService {
         }
     }
 
-    /// Get storage statistics
+    /// Gets storage statistics.
+    ///
+    /// # Returns
+    ///
+    /// `Result<StorageStatistics>` containing counts and metrics
     pub async fn get_statistics(&self) -> Result<StorageStatistics> {
         let signal_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signals")
             .fetch_one(&self.pool)
@@ -459,7 +685,6 @@ impl StorageService {
             .await
             .map_err(|e| ArbitrageError::Storage(format!("Failed to count executions: {}", e)))?;
 
-        // Get signal status counts
         let status_rows =
             sqlx::query("SELECT status, COUNT(*) as count FROM signals GROUP BY status")
                 .fetch_all(&self.pool)
@@ -477,7 +702,6 @@ impl StorageService {
             }
         }
 
-        // Get execution status counts
         let exec_status_rows =
             sqlx::query("SELECT status, COUNT(*) as count FROM executions GROUP BY status")
                 .fetch_all(&self.pool)
@@ -500,12 +724,12 @@ impl StorageService {
             total_executions: execution_count as usize,
             signal_status_counts,
             execution_status_counts,
-            memory_usage_estimate_mb: 0.0, // SQLite handles memory
+            memory_usage_estimate_mb: 0.0,
             avg_query_time_ms: None,
         })
     }
 
-    /// Cleanup old signals
+    /// Removes old signals to stay within history limits.
     async fn cleanup_old_signals(&self) -> Result<()> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM signals")
             .fetch_one(&self.pool)
@@ -536,7 +760,7 @@ impl StorageService {
         Ok(())
     }
 
-    /// Cleanup old executions
+    /// Removes old executions to stay within history limits.
     async fn cleanup_old_executions(&self) -> Result<()> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM executions")
             .fetch_one(&self.pool)
@@ -567,7 +791,7 @@ impl StorageService {
         Ok(())
     }
 
-    /// Convert database row to StoredSignal
+    /// Converts a database row to a StoredSignal.
     fn row_to_stored_signal(&self, row: sqlx::sqlite::SqliteRow) -> Result<StoredSignal> {
         let id_str: String = row.get("id");
         let id = Uuid::parse_str(&id_str)
@@ -644,7 +868,7 @@ impl StorageService {
         })
     }
 
-    /// Convert database row to StoredExecution
+    /// Converts a database row to a StoredExecution.
     fn row_to_stored_execution(&self, row: sqlx::sqlite::SqliteRow) -> Result<StoredExecution> {
         let signal_id_str: String = row.get("signal_id");
         let signal_id = Uuid::parse_str(&signal_id_str)
@@ -685,19 +909,31 @@ impl StorageService {
         })
     }
 
-    /// Get current configuration
+    /// Gets the current configuration.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the storage configuration.
     pub fn get_config(&self) -> &StorageConfig {
         &self.config
     }
 }
 
-/// Storage statistics with performance metrics
+/// Storage statistics with performance metrics.
+///
+/// Contains counts and metrics about the storage state.
 #[derive(Debug, Clone)]
 pub struct StorageStatistics {
+    /// Total number of stored signals
     pub total_signals: usize,
+    /// Total number of stored executions
     pub total_executions: usize,
+    /// Count of signals by status
     pub signal_status_counts: std::collections::HashMap<SignalStatus, usize>,
+    /// Count of executions by status
     pub execution_status_counts: std::collections::HashMap<ExecutionStatus, usize>,
+    /// Estimated memory usage in MB
     pub memory_usage_estimate_mb: f64,
+    /// Average query time in milliseconds (if tracked)
     pub avg_query_time_ms: Option<f64>,
 }

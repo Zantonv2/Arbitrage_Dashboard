@@ -1,3 +1,30 @@
+//! Execution instruction preparation and validation.
+//!
+//! This module handles the conversion of arbitrage signals into executable
+//! order instructions, including slippage buffers, fee calculations, and
+//! comprehensive validation.
+//!
+//! # Execution Preparation Flow
+//!
+//! 1. **Price Adjustment**: Apply slippage buffer to signal prices
+//! 2. **Order Creation**: Generate buy and sell orders
+//! 3. **Outcome Calculation**: Calculate expected and worst-case profits
+//! 4. **Validation**: Verify all constraints are met
+//! 5. **Preview**: Generate human-readable execution preview
+//!
+//! # Example
+//!
+//! ```rust
+//! use arbitrage_core::execution_preparer::{ExecutionPreparer, ExecutionConfig};
+//! use arbitrage_core::types::{ExchangeId, OrderType, Signal, Symbol, TimeInForce};
+//! use rust_decimal::Decimal;
+//!
+//! let config = ExecutionConfig::default();
+//! let preparer = ExecutionPreparer::new(config);
+//!
+//! // Prepare execution from a signal
+//! ```
+
 use crate::{
     confidence_scorer::FeeSchedule,
     types::{ExecutionInstruction, Order, OrderType, Side, Signal, TimeInForce},
@@ -6,16 +33,30 @@ use crate::{
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
-/// Configuration for execution preparation
+/// Configuration for execution preparation.
+///
+/// Controls how orders are generated and validated.
 #[derive(Debug, Clone)]
 pub struct ExecutionConfig {
-    pub slippage_buffer_percent: Decimal, // e.g., 0.05 = 0.05% slippage buffer
+    /// Slippage buffer percentage (e.g., 0.0005 = 0.05%)
+    pub slippage_buffer_percent: Decimal,
+    /// Default time in force for orders
     pub default_time_in_force: TimeInForce,
+    /// Order type to use
     pub order_type: OrderType,
-    pub enable_force_execute: bool, // Allow negative worst-case profit if strategy requires
+    /// Allow execution even with negative worst-case profit
+    pub enable_force_execute: bool,
 }
 
 impl ExecutionConfig {
+    /// Creates a new ExecutionConfig.
+    ///
+    /// # Arguments
+    ///
+    /// * `slippage_buffer_percent` - Buffer for adverse slippage
+    /// * `default_time_in_force` - Default TIF for orders
+    /// * `order_type` - Order type to use
+    /// * `enable_force_execute` - Allow negative worst-case execution
     pub fn new(
         slippage_buffer_percent: Decimal,
         default_time_in_force: TimeInForce,
@@ -33,6 +74,7 @@ impl ExecutionConfig {
         }
     }
 
+    /// Checks if running in production mode.
     fn is_production() -> bool {
         std::env::var("ARBITRAGE_ENV")
             .map(|v| v.eq_ignore_ascii_case("production"))
@@ -43,22 +85,59 @@ impl ExecutionConfig {
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self::new(
-            Decimal::new(5, 4), // 0.0005 = 0.05% slippage buffer
+            Decimal::new(5, 4),
             TimeInForce::IOC,
             OrderType::Limit,
-            false, // Conservative default
+            false,
         )
     }
 }
 
-/// Prepares execution instructions from signals
+/// Prepares execution instructions from signals.
+///
+/// Takes a validated signal and quantity, then generates a complete
+/// execution plan with buy and sell orders, fee estimates, and
+/// profit projections.
+///
+/// # Process
+///
+/// 1. Applies slippage buffer to signal prices
+/// 2. Creates buy and sell orders
+/// 3. Calculates expected and worst-case outcomes
+/// 4. Validates against constraints
+/// 5. Returns instruction ready for execution
+///
+/// # Example
+///
+/// ```rust
+/// use arbitrage_core::execution_preparer::{ExecutionPreparer, ExecutionConfig};
+/// use arbitrage_core::types::{ExchangeId, Signal, Symbol};
+/// use rust_decimal::Decimal;
+/// use chrono::Utc;
+///
+/// let preparer = ExecutionPreparer::default();
+///
+/// let signal = Signal::new(
+///     Symbol::new("BTC", "USDT"),
+///     ExchangeId::Binance,
+///     ExchangeId::ByBit,
+///     Decimal::from(50000),
+///     Decimal::from(50100),
+///     Utc::now(),
+/// );
+///
+/// let instruction = preparer.prepare_execution(&signal, Decimal::from(1));
+/// ```
 #[derive(Debug, Clone)]
 pub struct ExecutionPreparer {
+    /// Configuration
     config: ExecutionConfig,
-    fee_schedules: HashMap<crate::types::ExchangeId, FeeSchedule>, // Real fee data
+    /// Fee schedules by exchange
+    fee_schedules: HashMap<crate::types::ExchangeId, FeeSchedule>,
 }
 
 impl ExecutionPreparer {
+    /// Creates a new ExecutionPreparer with default configuration.
     pub fn new(config: ExecutionConfig) -> Self {
         Self {
             config,
@@ -66,7 +145,12 @@ impl ExecutionPreparer {
         }
     }
 
-    /// Update fee schedule for an exchange
+    /// Updates fee schedule for an exchange.
+    ///
+    /// # Arguments
+    ///
+    /// * `exchange` - The exchange
+    /// * `schedule` - The fee schedule
     pub fn update_fee_schedule(
         &mut self,
         exchange: crate::types::ExchangeId,
@@ -75,27 +159,59 @@ impl ExecutionPreparer {
         self.fee_schedules.insert(exchange, schedule);
     }
 
-    /// Get fee rate for a specific exchange
+    /// Gets fee rate for an exchange.
+    ///
+    /// # Arguments
+    ///
+    /// * `exchange` - The exchange
+    /// * `is_maker` - True for maker fee, false for taker
+    ///
+    /// # Returns
+    ///
+    /// The fee rate, or 0.1% default if not configured.
     fn get_fee_rate(&self, exchange: crate::types::ExchangeId, is_maker: bool) -> Decimal {
         self.fee_schedules
             .get(&exchange)
             .map(|f| f.get_fee_rate(is_maker))
-            .unwrap_or_else(|| Decimal::new(1, 3)) // Default 0.1% if no fee schedule
+            .unwrap_or_else(|| Decimal::new(1, 3))
     }
 
-    /// Prepare execution instruction from signal
+    /// Prepares execution instruction from a signal.
+    ///
+    /// Generates a complete execution plan with:
+    /// - Slippage-buffered orders
+    /// - Fee estimates
+    /// - Expected and worst-case profit calculations
+    /// - Comprehensive validation
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The arbitrage signal
+    /// * `quantity` - The quantity to trade
+    ///
+    /// # Returns
+    ///
+    /// `Result<ExecutionInstruction>` ready for execution
+    ///
+    /// # Preconditions
+    ///
+    /// - Signal must have valid buy/sell prices
+    /// - Quantity must be positive
+    ///
+    /// # Postconditions
+    ///
+    /// - Returns instruction with orders, fees, and profit projections
+    /// - Instruction validation_errors will be empty if valid
     pub fn prepare_execution(
         &self,
         signal: &Signal,
         quantity: Decimal,
     ) -> Result<ExecutionInstruction> {
-        // Apply slippage buffer to prices
         let slippage_multiplier = self.config.slippage_buffer_percent / Decimal::from(100);
 
         let buy_price_with_buffer = signal.buy_price * (Decimal::ONE + slippage_multiplier);
         let sell_price_with_buffer = signal.sell_price * (Decimal::ONE - slippage_multiplier);
 
-        // Create buy order
         let buy_order = Order::new(
             signal.buy_exchange,
             signal.symbol.clone(),
@@ -105,7 +221,6 @@ impl ExecutionPreparer {
             Some(buy_price_with_buffer),
         );
 
-        // Create sell order
         let sell_order = Order::new(
             signal.sell_exchange,
             signal.symbol.clone(),
@@ -115,23 +230,24 @@ impl ExecutionPreparer {
             Some(sell_price_with_buffer),
         );
 
-        // Create execution instruction
         let mut instruction = ExecutionInstruction::new(signal.id, buy_order, sell_order);
 
-        // Set time in force
         instruction.buy_order.time_in_force = self.config.default_time_in_force;
         instruction.sell_order.time_in_force = self.config.default_time_in_force;
 
-        // Calculate expected outcomes
         self.calculate_expected_outcomes(&mut instruction, signal)?;
 
-        // Validate the instruction
         self.validate_instruction(&mut instruction)?;
 
         Ok(instruction)
     }
 
-    /// Calculate expected and worst-case profit scenarios
+    /// Calculates expected and worst-case profit scenarios.
+    ///
+    /// # Arguments
+    ///
+    /// * `instruction` - The instruction to update
+    /// * `signal` - The source signal
     fn calculate_expected_outcomes(
         &self,
         instruction: &mut ExecutionInstruction,
@@ -139,18 +255,15 @@ impl ExecutionPreparer {
     ) -> Result<()> {
         let quantity = instruction.buy_order.quantity;
 
-        // Expected case: fill at signal prices
         let expected_buy_cost = signal.buy_price * quantity;
         let expected_sell_revenue = signal.sell_price * quantity;
         instruction.expected_profit = expected_sell_revenue - expected_buy_cost;
 
-        // Worst case: fill at buffered prices
         let worst_buy_cost = instruction.buy_order.price.unwrap_or(signal.buy_price) * quantity;
         let worst_sell_revenue =
             instruction.sell_order.price.unwrap_or(signal.sell_price) * quantity;
         instruction.worst_case_profit = worst_sell_revenue - worst_buy_cost;
 
-        // Calculate fees using real fee schedules (assume taker for conservative estimate)
         let buy_fee_rate = self.get_fee_rate(signal.buy_exchange, false);
         let sell_fee_rate = self.get_fee_rate(signal.sell_exchange, false);
 
@@ -159,7 +272,6 @@ impl ExecutionPreparer {
         instruction.total_fees =
             instruction.buy_order.expected_fee + instruction.sell_order.expected_fee;
 
-        // Adjust profits for fees
         instruction.expected_profit -= instruction.total_fees;
         instruction.worst_case_profit -= instruction.total_fees;
 
@@ -168,11 +280,21 @@ impl ExecutionPreparer {
         Ok(())
     }
 
-    /// Validate execution instruction
+    /// Validates execution instruction.
+    ///
+    /// Performs comprehensive validation including:
+    /// - Order completeness (prices for limit orders)
+    /// - Quantity validity (positive, matching)
+    /// - Symbol matching
+    /// - Profitability (unless force_execute enabled)
+    /// - Minimum notional values
+    ///
+    /// # Arguments
+    ///
+    /// * `instruction` - The instruction to validate
     fn validate_instruction(&self, instruction: &mut ExecutionInstruction) -> Result<()> {
         instruction.validation_errors.clear();
 
-        // Check that we have prices for limit orders
         if instruction.buy_order.order_type == OrderType::Limit
             && instruction.buy_order.price.is_none()
         {
@@ -189,7 +311,6 @@ impl ExecutionPreparer {
                 .push("Sell order missing price for limit order".to_string());
         }
 
-        // Check quantities are positive
         if instruction.buy_order.quantity <= Decimal::ZERO {
             instruction
                 .validation_errors
@@ -202,21 +323,18 @@ impl ExecutionPreparer {
                 .push("Sell order quantity must be positive".to_string());
         }
 
-        // Check quantities match
         if instruction.buy_order.quantity != instruction.sell_order.quantity {
             instruction
                 .validation_errors
                 .push("Buy and sell quantities must match".to_string());
         }
 
-        // Check symbols match
         if instruction.buy_order.symbol != instruction.sell_order.symbol {
             instruction
                 .validation_errors
                 .push("Buy and sell symbols must match".to_string());
         }
 
-        // Check that expected profit is positive (unless force execute is enabled)
         if instruction.expected_profit <= Decimal::ZERO && !self.config.enable_force_execute {
             instruction.validation_errors.push(format!(
                 "Expected profit {} is not positive",
@@ -230,7 +348,6 @@ impl ExecutionPreparer {
             );
         }
 
-        // Check that worst case is still profitable (unless force execute is enabled)
         if instruction.worst_case_profit <= Decimal::ZERO && !self.config.enable_force_execute {
             instruction.validation_errors.push(format!(
                 "Worst case profit {} is not positive (use force_execute to override)",
@@ -238,7 +355,6 @@ impl ExecutionPreparer {
             ));
         } else if instruction.worst_case_profit <= Decimal::ZERO && self.config.enable_force_execute
         {
-            // Log warning but allow execution
             tracing::warn!(
                 signal_id = %instruction.signal_id,
                 worst_case_profit = %instruction.worst_case_profit,
@@ -246,8 +362,7 @@ impl ExecutionPreparer {
             );
         }
 
-        // Validate minimum notional values (placeholder)
-        let min_notional = Decimal::from(10); // $10 minimum
+        let min_notional = Decimal::from(10);
 
         if let Some(buy_price) = instruction.buy_order.price {
             let buy_notional = buy_price * instruction.buy_order.quantity;
@@ -272,7 +387,16 @@ impl ExecutionPreparer {
         Ok(())
     }
 
-    /// Format quantity to exchange precision
+    /// Formats quantity to exchange precision.
+    ///
+    /// # Arguments
+    ///
+    /// * `quantity` - The quantity to format
+    /// * `precision` - Number of decimal places
+    ///
+    /// # Returns
+    ///
+    /// Quantity rounded to the specified precision.
     pub fn format_quantity(&self, quantity: Decimal, precision: u32) -> Decimal {
         let scale = 10_u64.pow(precision);
         let scaled = quantity * Decimal::from(scale);
@@ -280,7 +404,18 @@ impl ExecutionPreparer {
         rounded / Decimal::from(scale)
     }
 
-    /// Generate preview of execution
+    /// Generates a preview of the execution.
+    ///
+    /// Creates a human-readable summary of the execution instruction
+    /// including order details and profit projections.
+    ///
+    /// # Arguments
+    ///
+    /// * `instruction` - The instruction to preview
+    ///
+    /// # Returns
+    ///
+    /// An `ExecutionPreview` with formatted summary.
     pub fn generate_preview(&self, instruction: &ExecutionInstruction) -> ExecutionPreview {
         ExecutionPreview {
             buy_order_summary: OrderSummary {
@@ -317,38 +452,55 @@ impl ExecutionPreparer {
         }
     }
 
-    /// Get current configuration
+    /// Gets the current configuration.
     pub fn get_config(&self) -> &ExecutionConfig {
         &self.config
     }
 
-    /// Update configuration
+    /// Updates the configuration.
     pub fn update_config(&mut self, config: ExecutionConfig) {
         self.config = config;
     }
 }
 
-/// Summary of an order for preview
+/// Summary of an order for preview purposes.
 #[derive(Debug, Clone)]
 pub struct OrderSummary {
+    /// Exchange for the order
     pub exchange: crate::types::ExchangeId,
+    /// Trading symbol
     pub symbol: crate::types::Symbol,
+    /// Buy or Sell
     pub side: Side,
+    /// Order quantity
     pub quantity: Decimal,
+    /// Order price (None for market orders)
     pub price: Option<Decimal>,
+    /// Estimated cost (price * quantity)
     pub estimated_cost: Decimal,
+    /// Estimated fee
     pub estimated_fee: Decimal,
 }
 
-/// Preview of execution instruction
+/// Preview of an execution instruction.
+///
+/// Provides a human-readable summary of what an execution will do,
+/// including profit projections and validation status.
 #[derive(Debug, Clone)]
 pub struct ExecutionPreview {
+    /// Buy order summary
     pub buy_order_summary: OrderSummary,
+    /// Sell order summary
     pub sell_order_summary: OrderSummary,
+    /// Expected profit after fees
     pub expected_profit: Decimal,
+    /// Worst-case profit with slippage
     pub worst_case_profit: Decimal,
+    /// Total fees for both orders
     pub total_fees: Decimal,
+    /// Whether the instruction is valid
     pub is_valid: bool,
+    /// Validation errors, if any
     pub validation_errors: Vec<String>,
 }
 
