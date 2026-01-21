@@ -12,8 +12,16 @@ QUICK REFERENCE:
 - Issue numbers: $ARGUMENTS (single: #123, range: 105-110, list: 105 106 107)
 - Repository: Current repo (auto-detected via gh repo view`)
 - Worktree path: ../issue{ISSUENUM}-worktree (per-issue)
-- Source branch: upstream (permanent, never deleted)
-- Target branch: main (PRs merge from upstream to main)
+- Remote: `upstream` points to GitHub repository
+- Source branch: `upstream/main` on GitHub (permanent source, syncs with local upstream)
+- Target branch: `main` on GitHub (PRs merge here)
+- Feature branch: `batch-fix-{ISSUES}` (temporary, deleted after merge)
+
+IMPORTANT BRANCH HYGIENE:
+- `upstream/main` = GitHub main branch (read from remote, push back after PR merge)
+- Local `upstream/main` tracks GitHub main (git fetch upstream)
+- Feature branch created from local `upstream/main` state
+- AFTER PR MERGE: sync GitHub `upstream` to match merged `main`
 
 FLAGS:
 - --auto: Enable strict auto-merge (5 validators, 95% avg success, ONE PR only)
@@ -70,12 +78,22 @@ For each issue in $ARGUMENTS:
 2.1.4 Sync baseline: git fetch upstream && git reset --hard upstream/main
 
 2.2 CONTEXT CAPTURE
-2.2.1 mkdir -p output/issue-fix-artifacts
+2.2.1 mkdir -p output/issue-fix-artifacts/per-issue/issue_$ISSUE
 2.2.2 Capture issue context:
-   gh issue view $ISSUE --json title,body,author,state,labels > output/issue-fix-artifacts/issue_context.json
-   gh api "repos/{owner}/{repo}/issues/$ISSUE/comments" > output/issue-fix-artifacts/issue_comments.json
-   gh api "repos/{owner}/{repo}/issues/$ISSUE/timeline" > output/issue-fix-artifacts/issue_timeline.json
-2.2.3 Create full_issue_context.json for this issue
+    gh issue view $ISSUE --json title,body,author,state,labels > output/issue-fix-artifacts/per-issue/issue_$ISSUE/issue_context.json
+    gh api "repos/{owner}/{repo}/issues/$ISSUE/comments" > output/issue-fix-artifacts/per-issue/issue_$ISSUE/issue_comments.json
+    gh api "repos/{owner}/{repo}/issues/$ISSUE/timeline" > output/issue-fix-artifacts/per-issue/issue_$ISSUE/issue_timeline.json
+2.2.3 Create full_issue_context.json:
+{
+  "issue_number": "$ISSUE",
+  "title": "from issue_context.json",
+  "body": "from issue_context.json",  
+  "state": "from issue_context.json",
+  "labels": "from issue_context.json",
+  "comments": "merged from issue_comments.json",
+  "timeline": "merged from issue_timeline.json",
+  "extracted_at": "ISO timestamp"
+}
 
 2.3 TASK EXTRACTION & CLUSTERING
 2.3.1 Parse full_issue_context.json into atomic tasks
@@ -103,8 +121,9 @@ For each issue in $ARGUMENTS:
 
 2.6 ACCUMULATE CHANGES
 2.6.1 cd ../batch-fix-worktree
-2.6.2 git fetch ../issue$ISSUE-worktree
-2.6.3 git merge --no-edit issue$ISSUE --allow-unrelated-histories 2>/dev/null || git cherry-pick $(cd ../issue$ISSUE-worktree && git log --oneline -1 | cut -d' ' -f1)
+2.6.2 ISSUE_COMMIT=$(cd ../issue$ISSUE-worktree && git log --oneline -1 | cut -d' ' -f1)
+2.6.3 git cherry-pick $ISSUE_COMMIT
+     # Note: Direct merge won't work across worktrees. Cherry-pick is reliable.
 2.6.4 Remove issue worktree: git worktree remove ../issue$ISSUE-worktree
 
 3. FINAL VALIDATION (BATCH-LEVEL)
@@ -161,8 +180,7 @@ Pass criteria:
 4.6 No partial passing - must achieve threshold
 
 5. ONE PULL REQUEST CREATION (BATCH-LEVEL)
-5.1 git checkout -b batch-fix-{ISSUES} (created from upstream)
-   Example: batch-fix-105-106-107 for issues 105, 106, 107
+5.1 git checkout -b batch-fix-{ISSUES} (created from local upstream/main tracking GitHub main)
 5.2 Remove artifacts: rm -rf output/
 5.3 git add -A && git commit -m "feat: resolve issues $ISSUES - batch fix
 
@@ -172,10 +190,10 @@ Pass criteria:
 
 Validation: 100% complete | All criteria passed | Project compiles and works"
 5.4 git push upstream batch-fix-{ISSUES}
-5.5 Create ONE PR from upstream to main:
-   gh pr create --head upstream:batch-fix-{ISSUES} --base main \
-     --title "Fix issues #$ISSUES: Batch resolution" \
-     --body "Batch of $COUNT issues resolved with 100% completion.
+5.5 Create ONE PR from upstream/batch-fix-{ISSUES} to main:
+    gh pr create --head batch-fix-{ISSUES} --base main \
+      --title "Fix issues #$ISSUES: Batch resolution" \
+      --body "Batch of $COUNT issues resolved with 100% completion.
 
 ISSUES RESOLVED:
 $ISSUE_LIST
@@ -190,24 +208,29 @@ VALIDATION RESULTS:
 - Code style compliant: YES
 
 MODE: {AUTO_MODE}" \
-     --label "auto-pr,needs-review"
-   - If label fails: Retry without labels (labels are optional)
+      --label "auto-pr,needs-review"
+    - If label fails: Retry without labels (labels are optional)
 
 6. MERGE DECISION
 IF AUTO_MODE=true AND 95% avg success:
 6.1 Auto-merge: gh pr merge --admin --squash --delete-branch --body "AUTO-MERGED: 100% complete ({avg_score}% avg, 5 validators)"
 6.2 Close ALL issues: for issue in $ISSUES; gh issue close $issue
-6.3 Cleanup: 
-   - git worktree remove ../batch-fix-worktree
-   - git branch -D batch-fix-{ISSUES}
-   - Remove all issue worktrees
-   - Keep upstream branch permanent
+6.3 SYNC UPSTREAM BRANCH:
+    - Get merged commit SHA: git log -1 --format=%H
+    - Push to GitHub upstream: git push upstream <SHA>:refs/heads/upstream --force
+    - This updates the permanent source branch to include the merged changes
+6.4 Cleanup: 
+    - git worktree remove ../batch-fix-worktree
+    - git branch -D batch-fix-{ISSUES}
+    - Remove all issue worktrees
+    - Keep remote upstream branch (synced above)
 
 ELSE (Default mode):
 6.1 Output PR URL and wait for /approve comment
 6.2 On /approve: gh pr merge --admin --squash --delete-branch
 6.3 Close all issues
-6.4 Cleanup as above
+6.4 SYNC UPSTREAM BRANCH: Same as 6.3 in AUTO_MODE block above
+6.5 Cleanup as above
 
 7. FINALIZATION
 7.1 Generate batch_summary.md with:
@@ -222,12 +245,15 @@ CONSTRAINTS:
 - Worktree isolation: Per-issue worktrees + ONE batch worktree
 - Sequential issue processing, parallel cluster processing
 - NO partial PRs - ONE PR only when ALL issues 100% complete
+- If ANY issue fails, batch FAILS - no partial PRs
 - AUTO_MODE: 95% average, NO LAZINESS, all validators must pass
 - Default mode: 2 validators, >=7/10 on EACH criterion
 - No personal coding: Delegate ALL implementation
 - User approval mandatory before merge (except AUTO_MODE with 95%+)
 - Remove output/ folder before PR commit
-- UPSTREAM BRANCH IS PERMANENT - never delete
+- UPSTREAM BRANCH SYNC: After PR merge to main, sync GitHub upstream to match merged commit
+  - Never push local upstream to GitHub main (would overwrite merged changes)
+  - After merge: push merged commit to GitHub upstream branch
 - Feature branches deleted after merge
 - Labels are optional - graceful fallback if they don't exist
 - Dynamic reconciliations: calculated per batch, adaptive extension based on progress
@@ -235,6 +261,37 @@ CONSTRAINTS:
   - Adaptive: +1 if improvement >=10%, -1 if regression >5%
   - Hard cap: max_reconciliations + 2
 - If ANY issue fails after all reconciliations: BATCH FAILS, NO PR created
+- TRANSIENT FAILURES: Retry up to 3 times with 5s backoff for:
+  - gh api network errors
+  - cargo lock contention ("Blocking waiting for file lock")
+  - Subagent timeouts (>5min)
+
+RECONCILIATION FILE FORMAT (reconciliation_{n}.json):
+{
+  "round": n,
+  "issues_failed": ["118", "128"],
+  "fix_tasks": [
+    {
+      "issue": "118",
+      "task": "Fix clippy warnings in convergence_arbitrage.rs",
+      "file": "crates/arbitrage-core/src/strategies/strategy_impl/convergence_arbitrage.rs",
+      "line": 123
+    }
+  ],
+  "adaptive_reconciliations": 2,
+  "improvement_from_previous": "15%"
+}
+
+PLACEHOLDER VALUES:
+- $ARGUMENTS: Issue numbers from command input
+- $ISSUES: Hyphen-separated issue numbers (e.g., "105-106-107" for range, "105 106 107" for list)
+- {title}: From gh issue view $ISSUE --json title -q '.title'
+- {summary}: First line of issue body (gh issue view $ISSUE --json body -q '.body' | head -1)
+- {avg_score}: Average of all validator scores (calculate from validation_round_*.json files)
+- $ISSUE_LIST: Formatted list:
+  ```bash
+  gh issue view $ISSUE --json title,number -q '.number, .title' | sed 's/,/#: /' | sed 's/^/- Issue #/'
+  ```
 
 OUTPUT ARTIFACTS:
 output/issue-fix-artifacts/
@@ -244,7 +301,7 @@ output/issue-fix-artifacts/
 ├── failed_issues.json (if any failures)
 ├── validation_progress.json (adaptive tracking per issue)
 ├── per-issue/
-│   ├── issue_{N}/
+│   ├── issue_{N}/           # Per-issue artifacts (isolated to avoid conflicts)
 │   │   ├── issue_context.json
 │   │   ├── issue_comments.json
 │   │   ├── issue_timeline.json
