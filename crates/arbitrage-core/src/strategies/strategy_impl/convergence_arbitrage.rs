@@ -252,134 +252,151 @@ impl ConvergenceArbitrageStrategy {
         // Get all unique symbols
         let symbols = market_data.get_all_symbols();
 
-        // Check pairs of symbols for convergence opportunities
-        for i in 0..symbols.len() {
-            for j in (i + 1)..symbols.len() {
-                let symbol1 = &symbols[i];
-                let symbol2 = &symbols[j];
+        // Pre-index symbols by quote currency for O(1) lookup within groups
+        // This reduces complexity from O(n²) to O(n) for opportunity detection
+        let mut symbols_by_quote: HashMap<String, Vec<std::sync::Arc<crate::types::Symbol>>> =
+            HashMap::new();
+        for symbol in &symbols {
+            symbols_by_quote
+                .entry(symbol.quote.clone())
+                .or_default()
+                .push(symbol.clone());
+        }
 
-                // Skip if symbols are too similar (same base or quote)
-                if symbol1.base == symbol2.base || symbol1.quote == symbol2.quote {
-                    continue;
-                }
+        // Only compare symbols within same quote currency groups - O(n) total
+        for (_, quote_symbols) in &symbols_by_quote {
+            if quote_symbols.len() < 2 {
+                continue;
+            }
 
-                // Calculate correlation
-                let correlation = match self.calculate_correlation(symbol1, symbol2) {
-                    Some(corr) => corr,
-                    None => continue,
-                };
+            for i in 0..quote_symbols.len() {
+                for j in (i + 1)..quote_symbols.len() {
+                    let symbol1 = &quote_symbols[i];
+                    let symbol2 = &quote_symbols[j];
 
-                let min_correlation = self
-                    .config
-                    .custom_params
-                    .get("min_correlation")
-                    .and_then(|v| v.as_f64())
-                    .and_then(|f| Decimal::try_from(f).ok())
-                    .unwrap_or_else(|| Decimal::new(7, 1)); // 0.7
+                    // Skip if symbols are too similar (same base)
+                    if symbol1.base == symbol2.base {
+                        continue;
+                    }
 
-                // Skip if correlation is too low
-                if correlation.abs() < min_correlation {
-                    continue;
-                }
-
-                // Get current prices
-                let price1 = self.get_current_price(market_data, symbol1);
-                let price2 = self.get_current_price(market_data, symbol2);
-
-                let (price1, price2) = match (price1, price2) {
-                    (Some(p1), Some(p2)) => (p1, p2),
-                    _ => continue,
-                };
-
-                if price2.is_zero() {
-                    continue;
-                }
-
-                // Calculate current ratio and Z-score
-                let current_ratio = price1 / price2;
-                let z_score = match self.calculate_z_score(symbol1, symbol2, current_ratio) {
-                    Some(z) => z,
-                    None => continue,
-                };
-
-                let z_threshold = self
-                    .config
-                    .custom_params
-                    .get("z_score_entry_threshold")
-                    .and_then(|v| v.as_f64())
-                    .and_then(|f| Decimal::try_from(f).ok())
-                    .unwrap_or_else(|| Decimal::from(2));
-
-                // Check if Z-score indicates divergence
-                if z_score.abs() < z_threshold {
-                    continue;
-                }
-
-                // Determine trade direction
-                let (long_symbol, short_symbol, long_price, short_price) =
-                    if z_score > Decimal::ZERO {
-                        // Ratio is above mean - short symbol1, long symbol2
-                        (symbol2, symbol1, price2, price1)
-                    } else {
-                        // Ratio is below mean - long symbol1, short symbol2
-                        (symbol1, symbol2, price1, price2)
+                    // Calculate correlation
+                    let correlation = match self.calculate_correlation(symbol1, symbol2) {
+                        Some(corr) => corr,
+                        None => continue,
                     };
 
-                // Find exchanges with both symbols
-                let common_exchanges =
-                    self.find_common_exchanges(market_data, long_symbol, short_symbol);
+                    let min_correlation = self
+                        .config
+                        .custom_params
+                        .get("min_correlation")
+                        .and_then(|v| v.as_f64())
+                        .and_then(|f| Decimal::try_from(f).ok())
+                        .unwrap_or_else(|| Decimal::new(7, 1)); // 0.7
 
-                for exchange in common_exchanges {
-                    // Calculate position sizes
-                    let position_value = self.config.max_exposure / Decimal::from(4); // 25% of max exposure
-                    let long_quantity = position_value / long_price;
-                    let short_quantity = position_value / short_price;
+                    // Skip if correlation is too low
+                    if correlation.abs() < min_correlation {
+                        continue;
+                    }
 
-                    // Create convergence signal
-                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
+                    // Get current prices
+                    let price1 = self.get_current_price(market_data, symbol1);
+                    let price2 = self.get_current_price(market_data, symbol2);
 
-                    // Long leg
-                    let long_leg = TradeLeg::new(
-                        exchange,
-                        (**long_symbol).clone().into(),
-                        Side::Buy,
-                        long_price,
-                        long_quantity,
-                    );
-                    signal.add_leg(long_leg);
+                    let (price1, price2) = match (price1, price2) {
+                        (Some(p1), Some(p2)) => (p1, p2),
+                        _ => continue,
+                    };
 
-                    // Short leg
-                    let short_leg = TradeLeg::new(
-                        exchange,
-                        (**short_symbol).clone().into(),
-                        Side::Sell,
-                        short_price,
-                        short_quantity,
-                    );
-                    signal.add_leg(short_leg);
+                    if price2.is_zero() {
+                        continue;
+                    }
 
-                    // Estimate profit based on expected convergence
-                    let expected_convergence_bps = (z_score.abs() * Decimal::from(50))
-                        .to_i32()
-                        .unwrap_or(0)
-                        .min(500); // Cap at 5%
+                    // Calculate current ratio and Z-score
+                    let current_ratio = price1 / price2;
+                    let z_score = match self.calculate_z_score(symbol1, symbol2, current_ratio) {
+                        Some(z) => z,
+                        None => continue,
+                    };
 
-                    signal.set_profit_bps(expected_convergence_bps);
+                    let z_threshold = self
+                        .config
+                        .custom_params
+                        .get("z_score_entry_threshold")
+                        .and_then(|v| v.as_f64())
+                        .and_then(|f| Decimal::try_from(f).ok())
+                        .unwrap_or_else(|| Decimal::from(2));
 
-                    // Add metadata
-                    signal.add_metadata("pair_correlation", json!(correlation.to_string()));
-                    signal.add_metadata("z_score", json!(z_score.to_string()));
-                    signal.add_metadata("current_ratio", json!(current_ratio.to_string()));
-                    signal.add_metadata("long_symbol", json!(long_symbol.to_pair()));
-                    signal.add_metadata("short_symbol", json!(short_symbol.to_pair()));
-                    signal.add_metadata("convergence_type", json!("mean_reversion"));
+                    // Check if Z-score indicates divergence
+                    if z_score.abs() < z_threshold {
+                        continue;
+                    }
 
-                    signals.push(signal);
+                    // Determine trade direction
+                    let (long_symbol, short_symbol, long_price, short_price) =
+                        if z_score > Decimal::ZERO {
+                            // Ratio is above mean - short symbol1, long symbol2
+                            (symbol2, symbol1, price2, price1)
+                        } else {
+                            // Ratio is below mean - long symbol1, short symbol2
+                            (symbol1, symbol2, price1, price2)
+                        };
 
-                    debug!(
-                        "Convergence arbitrage: {} vs {} correlation={} z_score={} profit={}bps",
-                        long_symbol, short_symbol, correlation, z_score, expected_convergence_bps
-                    );
+                    // Find exchanges with both symbols
+                    let common_exchanges =
+                        self.find_common_exchanges(market_data, long_symbol, short_symbol);
+
+                    for exchange in common_exchanges {
+                        // Calculate position sizes
+                        let position_value = self.config.max_exposure / Decimal::from(4); // 25% of max exposure
+                        let long_quantity = position_value / long_price;
+                        let short_quantity = position_value / short_price;
+
+                        // Create convergence signal
+                        let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
+
+                        // Long leg
+                        let long_leg = TradeLeg::new(
+                            exchange,
+                            (**long_symbol).clone().into(),
+                            Side::Buy,
+                            long_price,
+                            long_quantity,
+                        );
+                        signal.add_leg(long_leg);
+
+                        // Short leg
+                        let short_leg = TradeLeg::new(
+                            exchange,
+                            (**short_symbol).clone().into(),
+                            Side::Sell,
+                            short_price,
+                            short_quantity,
+                        );
+                        signal.add_leg(short_leg);
+
+                        // Estimate profit based on expected convergence
+                        let expected_convergence_bps = (z_score.abs() * Decimal::from(50))
+                            .to_i32()
+                            .unwrap_or(0)
+                            .min(500); // Cap at 5%
+
+                        signal.set_profit_bps(expected_convergence_bps);
+
+                        // Add metadata
+                        signal.add_metadata("pair_correlation", json!(correlation.to_string()));
+                        signal.add_metadata("z_score", json!(z_score.to_string()));
+                        signal.add_metadata("current_ratio", json!(current_ratio.to_string()));
+                        signal.add_metadata("long_symbol", json!(long_symbol.to_pair()));
+                        signal.add_metadata("short_symbol", json!(short_symbol.to_pair()));
+                        signal.add_metadata("convergence_type", json!("mean_reversion"));
+
+                        signals.push(signal);
+
+                        debug!(
+                            "Convergence arbitrage: {} vs {} correlation={} z_score={} profit={}bps",
+                            long_symbol, short_symbol, correlation, z_score, expected_convergence_bps
+                        );
+                    }
                 }
             }
         }
@@ -454,117 +471,129 @@ impl Strategy for ConvergenceArbitrageStrategy {
         // Get all unique symbols
         let symbols = market_data.get_all_symbols();
 
-        // Look for simple price ratio divergences between related symbols
-        for i in 0..symbols.len() {
-            for j in (i + 1)..symbols.len() {
-                let symbol1 = &symbols[i];
-                let symbol2 = &symbols[j];
+        // Pre-index symbols by quote currency for O(1) lookup within groups
+        // This reduces complexity from O(n²) to O(n) for opportunity detection
+        let mut symbols_by_quote: HashMap<String, Vec<std::sync::Arc<crate::types::Symbol>>> =
+            HashMap::new();
+        for symbol in &symbols {
+            symbols_by_quote
+                .entry(symbol.quote.clone())
+                .or_default()
+                .push(symbol.clone());
+        }
 
-                // Skip if symbols have the same base (e.g., BTC/USDT vs BTC/USD)
-                if symbol1.base == symbol2.base {
-                    continue;
-                }
+        // Only compare symbols within same quote currency groups - O(n) total
+        for (_, quote_symbols) in &symbols_by_quote {
+            if quote_symbols.len() < 2 {
+                continue;
+            }
 
-                // Only look at symbols with same quote currency for simplicity
-                if symbol1.quote != symbol2.quote {
-                    continue;
-                }
+            for i in 0..quote_symbols.len() {
+                for j in (i + 1)..quote_symbols.len() {
+                    let symbol1 = &quote_symbols[i];
+                    let symbol2 = &quote_symbols[j];
 
-                // Get current prices
-                let price1 = self.get_current_price(market_data, symbol1);
-                let price2 = self.get_current_price(market_data, symbol2);
+                    // Skip if symbols have the same base (e.g., BTC/USDT vs BTC/USD)
+                    if symbol1.base == symbol2.base {
+                        continue;
+                    }
 
-                let (price1, price2) = match (price1, price2) {
-                    (Some(p1), Some(p2)) => (p1, p2),
-                    _ => continue,
-                };
+                    // Get current prices
+                    let price1 = self.get_current_price(market_data, symbol1);
+                    let price2 = self.get_current_price(market_data, symbol2);
 
-                if price2.is_zero() {
-                    continue;
-                }
-
-                // Calculate current ratio
-                let current_ratio = price1 / price2;
-
-                // Use a simple heuristic: if ratio is very different from 1.0, it might be an opportunity
-                // In reality, this would use historical mean and standard deviation
-                let ratio_deviation = (current_ratio - Decimal::ONE).abs();
-                let deviation_threshold = Decimal::new(2, 1); // 0.2 = 20%
-
-                if ratio_deviation < deviation_threshold {
-                    continue;
-                }
-
-                // Determine trade direction (mean reversion assumption)
-                let (long_symbol, short_symbol, long_price, short_price) =
-                    if current_ratio > Decimal::ONE {
-                        // Ratio > 1: symbol1 expensive relative to symbol2
-                        // Short symbol1, long symbol2
-                        (symbol2, symbol1, price2, price1)
-                    } else {
-                        // Ratio < 1: symbol1 cheap relative to symbol2
-                        // Long symbol1, short symbol2
-                        (symbol1, symbol2, price1, price2)
+                    let (price1, price2) = match (price1, price2) {
+                        (Some(p1), Some(p2)) => (p1, p2),
+                        _ => continue,
                     };
 
-                // Find exchanges with both symbols
-                let common_exchanges =
-                    self.find_common_exchanges(market_data, long_symbol, short_symbol);
+                    if price2.is_zero() {
+                        continue;
+                    }
 
-                for exchange in common_exchanges {
-                    // Calculate position sizes
-                    let position_value = self.config.max_exposure / Decimal::from(4); // 25% of max exposure
-                    let long_quantity = position_value / long_price;
-                    let short_quantity = position_value / short_price;
+                    // Calculate current ratio
+                    let current_ratio = price1 / price2;
 
-                    // Create convergence signal
-                    let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
+                    // Use a simple heuristic: if ratio is very different from 1.0, it might be an opportunity
+                    // In reality, this would use historical mean and standard deviation
+                    let ratio_deviation = (current_ratio - Decimal::ONE).abs();
+                    let deviation_threshold = Decimal::new(2, 1); // 0.2 = 20%
 
-                    // Long leg
-                    let long_leg = TradeLeg::new(
-                        exchange,
-                        (**long_symbol).clone().into(),
-                        Side::Buy,
-                        long_price,
-                        long_quantity,
-                    );
-                    signal.add_leg(long_leg);
+                    if ratio_deviation < deviation_threshold {
+                        continue;
+                    }
 
-                    // Short leg
-                    let short_leg = TradeLeg::new(
-                        exchange,
-                        (**short_symbol).clone().into(),
-                        Side::Sell,
-                        short_price,
-                        short_quantity,
-                    );
-                    signal.add_leg(short_leg);
+                    // Determine trade direction (mean reversion assumption)
+                    let (long_symbol, short_symbol, long_price, short_price) =
+                        if current_ratio > Decimal::ONE {
+                            // Ratio > 1: symbol1 expensive relative to symbol2
+                            // Short symbol1, long symbol2
+                            (symbol2, symbol1, price2, price1)
+                        } else {
+                            // Ratio < 1: symbol1 cheap relative to symbol2
+                            // Long symbol1, short symbol2
+                            (symbol1, symbol2, price1, price2)
+                        };
 
-                    // Estimate profit based on expected convergence
-                    let expected_convergence_bps = (ratio_deviation * Decimal::from(1000))
-                        .to_i32()
-                        .unwrap_or(0)
-                        .min(500); // Cap at 5%
+                    // Find exchanges with both symbols
+                    let common_exchanges =
+                        self.find_common_exchanges(market_data, long_symbol, short_symbol);
 
-                    signal.set_profit_bps(expected_convergence_bps);
+                    for exchange in common_exchanges {
+                        // Calculate position sizes
+                        let position_value = self.config.max_exposure / Decimal::from(4); // 25% of max exposure
+                        let long_quantity = position_value / long_price;
+                        let short_quantity = position_value / short_price;
 
-                    // Add metadata
-                    signal.add_metadata("current_ratio", json!(current_ratio.to_string()));
-                    signal.add_metadata("ratio_deviation", json!(ratio_deviation.to_string()));
-                    signal.add_metadata("long_symbol", json!(long_symbol.to_pair()));
-                    signal.add_metadata("short_symbol", json!(short_symbol.to_pair()));
-                    signal.add_metadata("convergence_type", json!("ratio_reversion"));
+                        // Create convergence signal
+                        let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
 
-                    signals.push(signal);
+                        // Long leg
+                        let long_leg = TradeLeg::new(
+                            exchange,
+                            (**long_symbol).clone().into(),
+                            Side::Buy,
+                            long_price,
+                            long_quantity,
+                        );
+                        signal.add_leg(long_leg);
 
-                    debug!(
-                        "Convergence arbitrage: {} vs {} ratio={} deviation={} profit={}bps",
-                        long_symbol,
-                        short_symbol,
-                        current_ratio,
-                        ratio_deviation,
-                        expected_convergence_bps
-                    );
+                        // Short leg
+                        let short_leg = TradeLeg::new(
+                            exchange,
+                            (**short_symbol).clone().into(),
+                            Side::Sell,
+                            short_price,
+                            short_quantity,
+                        );
+                        signal.add_leg(short_leg);
+
+                        // Estimate profit based on expected convergence
+                        let expected_convergence_bps = (ratio_deviation * Decimal::from(1000))
+                            .to_i32()
+                            .unwrap_or(0)
+                            .min(500); // Cap at 5%
+
+                        signal.set_profit_bps(expected_convergence_bps);
+
+                        // Add metadata
+                        signal.add_metadata("current_ratio", json!(current_ratio.to_string()));
+                        signal.add_metadata("ratio_deviation", json!(ratio_deviation.to_string()));
+                        signal.add_metadata("long_symbol", json!(long_symbol.to_pair()));
+                        signal.add_metadata("short_symbol", json!(short_symbol.to_pair()));
+                        signal.add_metadata("convergence_type", json!("ratio_reversion"));
+
+                        signals.push(signal);
+
+                        debug!(
+                            "Convergence arbitrage: {} vs {} ratio={} deviation={} profit={}bps",
+                            long_symbol,
+                            short_symbol,
+                            current_ratio,
+                            ratio_deviation,
+                            expected_convergence_bps
+                        );
+                    }
                 }
             }
         }
