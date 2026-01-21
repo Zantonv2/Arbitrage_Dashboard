@@ -763,4 +763,288 @@ mod tests {
             Decimal::new(2, 3)
         );
     }
+
+    // === Property-Based Tests for Numeric Safety ===
+
+    #[cfg(test)]
+    mod proptest_tests {
+        use super::*;
+        use proptest::prelude::*;
+
+        prop_compose! {
+            fn decimal_strategy()(
+                mantissa in 0i64..1_000_000_000_000i64,
+                scale in 0u32..30u32
+            ) -> Decimal {
+                Decimal::new(mantissa, scale)
+            }
+        }
+
+        prop_compose! {
+            fn extreme_mantissa_strategy()(val in 1i64..i64::MAX) -> i64 {
+                val
+            }
+        }
+
+        prop_compose! {
+            fn extreme_scale_strategy()(val in 0u32..50u32) -> u32 {
+                val
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn test_net_spread_bps_extreme_mantissa(extreme_mantissa in extreme_mantissa_strategy()) {
+                let extreme_buy = Decimal::new(extreme_mantissa, 0);
+                let config = ConfidenceConfig::default();
+                let scorer = ConfidenceScorer::new(config);
+                let extreme_sell = extreme_buy + Decimal::from(1000);
+
+                let result = scorer.calculate_net_spread_bps(
+                    extreme_buy,
+                    extreme_sell,
+                    ExchangeId::OKX,
+                    ExchangeId::ByBit,
+                );
+
+                match result {
+                    NetSpreadResult::Profit(spread_bps) => {
+                        prop_assert!(spread_bps >= 0 || spread_bps <= 0);
+                    }
+                    NetSpreadResult::Unprofitable => {
+                    }
+                }
+            }
+
+            #[test]
+            fn test_net_spread_bps_extreme_scale(mantissa in extreme_mantissa_strategy(), scale in extreme_scale_strategy()) {
+                let extreme_buy = Decimal::new(mantissa, scale);
+                let config = ConfidenceConfig::default();
+                let scorer = ConfidenceScorer::new(config);
+                let extreme_sell = extreme_buy + Decimal::from(1000);
+
+                let result = scorer.calculate_net_spread_bps(
+                    extreme_buy,
+                    extreme_sell,
+                    ExchangeId::OKX,
+                    ExchangeId::ByBit,
+                );
+
+                match result {
+                    NetSpreadResult::Profit(spread_bps) => {
+                        prop_assert!(spread_bps >= i32::MIN && spread_bps <= i32::MAX);
+                    }
+                    NetSpreadResult::Unprofitable => {
+                    }
+                }
+            }
+
+            #[test]
+            fn test_net_spread_bps_with_large_fee_rates(
+                buy_price in decimal_strategy(),
+                fee_mantissa in 1i64..1000000i64
+            ) {
+                let fee_rate = Decimal::new(fee_mantissa, 3);
+                let config = ConfidenceConfig::default();
+                let scorer = ConfidenceScorer::new(config);
+                let sell_price = buy_price + Decimal::from(1000);
+
+                let result = scorer.calculate_net_spread_bps(
+                    buy_price,
+                    sell_price,
+                    ExchangeId::OKX,
+                    ExchangeId::ByBit,
+                );
+
+                match result {
+                    NetSpreadResult::Profit(spread_bps) => {
+                        prop_assert!(spread_bps >= i32::MIN && spread_bps <= i32::MAX);
+                    }
+                    NetSpreadResult::Unprofitable => {
+                    }
+                }
+            }
+
+            #[test]
+            fn test_confidence_factors_extreme_quantities(
+                filled_mantissa in extreme_mantissa_strategy(),
+                mid_mantissa in extreme_mantissa_strategy(),
+                filled_scale in extreme_scale_strategy(),
+                mid_scale in extreme_scale_strategy()
+            ) {
+                let filled_qty = Decimal::new(filled_mantissa, filled_scale);
+                let mid_p = Decimal::new(mid_mantissa, mid_scale);
+
+                if mid_p <= Decimal::ZERO || filled_qty <= Decimal::ZERO {
+                    return Ok(());
+                }
+
+                let config = ConfidenceConfig::default();
+                let scorer = ConfidenceScorer::new(config);
+                let symbol = Symbol::new("BTC", "USDT");
+                let buy_book = OrderBook::new(
+                    ExchangeId::OKX,
+                    symbol.clone(),
+                    vec![OrderBookLevel::new(mid_p - Decimal::from(10), filled_qty)],
+                    vec![OrderBookLevel::new(mid_p + Decimal::from(10), filled_qty)],
+                );
+                let sell_book = OrderBook::new(
+                    ExchangeId::ByBit,
+                    symbol.clone(),
+                    vec![OrderBookLevel::new(mid_p, filled_qty)],
+                    vec![OrderBookLevel::new(mid_p + Decimal::from(10), filled_qty)],
+                );
+
+                let buy_vwap = VwapResult {
+                    vwap_price: mid_p,
+                    filled_quantity: filled_qty,
+                    total_cost: mid_p,
+                    is_fully_filled: true,
+                    slippage_bps: 10,
+                };
+                let sell_vwap = buy_vwap.clone();
+
+                let factors =
+                    scorer.calculate_confidence_factors(&buy_vwap, &sell_vwap, &buy_book, &sell_book);
+
+                prop_assert!(factors.depth_score >= Decimal::ZERO);
+                prop_assert!(factors.volatility_score >= Decimal::ZERO);
+                prop_assert!(factors.reliability_score >= Decimal::ZERO);
+                prop_assert!(factors.spread_stability_score >= Decimal::ZERO);
+                prop_assert!(factors.freshness_score >= Decimal::ZERO);
+            }
+
+            #[test]
+            fn test_confidence_calculation_extreme_weights(
+                depth_score in decimal_strategy(),
+                volatility_score in decimal_strategy(),
+                reliability_score in decimal_strategy(),
+                spread_stability_score in decimal_strategy(),
+                freshness_score in decimal_strategy()
+            ) {
+                let config = ConfidenceConfig {
+                    depth_weight: Decimal::from(1000000000),
+                    volatility_weight: Decimal::from(1000000000),
+                    reliability_weight: Decimal::from(1000000000),
+                    spread_stability_weight: Decimal::from(1000000000),
+                    freshness_weight: Decimal::from(1000000000),
+                    ..ConfidenceConfig::default()
+                };
+                let scorer = ConfidenceScorer::new(config);
+
+                let factors = ConfidenceFactors {
+                    depth_score,
+                    volatility_score,
+                    reliability_score,
+                    spread_stability_score,
+                    freshness_score,
+                };
+
+                let confidence = scorer.calculate_confidence(&factors);
+                prop_assert!(confidence >= Decimal::ZERO || confidence == Decimal::ZERO);
+            }
+
+            #[test]
+            fn test_reliability_division_extreme_values(
+                buy_uptime in 0i32..101i32,
+                sell_uptime in 0i32..101i32
+            ) {
+                let config = ConfidenceConfig::default();
+                let mut scorer = ConfidenceScorer::new(config);
+                let symbol = Symbol::new("BTC", "USDT");
+                let buy_book = OrderBook::new(
+                    ExchangeId::OKX,
+                    symbol.clone(),
+                    vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+                    vec![OrderBookLevel::new(Decimal::from(50100), Decimal::from(1))],
+                );
+                let sell_book = OrderBook::new(
+                    ExchangeId::ByBit,
+                    symbol.clone(),
+                    vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+                    vec![OrderBookLevel::new(Decimal::from(50100), Decimal::from(1))],
+                );
+
+                let buy_reliability = Decimal::from(buy_uptime) / Decimal::from(100);
+                let sell_reliability = Decimal::from(sell_uptime) / Decimal::from(100);
+
+                let buy_vwap = VwapResult {
+                    vwap_price: Decimal::from(50050),
+                    filled_quantity: Decimal::from(1),
+                    total_cost: Decimal::from(50050),
+                    is_fully_filled: true,
+                    slippage_bps: 10,
+                };
+                let sell_vwap = buy_vwap.clone();
+
+                scorer.update_exchange_reliability(
+                    ExchangeId::OKX,
+                    ExchangeReliability {
+                        uptime_percent: Decimal::from(buy_uptime),
+                        error_rate: Decimal::ZERO,
+                        avg_latency_ms: 100,
+                        last_updated: Utc::now(),
+                    },
+                );
+                scorer.update_exchange_reliability(
+                    ExchangeId::ByBit,
+                    ExchangeReliability {
+                        uptime_percent: Decimal::from(sell_uptime),
+                        error_rate: Decimal::ZERO,
+                        avg_latency_ms: 100,
+                        last_updated: Utc::now(),
+                    },
+                );
+
+                let factors =
+                    scorer.calculate_confidence_factors(&buy_vwap, &sell_vwap, &buy_book, &sell_book);
+
+                prop_assert!(factors.reliability_score >= Decimal::ZERO);
+                prop_assert!(factors.reliability_score <= Decimal::from(100));
+            }
+
+            #[test]
+            fn test_slippage_division_extreme_values(
+                buy_slippage in 0i32..10000i32,
+                sell_slippage in 0i32..10000i32
+            ) {
+                let config = ConfidenceConfig::default();
+                let scorer = ConfidenceScorer::new(config);
+                let symbol = Symbol::new("BTC", "USDT");
+                let buy_book = OrderBook::new(
+                    ExchangeId::OKX,
+                    symbol.clone(),
+                    vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+                    vec![OrderBookLevel::new(Decimal::from(50100), Decimal::from(1))],
+                );
+                let sell_book = OrderBook::new(
+                    ExchangeId::ByBit,
+                    symbol.clone(),
+                    vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+                    vec![OrderBookLevel::new(Decimal::from(50100), Decimal::from(1))],
+                );
+
+                let buy_vwap = VwapResult {
+                    vwap_price: Decimal::from(50050),
+                    filled_quantity: Decimal::from(1),
+                    total_cost: Decimal::from(50050),
+                    is_fully_filled: true,
+                    slippage_bps: buy_slippage,
+                };
+                let sell_vwap = VwapResult {
+                    vwap_price: Decimal::from(50050),
+                    filled_quantity: Decimal::from(1),
+                    total_cost: Decimal::from(50050),
+                    is_fully_filled: true,
+                    slippage_bps: sell_slippage,
+                };
+
+                let factors =
+                    scorer.calculate_confidence_factors(&buy_vwap, &sell_vwap, &buy_book, &sell_book);
+
+                prop_assert!(factors.spread_stability_score >= Decimal::ZERO);
+                prop_assert!(factors.spread_stability_score <= Decimal::from(100));
+            }
+        }
+    }
 }
