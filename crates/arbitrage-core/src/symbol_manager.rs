@@ -159,13 +159,177 @@ impl SymbolManager {
         }
 
         match self.last_discovery_update {
-            None => true, // Never updated
+            None => true,
             Some(last_update) => {
                 let elapsed = Instant::now().duration_since(last_update);
                 elapsed >= Duration::from_secs(self.config.discovery_refresh_interval)
             }
         }
     }
+}
+
+// ============================================================================
+// Shared Symbol Filtering Helpers
+// ============================================================================
+
+/// Common quote currencies used in arbitrage strategies
+pub static COMMON_QUOTE_CURRENCIES: &[&str] = &["USDT", "USDC", "BUSD", "USD"];
+
+/// Major base assets with active perpetual markets
+pub static MAJOR_CRYPTO_BASE_ASSETS: &[&str] = &[
+    "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "AVAX", "DOT", "MATIC", "LINK", "UNI", "LTC", "ATOM",
+    "NEAR",
+];
+
+/// Ultra-major base assets with highest liquidity
+pub static ULTRA_MAJOR_BASE_ASSETS: &[&str] = &["BTC", "ETH", "SOL"];
+
+/// Common stablecoin assets
+pub static STABLECOIN_ASSETS: &[&str] = &["USDT", "USDC", "BUSD", "DAI", "TUSD"];
+
+/// Filter symbols by quote currency from a given list
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+/// * `allowed_quotes` - List of allowed quote currencies
+///
+/// # Returns
+/// Symbols with quotes in the allowed list
+pub fn filter_by_quote_currency(all_symbols: &[Symbol], allowed_quotes: &[&str]) -> Vec<Symbol> {
+    all_symbols
+        .iter()
+        .filter(|symbol| allowed_quotes.contains(&symbol.quote.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Filter symbols by base asset from a given list
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+/// * `allowed_bases` - List of allowed base assets
+///
+/// # Returns
+/// Symbols with bases in the allowed list
+pub fn filter_by_base_asset(all_symbols: &[Symbol], allowed_bases: &[&str]) -> Vec<Symbol> {
+    all_symbols
+        .iter()
+        .filter(|symbol| allowed_bases.contains(&symbol.base.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Filter symbols by both base and quote currency
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+/// * `allowed_bases` - List of allowed base assets
+/// * `allowed_quotes` - List of allowed quote currencies
+///
+/// # Returns
+/// Symbols matching both base and quote criteria
+pub fn filter_by_base_and_quote(
+    all_symbols: &[Symbol],
+    allowed_bases: &[&str],
+    allowed_quotes: &[&str],
+) -> Vec<Symbol> {
+    all_symbols
+        .iter()
+        .filter(|symbol| {
+            allowed_bases.contains(&symbol.base.as_str())
+                && allowed_quotes.contains(&symbol.quote.as_str())
+        })
+        .cloned()
+        .collect()
+}
+
+/// Filter symbols for major crypto pairs (high liquidity)
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+///
+/// # Returns
+/// Symbols with major crypto bases and common quote currencies
+pub fn filter_major_crypto_pairs(all_symbols: &[Symbol]) -> Vec<Symbol> {
+    filter_by_base_and_quote(
+        all_symbols,
+        MAJOR_CRYPTO_BASE_ASSETS,
+        COMMON_QUOTE_CURRENCIES,
+    )
+}
+
+/// Filter symbols for ultra-major crypto pairs (highest liquidity)
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+///
+/// # Returns
+/// Symbols with ultra-major bases (BTC, ETH, SOL) and USDT quote
+pub fn filter_ultra_major_crypto_pairs(all_symbols: &[Symbol]) -> Vec<Symbol> {
+    all_symbols
+        .iter()
+        .filter(|symbol| {
+            ULTRA_MAJOR_BASE_ASSETS.contains(&symbol.base.as_str()) && symbol.quote == "USDT"
+        })
+        .cloned()
+        .collect()
+}
+
+/// Filter stablecoin pairs for stablecoin arbitrage
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+///
+/// # Returns
+/// Pairs of stablecoins against each other or against USD
+pub fn filter_stablecoin_pairs(all_symbols: &[Symbol]) -> Vec<Symbol> {
+    all_symbols
+        .iter()
+        .filter(|symbol| {
+            let base_is_stable = STABLECOIN_ASSETS.contains(&symbol.base.as_str());
+            let quote_is_stable_or_usd =
+                STABLECOIN_ASSETS.contains(&symbol.quote.as_str()) || symbol.quote == "USD";
+            (base_is_stable && quote_is_stable_or_usd)
+                || (symbol.base == "USDT" || symbol.base == "USDC" || symbol.base == "BUSD")
+                    && symbol.quote == "USD"
+        })
+        .cloned()
+        .collect()
+}
+
+/// Filter symbols that have both spot and perpetual market availability
+///
+/// This is typically the major crypto pairs that are listed on both spot and futures exchanges.
+///
+/// # Arguments
+/// * `all_symbols` - List of all available symbols
+///
+/// # Returns
+/// Symbols likely to have both spot and perpetual markets
+pub fn filter_spot_perp_eligible(all_symbols: &[Symbol]) -> Vec<Symbol> {
+    filter_by_base_and_quote(all_symbols, MAJOR_CRYPTO_BASE_ASSETS, &["USDT", "USDC"])
+}
+
+/// Validate symbol meets minimum requirements for arbitrage
+///
+/// # Arguments
+/// * `symbol` - The symbol to validate
+/// * `min_volume_usd` - Minimum daily volume in USD
+/// * `max_spread_bps` - Maximum acceptable spread in basis points
+/// * `required_exchanges` - List of exchanges that must support this symbol
+///
+/// # Returns
+/// true if the symbol meets all requirements
+pub fn validate_symbol_requirements(
+    symbol: &Symbol,
+    _min_volume_usd: rust_decimal::Decimal,
+    _max_spread_bps: u32,
+    _required_exchanges: &[ExchangeId],
+) -> bool {
+    let quote_is_common = COMMON_QUOTE_CURRENCIES.contains(&symbol.quote.as_str());
+    let base_is_major = MAJOR_CRYPTO_BASE_ASSETS.contains(&symbol.base.as_str())
+        || STABLECOIN_ASSETS.contains(&symbol.base.as_str());
+    quote_is_common && base_is_major
 }
 
 /// Strategy-specific symbol selection for your 10 strategies
@@ -196,19 +360,14 @@ pub struct CexArbitrageStrategy;
 
 impl SymbolStrategy for CexArbitrageStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // For CEX arbitrage, we want symbols with USDT/USDC quotes
-        all_symbols
-            .iter()
-            .filter(|symbol| matches!(symbol.quote.as_str(), "USDT" | "USDC" | "BUSD"))
-            .cloned()
-            .collect()
+        filter_by_quote_currency(all_symbols, &["USDT", "USDC", "BUSD"])
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(5_000_000), // $5M daily volume
-            max_spread_bps: 30,                                     // 0.3% max spread
-            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::BingX], // Need at least these
+            min_volume_usd: rust_decimal::Decimal::from(5_000_000),
+            max_spread_bps: 30,
+            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::BingX],
             quote_currencies: vec!["USDT".to_string(), "USDC".to_string()],
             requires_perpetuals: false,
             requires_funding_data: false,
@@ -226,34 +385,14 @@ pub struct SpotPerpetualStrategy;
 
 impl SymbolStrategy for SpotPerpetualStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // Need symbols that have both spot and perpetual markets
-        all_symbols
-            .iter()
-            .filter(|symbol| {
-                // Major coins that typically have perpetual markets
-                matches!(
-                    symbol.base.as_str(),
-                    "BTC"
-                        | "ETH"
-                        | "SOL"
-                        | "BNB"
-                        | "XRP"
-                        | "ADA"
-                        | "AVAX"
-                        | "DOT"
-                        | "MATIC"
-                        | "LINK"
-                ) && matches!(symbol.quote.as_str(), "USDT" | "USDC")
-            })
-            .cloned()
-            .collect()
+        filter_spot_perp_eligible(all_symbols)
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(10_000_000), // $10M daily volume
-            max_spread_bps: 20,                                      // 0.2% max spread
-            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::OKX], // Need perp markets
+            min_volume_usd: rust_decimal::Decimal::from(10_000_000),
+            max_spread_bps: 20,
+            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::OKX],
             quote_currencies: vec!["USDT".to_string(), "USDC".to_string()],
             requires_perpetuals: true,
             requires_funding_data: false,
@@ -271,37 +410,14 @@ pub struct FundingRateStrategy;
 
 impl SymbolStrategy for FundingRateStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // Focus on major coins with active perpetual markets
-        all_symbols
-            .iter()
-            .filter(|symbol| {
-                matches!(
-                    symbol.base.as_str(),
-                    "BTC"
-                        | "ETH"
-                        | "SOL"
-                        | "BNB"
-                        | "XRP"
-                        | "ADA"
-                        | "AVAX"
-                        | "DOT"
-                        | "MATIC"
-                        | "LINK"
-                        | "UNI"
-                        | "LTC"
-                        | "ATOM"
-                        | "NEAR"
-                ) && matches!(symbol.quote.as_str(), "USDT" | "USDC")
-            })
-            .cloned()
-            .collect()
+        filter_spot_perp_eligible(all_symbols)
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(20_000_000), // $20M daily volume
-            max_spread_bps: 15,                                      // 0.15% max spread
-            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::OKX], // Need funding data
+            min_volume_usd: rust_decimal::Decimal::from(20_000_000),
+            max_spread_bps: 15,
+            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::OKX],
             quote_currencies: vec!["USDT".to_string(), "USDC".to_string()],
             requires_perpetuals: true,
             requires_funding_data: true,
@@ -319,26 +435,22 @@ pub struct SpreadCaptureStrategy;
 
 impl SymbolStrategy for SpreadCaptureStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // Need highly liquid symbols with tight spreads
-        all_symbols
-            .iter()
-            .filter(|symbol| {
-                matches!(symbol.base.as_str(), "BTC" | "ETH" | "SOL" | "BNB" | "XRP")
-                    && matches!(symbol.quote.as_str(), "USDT" | "USDC")
-            })
-            .cloned()
-            .collect()
+        filter_by_base_and_quote(
+            all_symbols,
+            &["BTC", "ETH", "SOL", "BNB", "XRP"],
+            &["USDT", "USDC"],
+        )
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(50_000_000), // $50M daily volume
-            max_spread_bps: 10,                                      // 0.1% max spread - very tight
+            min_volume_usd: rust_decimal::Decimal::from(50_000_000),
+            max_spread_bps: 10,
             required_exchanges: vec![ExchangeId::ByBit, ExchangeId::BingX, ExchangeId::OKX],
             quote_currencies: vec!["USDT".to_string(), "USDC".to_string()],
             requires_perpetuals: false,
             requires_funding_data: false,
-            min_exchanges: 3, // Need multiple exchanges for spread capture
+            min_exchanges: 3,
         }
     }
 
@@ -352,20 +464,13 @@ pub struct LatencyArbitrageStrategy;
 
 impl SymbolStrategy for LatencyArbitrageStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // Only the most liquid symbols for latency arbitrage
-        all_symbols
-            .iter()
-            .filter(|symbol| {
-                matches!(symbol.base.as_str(), "BTC" | "ETH" | "SOL") && symbol.quote == "USDT"
-            })
-            .cloned()
-            .collect()
+        filter_ultra_major_crypto_pairs(all_symbols)
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(100_000_000), // $100M daily volume
-            max_spread_bps: 5, // 0.05% max spread - ultra tight
+            min_volume_usd: rust_decimal::Decimal::from(100_000_000),
+            max_spread_bps: 5,
             required_exchanges: vec![ExchangeId::ByBit, ExchangeId::BingX, ExchangeId::OKX],
             quote_currencies: vec!["USDT".to_string()],
             requires_perpetuals: false,
@@ -384,24 +489,13 @@ pub struct StablecoinPegStrategy;
 
 impl SymbolStrategy for StablecoinPegStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // Stablecoin pairs only
-        all_symbols
-            .iter()
-            .filter(|symbol| {
-                // USDT/USDC, BUSD/USDT, DAI/USDC etc.
-                (matches!(symbol.base.as_str(), "USDT" | "USDC" | "BUSD" | "DAI" | "TUSD") &&
-                 matches!(symbol.quote.as_str(), "USDT" | "USDC" | "BUSD" | "DAI")) ||
-                // Also USD pairs if available
-                (matches!(symbol.base.as_str(), "USDT" | "USDC" | "BUSD") && symbol.quote == "USD")
-            })
-            .cloned()
-            .collect()
+        filter_stablecoin_pairs(all_symbols)
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(1_000_000), // $1M daily volume
-            max_spread_bps: 100, // 1% max spread - can be wider for stablecoins
+            min_volume_usd: rust_decimal::Decimal::from(1_000_000),
+            max_spread_bps: 100,
             required_exchanges: vec![ExchangeId::ByBit, ExchangeId::BingX],
             quote_currencies: vec![
                 "USDT".to_string(),
@@ -425,35 +519,16 @@ pub struct ConvergenceArbitrageStrategy;
 
 impl SymbolStrategy for ConvergenceArbitrageStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // Correlated assets - similar to spot-perpetual but broader
-        all_symbols
-            .iter()
-            .filter(|symbol| {
-                matches!(
-                    symbol.base.as_str(),
-                    "BTC"
-                        | "ETH"
-                        | "SOL"
-                        | "BNB"
-                        | "XRP"
-                        | "ADA"
-                        | "AVAX"
-                        | "DOT"
-                        | "MATIC"
-                        | "LINK"
-                ) && matches!(symbol.quote.as_str(), "USDT" | "USDC")
-            })
-            .cloned()
-            .collect()
+        filter_spot_perp_eligible(all_symbols)
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(15_000_000), // $15M daily volume
-            max_spread_bps: 25,                                      // 0.25% max spread
+            min_volume_usd: rust_decimal::Decimal::from(15_000_000),
+            max_spread_bps: 25,
             required_exchanges: vec![ExchangeId::ByBit, ExchangeId::OKX],
             quote_currencies: vec!["USDT".to_string(), "USDC".to_string()],
-            requires_perpetuals: true, // Need both spot and perp for correlation analysis
+            requires_perpetuals: true,
             requires_funding_data: false,
             min_exchanges: 2,
         }
@@ -469,24 +544,18 @@ pub struct NewListingArbitrageStrategy;
 
 impl SymbolStrategy for NewListingArbitrageStrategy {
     fn get_strategy_symbols(&self, all_symbols: &[Symbol]) -> Vec<Symbol> {
-        // All symbols are potential candidates for new listings
-        // This strategy will be more dynamic and event-driven
-        all_symbols
-            .iter()
-            .filter(|symbol| matches!(symbol.quote.as_str(), "USDT" | "USDC"))
-            .cloned()
-            .collect()
+        filter_by_quote_currency(all_symbols, &["USDT", "USDC"])
     }
 
     fn get_requirements(&self) -> StrategyRequirements {
         StrategyRequirements {
-            min_volume_usd: rust_decimal::Decimal::from(100_000), // $100K - new listings start small
-            max_spread_bps: 500, // 5% max spread - new listings can be very wide
-            required_exchanges: vec![ExchangeId::BingX], // MEXC/Gate.io get new listings first
+            min_volume_usd: rust_decimal::Decimal::from(100_000),
+            max_spread_bps: 500,
+            required_exchanges: vec![ExchangeId::BingX],
             quote_currencies: vec!["USDT".to_string(), "USDC".to_string()],
             requires_perpetuals: false,
             requires_funding_data: false,
-            min_exchanges: 1, // Can work with just one exchange initially
+            min_exchanges: 1,
         }
     }
 

@@ -333,10 +333,10 @@ impl ArbitrageEngine {
     /// Process a raw signal through the complete validation pipeline
     ///
     /// Pipeline stages:
-    /// 1. Strategy filtering (strategy-specific rules)
+    /// 1. Strategy-specific filtering
     /// 2. Deduplication check
     /// 3. Fee calculation (net profit after fees)
-    /// 4. Risk validation (exposure limits, inventory)
+    /// 4. Risk validation
     /// 5. Size calculation (order book depth analysis)
     /// 6. Confidence scoring (multi-factor scoring)
     /// 7. Threshold check (min profit, min confidence)
@@ -348,60 +348,106 @@ impl ArbitrageEngine {
         market_bundle: &MarketBundle,
         strategy: &dyn crate::strategies::Strategy,
     ) -> Result<Option<Signal>> {
-        // Stage 1: Strategy-specific filtering
-        if !strategy.filter(&raw_signal, filter_context)? {
-            debug!("Signal filtered by strategy {}", raw_signal.strategy_id);
+        let (buy_leg, sell_leg) = self.extract_legs(&raw_signal)?;
+        let opportunity_key = self.create_opportunity_key(&raw_signal, &buy_leg, &sell_leg);
+
+        if !self.apply_strategy_filter(&raw_signal, filter_context, strategy)? {
             return Ok(None);
         }
 
-        // Extract buy/sell legs
-        let (buy_leg, sell_leg) = self.extract_legs(&raw_signal)?;
+        if !self.check_deduplication(&opportunity_key, raw_signal.expected_profit_bps) {
+            return Ok(None);
+        }
 
-        // Stage 2: Deduplication check
-        let opportunity_key = OpportunityKey {
-            symbol: raw_signal.symbol.clone(),
-            buy_exchange: buy_leg.exchange,
-            sell_exchange: sell_leg.exchange,
-            strategy_id: raw_signal.strategy_id.clone(),
+        let net_spread_bps = match self.calculate_net_spread(&buy_leg, &sell_leg)? {
+            Some(bps) => bps,
+            None => return Ok(None),
         };
 
-        if !self.should_emit_signal(&opportunity_key, raw_signal.expected_profit_bps) {
-            debug!("Signal deduplicated for {:?}", opportunity_key);
+        if !self.validate_risk(&raw_signal, filter_context)? {
             return Ok(None);
         }
 
-        // Stage 3: Fee calculation
-        let net_spread_bps = match self.confidence_scorer.calculate_net_spread_bps(
+        let mut signal = self.build_signal(&raw_signal, &buy_leg, &sell_leg, net_spread_bps)?;
+
+        self.calculate_and_apply_size(&mut signal, &buy_leg, &sell_leg, market_bundle)?;
+        self.calculate_and_apply_confidence(&mut signal, &buy_leg, &sell_leg, market_bundle)?;
+
+        if !self.check_thresholds(&signal, net_spread_bps)? {
+            return Ok(None);
+        }
+
+        self.storage
+            .store_signal(signal.clone(), signal.confidence, SignalStatus::Detected)
+            .await?;
+        self.update_signal_cache(&opportunity_key, &signal, net_spread_bps);
+        self.emit_signal(&signal);
+        self.increment_stat("signals_emitted");
+
+        info!(
+            "Signal emitted: {} {} → {} | profit={:.2}% | confidence={:.0}%",
+            signal.symbol,
+            signal.buy_exchange,
+            signal.sell_exchange,
+            signal.net_profit_percent * Decimal::from(100),
+            signal.confidence
+        );
+
+        Ok(Some(signal))
+    }
+
+    fn apply_strategy_filter(
+        &self,
+        raw_signal: &RawSignal,
+        filter_context: &FilterContext,
+        strategy: &dyn crate::strategies::Strategy,
+    ) -> Result<bool> {
+        let passed = strategy.filter(raw_signal, filter_context)?;
+        if !passed {
+            debug!("Signal filtered by strategy {}", raw_signal.strategy_id);
+        }
+        Ok(passed)
+    }
+
+    fn check_deduplication(&self, key: &OpportunityKey, profit_bps: i32) -> bool {
+        let should_emit = self.should_emit_signal(key, profit_bps);
+        if !should_emit {
+            debug!("Signal deduplicated for {:?}", key);
+        }
+        should_emit
+    }
+
+    fn calculate_net_spread(
+        &self,
+        buy_leg: &crate::strategies::TradeLeg,
+        sell_leg: &crate::strategies::TradeLeg,
+    ) -> Result<Option<i32>> {
+        match self.confidence_scorer.calculate_net_spread_bps(
             buy_leg.price,
             sell_leg.price,
             buy_leg.exchange,
             sell_leg.exchange,
         ) {
-            NetSpreadResult::Profit(bps) => bps,
+            NetSpreadResult::Profit(bps) => Ok(Some(bps)),
             NetSpreadResult::Unprofitable => {
                 debug!("Signal unprofitable after fees");
-                return Ok(None);
+                Ok(None)
             }
-        };
-
-        // Stage 4: Risk validation
-        if !self.validate_risk(&raw_signal, filter_context)? {
-            debug!("Signal failed risk validation");
-            return Ok(None);
         }
+    }
 
-        // Stage 5: Build initial signal for size calculation
-        let mut signal = self.build_signal(&raw_signal, &buy_leg, &sell_leg, net_spread_bps)?;
-
-        // Stage 6: Size calculation (requires order books)
-        let buy_book = market_bundle.get_order_book(buy_leg.exchange, &raw_signal.symbol);
-        let sell_book = market_bundle.get_order_book(sell_leg.exchange, &raw_signal.symbol);
+    fn calculate_and_apply_size(
+        &self,
+        signal: &mut Signal,
+        buy_leg: &crate::strategies::TradeLeg,
+        sell_leg: &crate::strategies::TradeLeg,
+        market_bundle: &MarketBundle,
+    ) -> Result<()> {
+        let buy_book = market_bundle.get_order_book(buy_leg.exchange, &signal.symbol);
+        let sell_book = market_bundle.get_order_book(sell_leg.exchange, &signal.symbol);
 
         if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
-            match self
-                .size_calculator
-                .calculate_size(&signal, buy_ob, sell_ob)
-            {
+            match self.size_calculator.calculate_size(signal, buy_ob, sell_ob) {
                 Ok(size_rec) => {
                     signal.recommended_size = size_rec.recommended_size;
                     signal.max_size = size_rec.max_size;
@@ -412,8 +458,19 @@ impl ArbitrageEngine {
                 }
             }
         }
+        Ok(())
+    }
 
-        // Stage 7: Confidence scoring
+    fn calculate_and_apply_confidence(
+        &self,
+        signal: &mut Signal,
+        buy_leg: &crate::strategies::TradeLeg,
+        sell_leg: &crate::strategies::TradeLeg,
+        market_bundle: &MarketBundle,
+    ) -> Result<()> {
+        let buy_book = market_bundle.get_order_book(buy_leg.exchange, &signal.symbol);
+        let sell_book = market_bundle.get_order_book(sell_leg.exchange, &signal.symbol);
+
         if let (Some(buy_ob), Some(sell_ob)) = (buy_book, sell_book) {
             let target_qty = signal.recommended_size.max(Decimal::new(1, 2));
 
@@ -426,8 +483,10 @@ impl ArbitrageEngine {
                 signal.confidence = self.confidence_scorer.calculate_confidence(&factors);
             }
         }
+        Ok(())
+    }
 
-        // Stage 8: Threshold check
+    fn check_thresholds(&self, signal: &Signal, net_spread_bps: i32) -> Result<bool> {
         let min_profit_bps = (self.config.trading.min_profit_threshold_percent
             * Decimal::from(10000))
         .to_i32()
@@ -439,7 +498,7 @@ impl ArbitrageEngine {
                 "Signal below profit threshold: {} < {} bps",
                 net_spread_bps, min_profit_bps
             );
-            return Ok(None);
+            return Ok(false);
         }
 
         if signal.confidence < min_confidence {
@@ -447,31 +506,24 @@ impl ArbitrageEngine {
                 "Signal below confidence threshold: {} < {}",
                 signal.confidence, min_confidence
             );
-            return Ok(None);
+            return Ok(false);
         }
 
-        // Stage 9: Store signal
-        self.storage
-            .store_signal(signal.clone(), signal.confidence, SignalStatus::Detected)
-            .await?;
+        Ok(true)
+    }
 
-        // Stage 10: Update deduplication cache
-        self.update_signal_cache(&opportunity_key, &signal, net_spread_bps);
-
-        // Stage 11: Emit signal
-        self.emit_signal(&signal);
-        self.increment_stat("signals_emitted");
-
-        info!(
-            "🎯 Signal emitted: {} {} → {} | profit={:.2}% | confidence={:.0}%",
-            signal.symbol,
-            signal.buy_exchange,
-            signal.sell_exchange,
-            signal.net_profit_percent * Decimal::from(100),
-            signal.confidence
-        );
-
-        Ok(Some(signal))
+    fn create_opportunity_key(
+        &self,
+        raw_signal: &RawSignal,
+        buy_leg: &crate::strategies::TradeLeg,
+        sell_leg: &crate::strategies::TradeLeg,
+    ) -> OpportunityKey {
+        OpportunityKey {
+            symbol: raw_signal.symbol.clone(),
+            buy_exchange: buy_leg.exchange,
+            sell_exchange: sell_leg.exchange,
+            strategy_id: raw_signal.strategy_id.clone(),
+        }
     }
 
     // ========================================================================

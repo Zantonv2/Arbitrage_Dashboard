@@ -237,20 +237,48 @@ impl ConfidenceScorer {
         buy_book: &OrderBook,
         sell_book: &OrderBook,
     ) -> ConfidenceFactors {
-        // Depth score: normalized by target VWAP amount
+        let depth_score = self.calculate_depth_score(buy_vwap, sell_vwap, buy_book, sell_book);
+        let reliability_score =
+            self.calculate_reliability_score(buy_vwap, sell_vwap, buy_book, sell_book);
+        let spread_stability_score = self.calculate_spread_stability_score(buy_vwap, sell_vwap);
+        let freshness_score = self.calculate_freshness_score(buy_book, sell_book);
+        let volatility_score = self.calculate_volatility_score(buy_vwap, sell_vwap);
+
+        ConfidenceFactors {
+            depth_score,
+            volatility_score,
+            reliability_score,
+            spread_stability_score,
+            freshness_score,
+        }
+    }
+
+    fn calculate_depth_score(
+        &self,
+        buy_vwap: &VwapResult,
+        sell_vwap: &VwapResult,
+        buy_book: &OrderBook,
+        sell_book: &OrderBook,
+    ) -> Decimal {
         let min_filled = buy_vwap.filled_quantity.min(sell_vwap.filled_quantity);
         let mid_price = buy_book
             .mid_price()
             .unwrap_or_else(|| sell_book.mid_price().unwrap_or(Decimal::from(50000)));
         let filled_usd = min_filled * mid_price;
         let depth_ratio = filled_usd / self.config.target_vwap_usd;
-        let depth_score = (depth_ratio * Decimal::from(100)).min(self.config.depth_cap);
+        (depth_ratio * Decimal::from(100)).min(self.config.depth_cap)
+    }
 
-        // Reliability score: includes exchange reliability metrics
+    fn calculate_reliability_score(
+        &self,
+        buy_vwap: &VwapResult,
+        sell_vwap: &VwapResult,
+        buy_book: &OrderBook,
+        sell_book: &OrderBook,
+    ) -> Decimal {
         let book_valid = buy_book.is_valid() && sell_book.is_valid();
         let fills_complete = buy_vwap.is_fully_filled && sell_vwap.is_fully_filled;
 
-        // Factor in exchange reliability if available
         let buy_reliability = self
             .exchange_reliability
             .get(&buy_book.exchange)
@@ -269,41 +297,38 @@ impl ConfidenceScorer {
             (false, true) => Decimal::from(50),
             (false, false) => Decimal::from(20),
         };
-        let reliability_score = base_reliability * avg_reliability;
+        base_reliability * avg_reliability
+    }
 
-        // Spread stability: inverse of slippage with better normalization
+    fn calculate_spread_stability_score(
+        &self,
+        buy_vwap: &VwapResult,
+        sell_vwap: &VwapResult,
+    ) -> Decimal {
         let avg_slippage_bps = (buy_vwap.slippage_bps + sell_vwap.slippage_bps) / 2;
-        let spread_stability_score = (Decimal::from(100) - Decimal::from(avg_slippage_bps))
+        (Decimal::from(100) - Decimal::from(avg_slippage_bps))
             .max(Decimal::ZERO)
-            .min(Decimal::from(100));
+            .min(Decimal::from(100))
+    }
 
-        // Freshness score: based on data age
+    fn calculate_freshness_score(&self, buy_book: &OrderBook, sell_book: &OrderBook) -> Decimal {
         let buy_fresh = self.is_data_fresh(buy_book.timestamp);
         let sell_fresh = self.is_data_fresh(sell_book.timestamp);
-        let freshness_score = match (buy_fresh, sell_fresh) {
+        match (buy_fresh, sell_fresh) {
             (true, true) => Decimal::from(100),
             (true, false) | (false, true) => Decimal::from(50),
             (false, false) => Decimal::ZERO,
-        };
+        }
+    }
 
-        // Volatility score: improved calculation with absolute volatility consideration
+    fn calculate_volatility_score(&self, buy_vwap: &VwapResult, sell_vwap: &VwapResult) -> Decimal {
         let slippage_diff = (buy_vwap.slippage_bps - sell_vwap.slippage_bps).abs();
         let max_slippage = buy_vwap.slippage_bps.max(sell_vwap.slippage_bps);
-
-        // Penalize both high absolute slippage and high slippage difference
         let volatility_penalty =
             Decimal::from(slippage_diff) + (Decimal::from(max_slippage) / Decimal::from(2));
-        let volatility_score = (Decimal::from(100) - volatility_penalty)
+        (Decimal::from(100) - volatility_penalty)
             .max(Decimal::ZERO)
-            .min(self.config.volatility_cap);
-
-        ConfidenceFactors {
-            depth_score,
-            volatility_score,
-            reliability_score,
-            spread_stability_score,
-            freshness_score,
-        }
+            .min(self.config.volatility_cap)
     }
 
     /// Calculate overall confidence score with normalized weights
