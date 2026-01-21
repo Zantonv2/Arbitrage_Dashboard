@@ -551,3 +551,110 @@ impl Strategy for CexArbitrageStrategy {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod cex_arbitrage_tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn test_calculate_gross_profit_bps_zero_buy_price() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::ZERO, Decimal::from(50000));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("zero"));
+        }
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_negative_buy_price() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(-100), Decimal::from(50000));
+        assert!(result.is_err() || result.unwrap() < 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_negative_sell_price() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(-100));
+        assert!(result.is_err() || result.unwrap() < 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_both_negative() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(-100), Decimal::from(-50));
+        assert!(result.is_err() || result.unwrap() != 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_positive_profit() {
+        let strategy = CexArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(50100));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert!(profit_bps > 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_zero_profit() {
+        let strategy = CexArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(50000));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert_eq!(profit_bps, 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_loss() {
+        let strategy = CexArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50100), Decimal::from(50000));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert!(profit_bps < 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_small_profit() {
+        let strategy = CexArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(50001));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert!(profit_bps >= 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_large_profit() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(100), Decimal::from(200));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert_eq!(profit_bps, 10000);
+    }
+
+    #[test]
+    fn test_estimate_net_profit_bps_fees_applied() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.estimate_net_profit_bps(100, ExchangeId::OKX, ExchangeId::ByBit);
+        assert!(result <= 100);
+    }
+
+    #[test]
+    fn test_estimate_net_profit_bps_high_fees() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.estimate_net_profit_bps(1000, ExchangeId::MEXC, ExchangeId::GateIo);
+        assert!(result < 1000);
+    }
+
+    #[test]
+    fn test_estimate_net_profit_bps_loss_after_fees() {
+        let strategy = CexArbitrageStrategy::new();
+        let result = strategy.estimate_net_profit_bps(10, ExchangeId::MEXC, ExchangeId::GateIo);
+        assert!(result <= 0);
+    }
+}
