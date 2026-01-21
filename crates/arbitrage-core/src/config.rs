@@ -1,12 +1,15 @@
 use crate::{ExchangeId, Symbol};
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-use rand::{rng, Rng};
+use pbkdf2::pbkdf2_hmac_array;
+use rand::{rngs::OsRng, TryRngCore};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashMap;
 
 const KEY_SIZE: usize = 32;
 const NONCE_SIZE: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 100000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EncryptedString {
@@ -17,17 +20,23 @@ pub struct EncryptedString {
 
 impl EncryptedString {
     fn derive_key(master_password: &[u8], salt: &[u8]) -> Key<Aes256Gcm> {
-        let mut key_bytes = [0u8; KEY_SIZE];
-        for (i, byte) in master_password.iter().cycle().take(KEY_SIZE).enumerate() {
-            key_bytes[i] = *byte ^ salt[i % salt.len()];
-        }
+        let key_bytes =
+            pbkdf2_hmac_array::<Sha256, KEY_SIZE>(master_password, salt, PBKDF2_ITERATIONS);
         *Key::<Aes256Gcm>::from_slice(&key_bytes)
     }
 
     pub fn new(plaintext: &str, master_password: &str) -> Self {
-        let salt: [u8; 16] = rng().random();
+        let mut salt = [0u8; 16];
+        OsRng
+            .try_fill_bytes(&mut salt)
+            .map_err(|_| "Failed to generate salt")
+            .unwrap();
         let key = Self::derive_key(master_password.as_bytes(), &salt);
-        let nonce_array: [u8; NONCE_SIZE] = rng().random();
+        let mut nonce_array = [0u8; NONCE_SIZE];
+        OsRng
+            .try_fill_bytes(&mut nonce_array)
+            .map_err(|_| "Failed to generate nonce")
+            .unwrap();
         let nonce = Nonce::from_slice(&nonce_array);
 
         let cipher = Aes256Gcm::new(&key);
@@ -94,8 +103,12 @@ impl Default for ServerConfig {
     }
 }
 
+fn get_master_key_from_env() -> String {
+    std::env::var("MASTER_KEY").expect("MASTER_KEY environment variable must be set for encryption")
+}
+
 fn default_encrypted_string() -> EncryptedString {
-    EncryptedString::new("", "default-master-key")
+    EncryptedString::new("", &get_master_key_from_env())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

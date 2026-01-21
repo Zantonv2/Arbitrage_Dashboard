@@ -20,19 +20,33 @@ use arbitrage_core::{
     },
 };
 use axum::{
+    body::Body,
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
-use std::sync::Arc;
+use http::{Request, StatusCode};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     services::ServeDir,
     trace::TraceLayer,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+const RATE_LIMIT_MAX_REQUESTS: u64 = 100;
+const RATE_LIMIT_WINDOW_SECS: u64 = 60;
+const JWT_SECRET_ENV: &str = "JWT_SECRET";
+const JWT_EXPIRY_HOURS: u64 = 24;
 
 /// Shared application state accessible by all route handlers
 #[derive(Clone)]
@@ -42,6 +56,105 @@ pub struct AppState {
     pub storage: Arc<StorageService>,
     pub strategy_registry: Arc<StrategyRegistry>,
     pub bridge: Arc<Mutex<ArbitrageBridge>>,
+    pub jwt_secret: Arc<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub exp: u64,
+    pub iat: u64,
+}
+
+#[derive(Clone)]
+pub struct RateLimitState {
+    requests: Arc<std::sync::Mutex<HashMap<String, (Instant, u64)>>>,
+}
+
+impl RateLimitState {
+    pub fn new() -> Self {
+        Self {
+            requests: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn check_rate_limit(&self, key: &str, max_requests: u64, window_secs: u64) -> bool {
+        let now = Instant::now();
+        let mut requests = self.requests.lock().unwrap();
+
+        let should_allow = match requests.get(key) {
+            Some((first_request, count)) => {
+                let elapsed = now.duration_since(*first_request);
+                if elapsed < Duration::from_secs(window_secs) {
+                    *count < max_requests
+                } else {
+                    true
+                }
+            }
+            None => true,
+        };
+
+        if should_allow {
+            requests.insert(key.to_string(), (now, 1));
+        }
+        should_allow
+    }
+}
+
+impl Default for RateLimitState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn get_client_ip(req: &Request<Body>) -> String {
+    req.headers()
+        .get("x-forwarded-for")
+        .and_then(|v: &http::HeaderValue| v.to_str().ok())
+        .or(req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|v: &http::HeaderValue| v.to_str().ok()))
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn validate_jwt(token: &str, secret: &str) -> bool {
+    jsonwebtoken::decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .is_ok()
+}
+
+pub fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    let now = chrono::Utc::now().timestamp() as u64;
+    let expiry = now + (JWT_EXPIRY_HOURS * 3600);
+
+    let claims = Claims {
+        sub: user_id.to_string(),
+        exp: expiry,
+        iat: now,
+    };
+
+    jsonwebtoken::encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+}
+
+fn get_jwt_secret() -> String {
+    std::env::var(JWT_SECRET_ENV).expect("JWT_SECRET environment variable must be set")
+}
+
+fn create_error_response(status_code: StatusCode, message: &str) -> impl IntoResponse {
+    let response = http::Response::builder()
+        .status(status_code)
+        .body(Body::from(message.to_string()))
+        .unwrap();
+    response
 }
 
 /// Main server struct
@@ -58,6 +171,8 @@ impl ArbitrageServer {
         port: u16,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         info!("Initializing Arbitrage Server...");
+
+        let jwt_secret = get_jwt_secret();
 
         // Load configuration
         let config_manager = ConfigManager::new(config_path)?;
@@ -102,6 +217,7 @@ impl ArbitrageServer {
             storage,
             strategy_registry,
             bridge: bridge.clone(),
+            jwt_secret: Arc::new(jwt_secret),
         };
 
         // Start background services
@@ -210,7 +326,29 @@ impl ArbitrageServer {
         state: AppState,
         config: &Config,
     ) -> Result<Router, Box<dyn std::error::Error>> {
-        // API routes
+        let jwt_secret = state.jwt_secret.as_str().to_string();
+        let rate_limit_state = Arc::new(RateLimitState::new());
+
+        let allowed_origins: Vec<String> = if config.server.cors_origins.is_empty() {
+            vec!["http://localhost:5173".to_string()]
+        } else {
+            config.server.cors_origins.clone()
+        };
+
+        let allowed_origins_values: Vec<http::HeaderValue> = allowed_origins
+            .iter()
+            .map(|s| {
+                http::HeaderValue::from_str(s)
+                    .unwrap_or_else(|_| http::HeaderValue::from_static("*"))
+            })
+            .collect();
+
+        let cors = CorsLayer::new()
+            .allow_origin(AllowOrigin::list(allowed_origins_values))
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any);
+
+        // Protected API routes
         let api_routes = Router::new()
             // Signals
             .route("/signals", get(routes::get_signals))
@@ -227,11 +365,68 @@ impl ArbitrageServer {
             // Configuration
             .route("/config", get(routes::get_config))
             .route("/config", post(routes::update_config))
-            .with_state(state.clone());
+            .with_state(state.clone())
+            .layer(axum::middleware::from_fn(
+                move |req: Request<Body>, next: axum::middleware::Next| {
+                    let jwt_secret = jwt_secret.clone();
+                    let rate_limit_state = rate_limit_state.clone();
+                    async move {
+                        // Rate limiting
+                        let client_ip = get_client_ip(&req);
+                        if !rate_limit_state.check_rate_limit(
+                            &client_ip,
+                            RATE_LIMIT_MAX_REQUESTS,
+                            RATE_LIMIT_WINDOW_SECS,
+                        ) {
+                            warn!("Rate limit exceeded for IP: {}", client_ip);
+                            return Err(create_error_response(
+                                StatusCode::TOO_MANY_REQUESTS,
+                                "Rate limit exceeded",
+                            ));
+                        }
+
+                        // Authentication
+                        let auth_header = req.headers().get("authorization").cloned();
+                        let is_valid = match auth_header {
+                            Some(header) => {
+                                if let Ok(token_str) = header.to_str() {
+                                    if token_str.starts_with("Bearer ") {
+                                        validate_jwt(
+                                            token_str.trim_start_matches("Bearer "),
+                                            &jwt_secret,
+                                        )
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            None => false,
+                        };
+
+                        if !is_valid {
+                            warn!("Invalid or missing JWT token");
+                            return Err(create_error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "Invalid or missing authentication token",
+                            ));
+                        }
+
+                        Ok(next.run(req).await)
+                    }
+                },
+            ));
 
         // WebSocket route
         let ws_routes = Router::new()
             .route("/ws", get(websocket::websocket_handler))
+            .with_state(state.clone());
+
+        // Public routes
+        let public_routes = Router::new()
+            .route("/health", get(|| async { "OK" }))
+            .route("/api/auth/login", post(routes::login))
             .with_state(state.clone());
 
         // Static file serving for frontend
@@ -243,16 +438,12 @@ impl ArbitrageServer {
         let app = Router::new()
             .nest("/api", api_routes)
             .merge(ws_routes)
+            .merge(public_routes)
             .fallback_service(static_files)
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
-                    .layer(
-                        CorsLayer::new()
-                            .allow_origin(Any)
-                            .allow_methods(Any)
-                            .allow_headers(Any),
-                    ),
+                    .layer(cors),
             );
 
         Ok(app)
