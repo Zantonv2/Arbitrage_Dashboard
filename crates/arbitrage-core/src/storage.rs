@@ -9,7 +9,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 /// Storage configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StorageConfig {
     pub database_path: String,
     pub max_signal_history: usize,
@@ -58,7 +58,7 @@ pub enum SignalStatus {
 }
 
 impl SignalStatus {
-    fn to_string(&self) -> &'static str {
+    pub(crate) fn to_string(&self) -> &'static str {
         match self {
             SignalStatus::Detected => "detected",
             SignalStatus::Filtered => "filtered",
@@ -68,7 +68,7 @@ impl SignalStatus {
         }
     }
 
-    fn from_string(s: &str) -> Result<Self> {
+    pub(crate) fn from_string(s: &str) -> Result<Self> {
         match s {
             "detected" => Ok(SignalStatus::Detected),
             "filtered" => Ok(SignalStatus::Filtered),
@@ -94,7 +94,7 @@ pub enum ExecutionStatus {
 }
 
 impl ExecutionStatus {
-    fn to_string(&self) -> &'static str {
+    pub(crate) fn to_string(&self) -> &'static str {
         match self {
             ExecutionStatus::Pending => "pending",
             ExecutionStatus::PartiallyFilled => "partially_filled",
@@ -104,7 +104,7 @@ impl ExecutionStatus {
         }
     }
 
-    fn from_string(s: &str) -> Result<Self> {
+    pub(crate) fn from_string(s: &str) -> Result<Self> {
         match s {
             "pending" => Ok(ExecutionStatus::Pending),
             "partially_filled" => Ok(ExecutionStatus::PartiallyFilled),

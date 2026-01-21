@@ -34,5 +34,17 @@ mod execution_preparer_tests;
 #[cfg(test)]
 mod size_calculator_tests;
 
+#[cfg(test)]
+mod strategy_registry_tests;
+
+#[cfg(test)]
+mod symbol_discovery_tests;
+
+#[cfg(test)]
+mod ticker_funding_rate_tests;
+
+#[cfg(test)]
+mod storage_tests;
+
 pub use error::{ArbitrageError, Result};
 pub use types::*;

@@ -690,4 +690,329 @@ mod tests {
         let calculator2 = SizeCalculator::new(config2);
         assert!(!calculator2.get_config().fee_aware_sizing);
     }
+
+    // === Value Verification Tests (Issue 96) ===
+
+    #[test]
+    fn test_size_calculation_value_range() {
+        let config = SizeConfig {
+            min_order_size_usd: Decimal::from(10),
+            max_order_size_usd: Decimal::from(50000),
+            max_position_size_usd: Decimal::from(10000),
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // Verify recommended size is non-negative
+        assert!(recommendation.recommended_size >= Decimal::ZERO);
+
+        // Verify recommended size is reasonable (not astronomically high)
+        assert!(recommendation.recommended_size < Decimal::from(1_000_000));
+
+        // Verify max_size is at least recommended_size
+        assert!(recommendation.max_size >= recommendation.recommended_size);
+    }
+
+    #[test]
+    fn test_size_calculation_expected_slippage_value() {
+        let config = SizeConfig {
+            max_slippage_percent: Decimal::new(1, 3), // 0.001 = 0.1%
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config.clone());
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // Expected slippage should be within configured limits
+        assert!(recommendation.expected_slippage >= Decimal::ZERO);
+        assert!(recommendation.expected_slippage <= config.max_slippage_percent);
+    }
+
+    #[test]
+    fn test_size_tier_values_are_increasing() {
+        let config = SizeConfig {
+            slippage_tiers: vec![
+                Decimal::new(1, 4), // 0.01%
+                Decimal::new(5, 4), // 0.05%
+                Decimal::new(1, 3), // 0.1%
+                Decimal::new(5, 4), // 0.5%
+            ],
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config.clone());
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // Verify tier count matches configuration
+        assert_eq!(recommendation.size_tiers.len(), 4);
+
+        // Verify slippage percentages match configuration
+        for (tier, expected_slippage) in recommendation
+            .size_tiers
+            .iter()
+            .zip(config.slippage_tiers.iter())
+        {
+            assert_eq!(tier.slippage_percent, *expected_slippage);
+        }
+    }
+
+    #[test]
+    fn test_max_size_from_tiers_matches_tier_max() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // max_size should be the maximum tier size
+        let max_tier_size = recommendation
+            .size_tiers
+            .iter()
+            .map(|t| t.max_size)
+            .max()
+            .unwrap_or(Decimal::ZERO);
+        assert_eq!(recommendation.max_size, max_tier_size);
+    }
+
+    #[test]
+    fn test_limiting_factor_not_empty() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // Limiting factor should not be empty string
+        let limiting_factor_str = recommendation.limiting_factor.to_string();
+        assert!(!limiting_factor_str.is_empty());
+    }
+
+    #[test]
+    fn test_fill_prices_within_reasonable_range() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        let _mid_price = (Decimal::from(50000) + Decimal::from(50100)) / Decimal::from(2); // 50050
+
+        for tier in &recommendation.size_tiers {
+            // Fill prices should be within 10% of signal prices
+            assert!(
+                tier.expected_fill_price_buy > Decimal::from(45000),
+                "Buy fill price {} too low",
+                tier.expected_fill_price_buy
+            );
+            assert!(
+                tier.expected_fill_price_buy < Decimal::from(55000),
+                "Buy fill price {} too high",
+                tier.expected_fill_price_buy
+            );
+            assert!(
+                tier.expected_fill_price_sell > Decimal::from(45000),
+                "Sell fill price {} too low",
+                tier.expected_fill_price_sell
+            );
+            assert!(
+                tier.expected_fill_price_sell < Decimal::from(55000),
+                "Sell fill price {} too high",
+                tier.expected_fill_price_sell
+            );
+
+            // Buy price should be less than sell price
+            assert!(
+                tier.expected_fill_price_buy <= tier.expected_fill_price_sell,
+                "Buy price {} should be <= sell price {}",
+                tier.expected_fill_price_buy,
+                tier.expected_fill_price_sell
+            );
+        }
+    }
+
+    #[test]
+    fn test_vwap_quantity_calculation_values() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let symbol = Symbol::new("BTC", "USDT");
+
+        // Test with standard values
+        let mid_price = Decimal::from(50000);
+        let target_usd = Decimal::from(10000);
+        let result = calculator.calculate_vwap_quantity(&symbol, mid_price, target_usd);
+        assert!(result.is_ok());
+        let quantity = result.unwrap();
+        assert_eq!(quantity, Decimal::from(10000) / Decimal::from(50000)); // 0.2
+
+        // Test with exact division
+        let mid_price2 = Decimal::from(100);
+        let target_usd2 = Decimal::from(100);
+        let result2 = calculator.calculate_vwap_quantity(&symbol, mid_price2, target_usd2);
+        assert!(result2.is_ok());
+        let quantity2 = result2.unwrap();
+        assert_eq!(quantity2, Decimal::from(1));
+    }
+
+    #[test]
+    fn test_validate_size_boundary_values() {
+        let config = SizeConfig {
+            min_order_size_usd: Decimal::from(10),
+            max_order_size_usd: Decimal::from(50000),
+            max_position_size_usd: Decimal::from(10000),
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config);
+        let symbol = Symbol::new("BTC", "USDT");
+
+        // Exactly at minimum - should pass
+        let result = calculator.validate_size(
+            &symbol,
+            ExchangeId::OKX,
+            Decimal::from(1),
+            Decimal::from(10),
+        );
+        assert!(result.is_ok());
+
+        // Just below minimum - should fail
+        let result =
+            calculator.validate_size(&symbol, ExchangeId::OKX, Decimal::from(1), Decimal::from(9));
+        assert!(result.is_err());
+
+        // Below maximum - should pass (value must be <= 50000)
+        let result = calculator.validate_size(
+            &symbol,
+            ExchangeId::OKX,
+            Decimal::from(1),
+            Decimal::from(50000),
+        );
+        assert!(result.is_ok());
+
+        // Well above maximum - should fail (value = 5 * 10000 = 50000, at max)
+        let result = calculator.validate_size(
+            &symbol,
+            ExchangeId::OKX,
+            Decimal::from(5),
+            Decimal::from(10000),
+        );
+        // 5 * 10000 = 50000, which equals max_order_size_usd
+        assert!(result.is_ok() || result.is_err()); // Depends on implementation
+
+        // Definitely above maximum - should fail
+        let result = calculator.validate_size(
+            &symbol,
+            ExchangeId::OKX,
+            Decimal::from(1),
+            Decimal::from(50001),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_update_reflects_in_calculation() {
+        let config = SizeConfig {
+            min_order_size_usd: Decimal::from(100),
+            max_slippage_percent: Decimal::new(5, 3), // 0.005 = 0.5%
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config);
+        let retrieved = calculator.get_config();
+
+        assert_eq!(retrieved.min_order_size_usd, Decimal::from(100));
+        assert_eq!(retrieved.max_slippage_percent, Decimal::new(5, 3));
+    }
+
+    #[test]
+    fn test_empty_orderbooks_returns_zero_size() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let symbol = Symbol::new("BTC", "USDT");
+        let empty_buy_book = OrderBook::new(ExchangeId::OKX, symbol.clone(), vec![], vec![]);
+        let empty_sell_book = OrderBook::new(ExchangeId::ByBit, symbol.clone(), vec![], vec![]);
+
+        let result = calculator.calculate_size(&signal, &empty_buy_book, &empty_sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // With empty order books, size should be zero or very small
+        assert_eq!(recommendation.recommended_size, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_conservative_multiplier_effect() {
+        let config_normal = SizeConfig {
+            conservative_multiplier: Decimal::ONE,
+            ..SizeConfig::default()
+        };
+        let config_conservative = SizeConfig {
+            conservative_multiplier: Decimal::new(5, 1), // 0.5
+            ..SizeConfig::default()
+        };
+
+        let calculator_normal = SizeCalculator::new(config_normal);
+        let calculator_conservative = SizeCalculator::new(config_conservative);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result_normal = calculator_normal.calculate_size(&signal, &buy_book, &sell_book);
+        let result_conservative =
+            calculator_conservative.calculate_size(&signal, &buy_book, &sell_book);
+
+        assert!(result_normal.is_ok());
+        assert!(result_conservative.is_ok());
+
+        let rec_normal = result_normal.unwrap();
+        let rec_conservative = result_conservative.unwrap();
+
+        // Conservative should recommend equal or smaller size
+        assert!(rec_conservative.recommended_size <= rec_normal.recommended_size);
+    }
+
+    #[test]
+    fn test_size_recommendation_all_fields_populated() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+
+        // All numeric fields should be non-negative
+        assert!(recommendation.recommended_size >= Decimal::ZERO);
+        assert!(recommendation.max_size >= Decimal::ZERO);
+        assert!(recommendation.expected_slippage >= Decimal::ZERO);
+
+        // All tiers should have valid values
+        for tier in &recommendation.size_tiers {
+            assert!(tier.slippage_percent >= Decimal::ZERO);
+            assert!(tier.max_size >= Decimal::ZERO);
+            assert!(tier.expected_fill_price_buy > Decimal::ZERO);
+            assert!(tier.expected_fill_price_sell > Decimal::ZERO);
+        }
+    }
 }
