@@ -1,5 +1,5 @@
 use crate::strategies::strategies_specifics::{
-    ExchangeCapabilities, StablecoinDefaults, StrategyLimits,
+    ConfigExtensions, ExchangeCapabilities, StablecoinDefaults, StrategyLimits,
 };
 use crate::strategies::{
     FilterContext, MarketBundle, RawSignal, Strategy, StrategyConfig, TradeLeg,
@@ -9,6 +9,9 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::collections::HashMap;
+
+pub const MIN_PEG_DEVIATION_PCT_STR: &str = "0.001";
+pub const MAX_PEG_DEVIATION_PCT_STR: &str = "0.02";
 
 /// Stablecoin Peg Arbitrage Strategy
 ///
@@ -62,8 +65,8 @@ impl StablecoinArbitrageStrategy {
         if let Some(peg_targets) = self.config.custom_params.get("peg_targets") {
             if let Some(targets_obj) = peg_targets.as_object() {
                 for (coin, target_val) in targets_obj {
-                    if let Some(target_f64) = target_val.as_f64() {
-                        if let Ok(target_decimal) = Decimal::try_from(target_f64) {
+                    if let Some(target_str) = target_val.as_str() {
+                        if let Ok(target_decimal) = Decimal::from_str_exact(target_str) {
                             targets.insert(coin.clone(), target_decimal);
                         }
                     }
@@ -131,19 +134,29 @@ impl StablecoinArbitrageStrategy {
         let min_deviation_pct = self
             .config
             .custom_params
-            .get("min_peg_deviation_pct")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(StablecoinDefaults::MIN_PEG_DEVIATION_PCT);
+            .get_decimal("min_peg_deviation_pct")
+            .unwrap_or_else(|| {
+                Decimal::from_str_exact(MIN_PEG_DEVIATION_PCT_STR).unwrap_or(Decimal::new(1, 3))
+            });
 
         let max_deviation_pct = self
             .config
             .custom_params
-            .get("max_peg_deviation_pct")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(StablecoinDefaults::MAX_PEG_DEVIATION_PCT);
+            .get_decimal("max_peg_deviation_pct")
+            .unwrap_or_else(|| {
+                Decimal::from_str_exact(MAX_PEG_DEVIATION_PCT_STR).unwrap_or(Decimal::new(2, 2))
+            });
 
-        let min_deviation_bps = (min_deviation_pct * 100.0) as i32;
-        let max_deviation_bps = (max_deviation_pct * 100.0) as i32;
+        let min_deviation_bps = min_deviation_pct
+            .checked_mul(Decimal::from(100))
+            .unwrap_or(Decimal::ZERO)
+            .to_i32()
+            .unwrap_or(0);
+        let max_deviation_bps = max_deviation_pct
+            .checked_mul(Decimal::from(100))
+            .unwrap_or(Decimal::ZERO)
+            .to_i32()
+            .unwrap_or(0);
 
         let abs_deviation = deviation_bps.abs();
         abs_deviation >= min_deviation_bps && abs_deviation <= max_deviation_bps
@@ -204,7 +217,12 @@ impl StablecoinArbitrageStrategy {
 
         // Estimate net profit after fees
         let (_, taker_fee) = ExchangeCapabilities::get_typical_fees(exchange);
-        let fee_bps = (taker_fee * 100.0) as i32;
+        let fee_bps = Decimal::try_from(taker_fee)
+            .ok()
+            .and_then(|fee| fee.checked_mul(Decimal::from(100)))
+            .unwrap_or(Decimal::ZERO)
+            .to_i32()
+            .unwrap_or(0);
         let net_profit_bps = expected_profit_bps - fee_bps;
 
         if net_profit_bps < self.config.min_profit_bps {
@@ -296,13 +314,21 @@ impl StablecoinArbitrageStrategy {
                         let profit_ratio = (sell_price - buy_price)
                             .checked_div(buy_price)
                             .unwrap_or(Decimal::ZERO);
-                        let profit_bps =
-                            (profit_ratio * Decimal::from(10000)).to_i32().unwrap_or(0);
+                        let profit_bps = profit_ratio
+                            .checked_mul(Decimal::from(10000))
+                            .unwrap_or(Decimal::ZERO)
+                            .to_i32()
+                            .unwrap_or(0);
 
                         // Estimate fees
                         let (_, buy_fee) = ExchangeCapabilities::get_typical_fees(buy_exchange);
                         let (_, sell_fee) = ExchangeCapabilities::get_typical_fees(sell_exchange);
-                        let total_fee_bps = ((buy_fee + sell_fee) * 100.0) as i32;
+                        let total_fee_bps = Decimal::try_from(buy_fee + sell_fee)
+                            .ok()
+                            .and_then(|f| f.checked_mul(Decimal::from(100)))
+                            .unwrap_or(Decimal::ZERO)
+                            .to_i32()
+                            .unwrap_or(0);
                         let net_profit_bps = profit_bps - total_fee_bps;
 
                         if net_profit_bps >= self.config.min_profit_bps {

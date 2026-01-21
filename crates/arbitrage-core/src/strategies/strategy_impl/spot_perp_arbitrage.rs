@@ -480,8 +480,14 @@ impl Strategy for SpotPerpArbitrageStrategy {
                         };
 
                     // Calculate basis (perp - spot) / spot * 10000
-                    let basis_decimal = (perp_price - spot_price) / spot_price;
-                    let basis_bps = (basis_decimal * Decimal::from(10000)).to_i32().unwrap_or(0);
+                    let basis_decimal = (perp_price - spot_price)
+                        .checked_div(spot_price)
+                        .unwrap_or(Decimal::ZERO);
+                    let basis_bps = basis_decimal
+                        .checked_mul(Decimal::from(10000))
+                        .unwrap_or(Decimal::ZERO)
+                        .to_i32()
+                        .unwrap_or(0);
 
                     debug!(
                         "Checking {} spot@{} ${} vs perp@{} ${}, basis={}bps",
@@ -502,8 +508,12 @@ impl Strategy for SpotPerpArbitrageStrategy {
 
                     // Adjust for funding if available
                     if let Some(funding) = funding_rate {
-                        let funding_bps =
-                            (funding.rate * Decimal::from(10000)).to_i32().unwrap_or(0);
+                        let funding_bps = funding
+                            .rate
+                            .checked_mul(Decimal::from(10000))
+                            .unwrap_or(Decimal::ZERO)
+                            .to_i32()
+                            .unwrap_or(0);
                         // Simple adjustment: if funding is positive and we're long perp, subtract some profit
                         if basis_bps > 0 && funding_bps > 0 {
                             expected_profit_bps =

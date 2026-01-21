@@ -242,12 +242,21 @@ impl NewListingArbitrageStrategy {
                     let profit_ratio = (sell_price - buy_price)
                         .checked_div(buy_price)
                         .unwrap_or(Decimal::ZERO);
-                    let profit_bps = (profit_ratio * Decimal::from(10000)).to_i32().unwrap_or(0);
+                    let profit_bps = profit_ratio
+                        .checked_mul(Decimal::from(10000))
+                        .unwrap_or(Decimal::ZERO)
+                        .to_i32()
+                        .unwrap_or(0);
 
                     // Estimate fees
                     let (_, buy_fee) = ExchangeCapabilities::get_typical_fees(buy_exchange);
                     let (_, sell_fee) = ExchangeCapabilities::get_typical_fees(sell_exchange);
-                    let total_fee_bps = ((buy_fee + sell_fee) * 100.0) as i32;
+                    let total_fee_bps = Decimal::try_from(buy_fee + sell_fee)
+                        .ok()
+                        .and_then(|f| f.checked_mul(Decimal::from(100)))
+                        .unwrap_or(Decimal::ZERO)
+                        .to_i32()
+                        .unwrap_or(0);
                     let net_profit_bps = profit_bps - total_fee_bps;
 
                     if net_profit_bps >= self.config.min_profit_bps {
@@ -440,12 +449,21 @@ impl Strategy for NewListingArbitrageStrategy {
                     let profit_ratio = (sell_price - buy_price)
                         .checked_div(buy_price)
                         .unwrap_or(Decimal::ZERO);
-                    let profit_bps = (profit_ratio * Decimal::from(10000)).to_i32().unwrap_or(0);
+                    let profit_bps = profit_ratio
+                        .checked_mul(Decimal::from(10000))
+                        .unwrap_or(Decimal::ZERO)
+                        .to_i32()
+                        .unwrap_or(0);
 
                     // Estimate fees
                     let (_, buy_fee) = ExchangeCapabilities::get_typical_fees(buy_exchange);
                     let (_, sell_fee) = ExchangeCapabilities::get_typical_fees(sell_exchange);
-                    let total_fee_bps = ((buy_fee + sell_fee) * 100.0) as i32;
+                    let total_fee_bps = Decimal::try_from(buy_fee + sell_fee)
+                        .ok()
+                        .and_then(|f| f.checked_mul(Decimal::from(100)))
+                        .unwrap_or(Decimal::ZERO)
+                        .to_i32()
+                        .unwrap_or(0);
                     let net_profit_bps = profit_bps - total_fee_bps;
 
                     // Lower threshold for new listings (they can have higher spreads)

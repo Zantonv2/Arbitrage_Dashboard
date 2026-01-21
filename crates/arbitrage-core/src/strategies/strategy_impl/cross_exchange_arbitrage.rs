@@ -1,5 +1,5 @@
 use crate::strategies::strategies_specifics::{
-    ExchangeCapabilities, StrategyLimits, StrategyUtils,
+    ConfigExtensions, ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
 use crate::strategies::{
     FilterContext, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig, TradeLeg,
@@ -204,9 +204,8 @@ impl CrossExchangeArbitrageStrategy {
         let min_balance_ratio = self
             .config
             .custom_params
-            .get("min_balance_ratio")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.1);
+            .get_decimal("min_balance_ratio")
+            .unwrap_or_else(|| Decimal::new(1, 1)); // 0.1
 
         let total_base = self.get_total_balance(context, base_asset);
         let total_quote = self.get_total_balance(context, quote_asset);
@@ -215,7 +214,7 @@ impl CrossExchangeArbitrageStrategy {
             let sell_ratio = available_base
                 .checked_div(total_base)
                 .unwrap_or(Decimal::ZERO);
-            if sell_ratio.to_f64().unwrap_or(0.0) < min_balance_ratio {
+            if sell_ratio < min_balance_ratio {
                 return true;
             }
         }
@@ -224,7 +223,7 @@ impl CrossExchangeArbitrageStrategy {
             let buy_ratio = available_quote
                 .checked_div(total_quote)
                 .unwrap_or(Decimal::ZERO);
-            if buy_ratio.to_f64().unwrap_or(0.0) < min_balance_ratio {
+            if buy_ratio < min_balance_ratio {
                 return true;
             }
         }
@@ -283,18 +282,17 @@ impl CrossExchangeArbitrageStrategy {
         let max_imbalance_pct = self
             .config
             .custom_params
-            .get("max_imbalance_pct")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.3);
+            .get_decimal("max_imbalance_pct")
+            .unwrap_or_else(|| Decimal::new(3, 1)); // 0.3
 
         let total_balance = self.get_total_balance(context, asset);
         if total_balance.is_zero() {
             return true; // No balance to distribute
         }
 
-        let num_exchanges = self.get_supported_exchanges().len() as f64;
+        let num_exchanges = self.get_supported_exchanges().len();
         let ideal_balance_per_exchange = total_balance
-            .checked_div(Decimal::try_from(num_exchanges).unwrap_or(Decimal::ONE))
+            .checked_div(Decimal::from(num_exchanges))
             .unwrap_or(Decimal::ZERO);
 
         for exchange in self.get_supported_exchanges() {
@@ -304,7 +302,7 @@ impl CrossExchangeArbitrageStrategy {
                 .checked_div(total_balance)
                 .unwrap_or(Decimal::ZERO);
 
-            if deviation_ratio.to_f64().unwrap_or(0.0) > max_imbalance_pct {
+            if deviation_ratio > max_imbalance_pct {
                 return false;
             }
         }

@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use crate::strategies::strategies_specifics::{
-    ExchangeCapabilities, StrategyLimits, StrategyUtils,
+    ConfigExtensions, ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
 use crate::strategies::{
     FilterContext, FundingRate, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig,
@@ -119,9 +119,7 @@ impl HedgedFundingStrategy {
         let prediction_weight = self
             .config
             .custom_params
-            .get("funding_prediction_weight")
-            .and_then(|v| v.as_f64())
-            .and_then(|f| Decimal::try_from(f).ok())
+            .get_decimal("funding_prediction_weight")
             .unwrap_or_else(|| Decimal::new(3, 1)); // 0.3
 
         let current_rate = recent_rates.first().copied().unwrap_or(Decimal::ZERO);
@@ -147,9 +145,7 @@ impl HedgedFundingStrategy {
         let target_ratio = self
             .config
             .custom_params
-            .get("hedge_ratio_target")
-            .and_then(|v| v.as_f64())
-            .and_then(|f| Decimal::try_from(f).ok())
+            .get_decimal("hedge_ratio_target")
             .unwrap_or(Decimal::ONE);
 
         // Cache the ratio
@@ -255,9 +251,7 @@ impl HedgedFundingStrategy {
         let max_concentration = self
             .config
             .custom_params
-            .get("max_position_concentration")
-            .and_then(|v| v.as_f64())
-            .and_then(|f| Decimal::try_from(f).ok())
+            .get_decimal("max_position_concentration")
             .unwrap_or_else(|| Decimal::new(4, 1)); // 0.4
 
         let max_position_value = self.config.max_exposure * max_concentration;
@@ -290,18 +284,16 @@ impl HedgedFundingStrategy {
         let min_rate_pct = self
             .config
             .custom_params
-            .get("min_funding_rate_pct")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.01);
+            .get_decimal("min_funding_rate_pct")
+            .unwrap_or_else(|| Decimal::new(1, 4)); // 0.0001
 
         let max_rate_pct = self
             .config
             .custom_params
-            .get("max_funding_rate_pct")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5);
+            .get_decimal("max_funding_rate_pct")
+            .unwrap_or_else(|| Decimal::new(5, 3)); // 0.005
 
-        let rate_pct = funding_rate.rate.abs().to_f64().unwrap_or(0.0);
+        let rate_pct = funding_rate.rate.abs();
 
         rate_pct >= min_rate_pct && rate_pct <= max_rate_pct
     }
@@ -311,13 +303,13 @@ impl HedgedFundingStrategy {
         let min_time_hours = self
             .config
             .custom_params
-            .get("min_time_to_funding_hours")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(2.0);
+            .get_decimal("min_time_to_funding_hours")
+            .unwrap_or_else(|| Decimal::new(2, 0)); // 2.0
 
-        let time_to_funding =
-            (funding_rate.next_funding - Utc::now()).num_seconds() as f64 / 3600.0;
-        time_to_funding >= min_time_hours
+        let time_to_funding_hours =
+            Decimal::from((funding_rate.next_funding - Utc::now()).num_seconds() as i64)
+                / Decimal::from(3600);
+        time_to_funding_hours >= min_time_hours
     }
 
     #[allow(dead_code)]
@@ -390,8 +382,11 @@ impl HedgedFundingStrategy {
             };
 
             // Calculate expected profit
-            let funding_bps = (funding_rate.rate.abs() * Decimal::from(10000))
-                .to_i32()
+            let funding_bps = funding_rate
+                .rate
+                .abs()
+                .checked_mul(Decimal::from(10000))
+                .and_then(|d| d.to_i32())
                 .unwrap_or(0);
 
             // Subtract estimated costs (fees, basis risk)
@@ -447,7 +442,8 @@ impl HedgedFundingStrategy {
                 "basis_risk_bps",
                 json!(self
                     .calculate_basis_risk(market_data, *exchange, hedge_exchange, symbol)
-                    .map(|r| (r * Decimal::from(10000)).to_i32().unwrap_or(0))
+                    .and_then(|r| r.checked_mul(Decimal::from(10000)))
+                    .and_then(|d| d.to_i32())
                     .unwrap_or(0)),
             );
 
@@ -557,8 +553,11 @@ impl Strategy for HedgedFundingStrategy {
             };
 
             // Calculate expected profit
-            let funding_bps = (funding_rate.rate.abs() * Decimal::from(10000))
-                .to_i32()
+            let funding_bps = funding_rate
+                .rate
+                .abs()
+                .checked_mul(Decimal::from(10000))
+                .and_then(|d| d.to_i32())
                 .unwrap_or(0);
 
             // Subtract estimated costs (fees, basis risk)

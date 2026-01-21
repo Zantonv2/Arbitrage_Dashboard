@@ -189,8 +189,8 @@ impl CexArbitrageStrategy {
         self.config
             .custom_params
             .get(key)
-            .and_then(|v| v.as_f64())
-            .and_then(|f| Decimal::try_from(f).ok())
+            .and_then(|v| v.as_str())
+            .and_then(|s| Decimal::from_str_exact(s).ok())
             .unwrap_or(default)
     }
 
