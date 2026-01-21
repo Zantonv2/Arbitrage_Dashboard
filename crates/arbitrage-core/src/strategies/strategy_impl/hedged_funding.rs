@@ -307,7 +307,7 @@ impl HedgedFundingStrategy {
             .unwrap_or_else(|| Decimal::new(2, 0)); // 2.0
 
         let time_to_funding_hours =
-            Decimal::from((funding_rate.next_funding - Utc::now()).num_seconds() as i64)
+            Decimal::from((funding_rate.next_funding - Utc::now()).num_seconds())
                 / Decimal::from(3600);
         time_to_funding_hours >= min_time_hours
     }

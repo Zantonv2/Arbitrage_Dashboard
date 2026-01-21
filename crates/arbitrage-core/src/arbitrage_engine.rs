@@ -88,6 +88,10 @@ pub struct EngineStats {
     pub last_detection_time: Option<DateTime<Utc>>,
 }
 
+type OrderBookMap = Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<OrderBook>>>;
+type TickerMap = Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>>;
+type FundingRateMap = Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>>;
+
 // ============================================================================
 // Arbitrage Engine
 // ============================================================================
@@ -100,9 +104,9 @@ pub struct EngineStats {
 /// 3. Processing raw signals through the validation pipeline
 /// 4. Emitting validated signals for execution or display
 pub struct ArbitrageEngine {
-    order_books: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<OrderBook>>>,
-    tickers: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>>,
-    funding_rates: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>>,
+    order_books: OrderBookMap,
+    tickers: TickerMap,
+    funding_rates: FundingRateMap,
 
     // Signal deduplication cache
     signal_cache: Arc<DashMap<OpportunityKey, CachedSignal>>,

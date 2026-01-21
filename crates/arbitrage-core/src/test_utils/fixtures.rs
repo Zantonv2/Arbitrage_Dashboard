@@ -347,8 +347,6 @@ pub struct TickerBuilder {
     last_price: Option<Decimal>,
     bid: Option<Decimal>,
     ask: Option<Decimal>,
-    volume_24h: Option<Decimal>,
-    change_24h: Option<Decimal>,
 }
 
 impl TickerBuilder {
@@ -359,8 +357,6 @@ impl TickerBuilder {
             last_price: None,
             bid: None,
             ask: None,
-            volume_24h: None,
-            change_24h: None,
         }
     }
 
