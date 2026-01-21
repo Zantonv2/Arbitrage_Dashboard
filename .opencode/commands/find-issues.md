@@ -1,63 +1,67 @@
 ---
-description: Find issues in codebase and generate GitHub issues (limits to $ARGUMENTS issues max)
+description: Analyze codebase, find issues, and create GitHub issues (limits to $ARGUMENTS max)
 agent: build
 subtask: false
 ---
 
-You are an autonomous Engineering Insight Orchestrator.
+You are an Engineering Insight Orchestrator. Analyze the codebase, identify issues, and create GitHub issues.
 
-**TASK:**
-1. Launch 5 parallel subagents to analyze the codebase:
-   - **Critical subagent**: Finds crashes, security issues, data corruption, production outages
-   - **Performance subagent**: Finds latency, memory, CPU, scalability bottlenecks
-   - **Testing subagent**: Finds missing tests, coverage gaps, flaky tests
-   - **Maintainability subagent**: Finds complexity, duplication, technical debt
-   - **Robustness subagent**: Finds error handling gaps, retry logic issues, observability gaps
+**WORKFLOW:**
 
-2. Each subagent must output findings to `docs/outputs/issues/{category}/{filename}.md`
-   Each file follows this strict template:
-   ```markdown
-   title: [P1] Clear title under 70 chars
+1. ANALYZE WITH SUBAGENTS
+   Launch 5 parallel subagents with unique session_ids:
+   - **Critical**: Crashes, security vulnerabilities, data corruption, production outages
+   - **Performance**: Latency, memory leaks, CPU bottlenecks, scalability issues
+   - **Testing**: Missing tests, coverage gaps, flaky tests, test infrastructure
+   - **Maintainability**: Code complexity, duplication, technical debt, architecture issues
+   - **Robustness**: Error handling gaps, missing retries, poor observability, edge cases
+
+   Each subagent works in parallel, outputs findings to `docs/outputs/issues/{category}/{filename}.md`
+
+2. FINDING FORMAT
+   Each finding must use this exact template:
+
+   ```
+   ---
+   title: [P1] Clear title under 70 characters
    problem: One sentence describing the issue
-   impact: One sentence on user/system impact
-   reproduction: Steps to reproduce or observe
+   impact: One sentence on user or system impact
+   reproduction: Steps to reproduce or observe the issue
    acceptance_criteria:
    - Criterion 1
    - Criterion 2
-   effort: 2
-   risk: Medium
+   effort: 1-5 scale (1=low, 5=high)
+   risk: High|Medium|Low
    files:
    - src/file.rs
-   labels: bug,security
+   labels: bug|security|performance|testing|maintenance|robustness
+   ---
    ```
 
-3. After all subagents complete, read ALL .md files from `docs/outputs/issues/`
-
-4. **LIMIT TO $ARGUMENTS ISSUES MAXIMUM**:
+3. PRIORITIZE AND LIMIT
+   - Read all .md files from `docs/outputs/issues/`
    - If more than $ARGUMENTS files exist, prioritize by:
-     a. Risk level (High > Medium > Low)
-     b. Within same risk, by effort (lower is better)
-     c. Keep exactly $ARGUMENTS issues
-   - Output ONLY the top $ARGUMENTS issues
+     a. Risk (High > Medium > Low)
+     b. Effort (lower is better)
+   - Keep exactly $ARGUMENTS issues
+   - Skip remaining issues silently
 
-5. Generate GitHub issues from the selected files:
-   - Title: `[P1] {title}`
+4. CREATE GITHUB ISSUES
+   For each selected finding:
+   - Title: `[P{1-3}] {title}` (P1=High risk, P2=Medium, P3=Low)
    - Body: Include problem, impact, reproduction, acceptance criteria, meta
-   - Labels: Apply all labels from the file
-   - Use `gh issue create` for each issue
+   - Labels: Apply labels from the file
+   - Use `gh issue create`
 
-6. Report:
+5. REPORT
    - Issues created: N
-   - Issues skipped: M (because of limit)
-   - Repository URL for issues
+   - Issues skipped: M
+   - Repository URL for all issues
 
 **CONSTRAINTS:**
 - One finding = One file = One GitHub issue
 - Never modify subagent findings
 - Never merge multiple findings into one issue
-- Output issues separated by exactly two newlines
+- If no files exist in `docs/outputs/issues/`: report "No issues found" and exit
 
-**If no files exist in docs/outputs/issues/:**
-- Report "No issues found" and exit
-
-Begin now. Launch all 5 subagents simultaneously, wait for completion, then generate issues.
+Begin analysis. Launch all 5 subagents simultaneously.
