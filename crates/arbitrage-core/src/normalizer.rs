@@ -11,6 +11,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct Normalizer {
     symbol_mappings: HashMap<Symbol, SymbolMapping>,
+    symbol_mapping_index: HashMap<(ExchangeId, String), Symbol>,
     fee_schedules: HashMap<ExchangeId, FeeSchedule>,
     stablecoin_groups: Vec<StablecoinGroup>,
 }
@@ -19,6 +20,7 @@ impl Normalizer {
     pub fn new() -> Self {
         Self {
             symbol_mappings: HashMap::new(),
+            symbol_mapping_index: HashMap::new(),
             fee_schedules: HashMap::new(),
             stablecoin_groups: vec![StablecoinGroup::default()],
         }
@@ -27,8 +29,12 @@ impl Normalizer {
     /// Load symbol mappings from configuration
     pub fn load_symbol_mappings(&mut self, mappings: Vec<SymbolMapping>) {
         for mapping in mappings {
-            self.symbol_mappings
-                .insert(mapping.canonical.clone(), mapping);
+            let canonical = mapping.canonical.clone();
+            for (exchange, exchange_symbol) in &mapping.exchange_symbols {
+                self.symbol_mapping_index
+                    .insert((*exchange, exchange_symbol.clone()), canonical.clone());
+            }
+            self.symbol_mappings.insert(canonical, mapping);
         }
     }
 
@@ -41,15 +47,9 @@ impl Normalizer {
 
     /// Map exchange-specific symbol to canonical format
     pub fn map_symbol(&self, exchange: ExchangeId, exchange_symbol: &str) -> Option<Symbol> {
-        // Find mapping where exchange_symbol matches for this exchange
-        for (canonical, mapping) in &self.symbol_mappings {
-            if let Some(mapped_symbol) = mapping.exchange_symbols.get(&exchange) {
-                if mapped_symbol == exchange_symbol {
-                    return Some(canonical.clone());
-                }
-            }
-        }
-        None
+        self.symbol_mapping_index
+            .get(&(exchange, exchange_symbol.to_string()))
+            .cloned()
     }
 
     /// Get exchange-specific symbol from canonical
@@ -156,8 +156,13 @@ impl Normalizer {
             .collect();
 
         // Sort bids descending (highest first), asks ascending (lowest first)
-        bid_levels.sort_by(|a, b| b.price.cmp(&a.price));
-        ask_levels.sort_by(|a, b| a.price.cmp(&b.price));
+        // Skip sorting if already sorted for performance optimization
+        if !bid_levels.is_sorted_by_key(|a| std::cmp::Reverse(a.price)) {
+            bid_levels.sort_by(|a, b| b.price.cmp(&a.price));
+        }
+        if !ask_levels.is_sorted_by_key(|a| a.price) {
+            ask_levels.sort_by(|a, b| a.price.cmp(&b.price));
+        }
 
         let order_book = OrderBook {
             exchange,

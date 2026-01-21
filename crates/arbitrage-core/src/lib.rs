@@ -34,5 +34,8 @@ mod execution_preparer_tests;
 #[cfg(test)]
 mod size_calculator_tests;
 
+#[cfg(test)]
+mod arbitrage_engine_tests;
+
 pub use error::{ArbitrageError, Result};
 pub use types::*;

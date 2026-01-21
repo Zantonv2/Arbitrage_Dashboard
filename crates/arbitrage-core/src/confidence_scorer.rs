@@ -194,8 +194,16 @@ impl ConfidenceScorer {
             .unwrap_or(default_fee);
 
         // Calculate effective prices after fees
-        let effective_buy = buy_price * (Decimal::ONE + buy_fee_rate);
-        let effective_sell = sell_price * (Decimal::ONE - sell_fee_rate);
+        let adjusted_buy = Decimal::ONE + buy_fee_rate;
+        let adjusted_sell = Decimal::ONE - sell_fee_rate;
+        let effective_buy = match buy_price.checked_mul(adjusted_buy) {
+            Some(val) => val,
+            None => return NetSpreadResult::Unprofitable,
+        };
+        let effective_sell = match sell_price.checked_mul(adjusted_sell) {
+            Some(val) => val,
+            None => return NetSpreadResult::Unprofitable,
+        };
 
         if effective_sell <= effective_buy {
             return NetSpreadResult::Unprofitable;
@@ -237,7 +245,10 @@ impl ConfidenceScorer {
         let mid_price = buy_book
             .mid_price()
             .unwrap_or_else(|| sell_book.mid_price().unwrap_or(Decimal::from(50000)));
-        let filled_usd = min_filled * mid_price;
+        let filled_usd = match min_filled.checked_mul(mid_price) {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
         let depth_ratio = filled_usd / self.config.target_vwap_usd;
         let depth_score = (depth_ratio * Decimal::from(100)).min(self.config.depth_cap);
 
@@ -256,7 +267,11 @@ impl ConfidenceScorer {
             .get(&sell_book.exchange)
             .map(|r| r.uptime_percent / Decimal::from(100))
             .unwrap_or(Decimal::ONE);
-        let avg_reliability = (buy_reliability + sell_reliability) / Decimal::from(2);
+        let avg_reliability =
+            match (buy_reliability + sell_reliability).checked_div(Decimal::from(2)) {
+                Some(val) => val,
+                None => Decimal::ONE,
+            };
 
         let base_reliability = match (book_valid, fills_complete) {
             (true, true) => Decimal::from(100),
@@ -267,7 +282,13 @@ impl ConfidenceScorer {
         let reliability_score = base_reliability * avg_reliability;
 
         // Spread stability: inverse of slippage with better normalization
-        let avg_slippage_bps = (buy_vwap.slippage_bps + sell_vwap.slippage_bps) / 2;
+        let avg_slippage_bps = match (Decimal::from(buy_vwap.slippage_bps)
+            + Decimal::from(sell_vwap.slippage_bps))
+        .checked_div(Decimal::from(2))
+        {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
         let spread_stability_score = (Decimal::from(100) - Decimal::from(avg_slippage_bps))
             .max(Decimal::ZERO)
             .min(Decimal::from(100));
@@ -314,11 +335,44 @@ impl ConfidenceScorer {
             return Decimal::ZERO;
         }
 
-        let weighted_score = factors.depth_score * self.config.depth_weight
-            + factors.volatility_score * self.config.volatility_weight
-            + factors.reliability_score * self.config.reliability_weight
-            + factors.spread_stability_score * self.config.spread_stability_weight
-            + factors.freshness_score * self.config.freshness_weight;
+        let depth_contrib = match factors.depth_score.checked_mul(self.config.depth_weight) {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
+        let volatility_contrib = match factors
+            .volatility_score
+            .checked_mul(self.config.volatility_weight)
+        {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
+        let reliability_contrib = match factors
+            .reliability_score
+            .checked_mul(self.config.reliability_weight)
+        {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
+        let spread_contrib = match factors
+            .spread_stability_score
+            .checked_mul(self.config.spread_stability_weight)
+        {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
+        let freshness_contrib = match factors
+            .freshness_score
+            .checked_mul(self.config.freshness_weight)
+        {
+            Some(val) => val,
+            None => Decimal::ZERO,
+        };
+
+        let weighted_score = depth_contrib
+            + volatility_contrib
+            + reliability_contrib
+            + spread_contrib
+            + freshness_contrib;
 
         // Normalize to 0-100 scale using total weights
         let normalized_score = (weighted_score / total_weight) * Decimal::from(100);
