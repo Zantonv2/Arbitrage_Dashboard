@@ -173,7 +173,7 @@ impl ExchangeConnector for BybitConnector {
         )
         .await?;
 
-        let mut symbols = Vec::new();
+        let mut symbols = Vec::with_capacity(512);
         if let Some(result) = data["result"].as_object() {
             if let Some(list) = result["list"].as_array() {
                 for item in list {
@@ -189,7 +189,7 @@ impl ExchangeConnector for BybitConnector {
     }
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
-        let mut tickers = HashMap::new();
+        let mut tickers = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let bybit_symbol = self.symbol_to_bybit(symbol);
             let url = format!(
@@ -218,7 +218,7 @@ impl ExchangeConnector for BybitConnector {
         &self,
         symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
+        let mut funding_rates = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let bybit_symbol = self.symbol_to_bybit(symbol);
             let url = format!(
@@ -646,7 +646,7 @@ impl ExchangeConnector for BybitConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut balances = std::collections::HashMap::new();
+        let mut balances = std::collections::HashMap::with_capacity(64);
 
         if let Some(result) = response_json
             .get("result")
@@ -720,7 +720,7 @@ impl ExchangeConnector for BybitConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(list) = response_json
             .get("result")
@@ -902,13 +902,13 @@ impl BybitConnector {
         _config: &ConnectorConfig,
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
+        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
 
         loop {
             // Check for new subscriptions every 5 seconds
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_topics = Vec::new();
+                let mut new_topics = Vec::with_capacity(symbols.len());
 
                 for symbol in symbols.iter() {
                     let bybit_symbol = Self::symbol_to_bybit_static(symbol);
@@ -1072,7 +1072,7 @@ impl BybitConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(50);
         for ask in asks_data.iter().take(50) {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
@@ -1083,7 +1083,7 @@ impl BybitConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(50);
         for bid in bids_data.iter().take(50) {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {
@@ -1133,7 +1133,7 @@ impl BybitConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.config.order_book_depth as usize);
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
@@ -1144,7 +1144,7 @@ impl BybitConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.config.order_book_depth as usize);
         for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {

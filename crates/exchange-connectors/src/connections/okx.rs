@@ -184,7 +184,7 @@ impl ExchangeConnector for OKXConnector {
         )
         .await?;
 
-        let mut symbols = Vec::new();
+        let mut symbols = Vec::with_capacity(512);
         if let Some(data_array) = data["data"].as_array() {
             for item in data_array {
                 if let Some(inst_id) = item["instId"].as_str() {
@@ -202,7 +202,7 @@ impl ExchangeConnector for OKXConnector {
     }
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
-        let mut tickers = HashMap::new();
+        let mut tickers = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let okx_symbol = self.symbol_to_okx(symbol);
             let url = format!(
@@ -229,7 +229,7 @@ impl ExchangeConnector for OKXConnector {
         &self,
         symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
+        let mut funding_rates = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let okx_symbol = format!("{}-SWAP", self.symbol_to_okx(symbol));
             let url = format!(
@@ -572,7 +572,7 @@ impl ExchangeConnector for OKXConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut balances = std::collections::HashMap::new();
+        let mut balances = std::collections::HashMap::with_capacity(64);
 
         if let Some(data) = response_json
             .get("data")
@@ -645,7 +645,7 @@ impl ExchangeConnector for OKXConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(data) = response_json.get("data").and_then(|d| d.as_array()) {
             for order_data in data {
@@ -812,13 +812,13 @@ impl OKXConnector {
         _config: &ConnectorConfig,
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
+        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
         let mut last_ping = std::time::Instant::now();
 
         loop {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_args = Vec::new();
+                let mut new_args = Vec::with_capacity(symbols.len());
 
                 for symbol in symbols.iter() {
                     let okx_symbol = Self::symbol_to_okx_static(symbol);
@@ -987,7 +987,7 @@ impl OKXConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(50);
         for ask in asks_data.iter().take(50) {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
@@ -998,7 +998,7 @@ impl OKXConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(50);
         for bid in bids_data.iter().take(50) {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {
@@ -1045,7 +1045,7 @@ impl OKXConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for ask in asks_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
@@ -1059,7 +1059,7 @@ impl OKXConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for bid in bids_data
             .iter()
             .take(self.base.config.order_book_depth as usize)

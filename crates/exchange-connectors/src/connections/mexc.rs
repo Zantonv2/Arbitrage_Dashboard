@@ -130,7 +130,7 @@ impl ExchangeConnector for MEXCConnector {
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
-        let mut symbols = Vec::new();
+        let mut symbols = Vec::with_capacity(512);
         if let Some(symbols_array) = data["symbols"].as_array() {
             for item in symbols_array {
                 if let Some(symbol_str) = item["symbol"].as_str() {
@@ -153,7 +153,7 @@ impl ExchangeConnector for MEXCConnector {
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
-        let mut tickers = HashMap::new();
+        let mut tickers = HashMap::with_capacity(symbols.len());
         if let Some(ticker_array) = data.as_array() {
             for ticker_data in ticker_array {
                 if let Some(symbol_str) = ticker_data["symbol"].as_str() {
@@ -174,7 +174,7 @@ impl ExchangeConnector for MEXCConnector {
         &self,
         symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
+        let mut funding_rates = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let mexc_symbol = format!("{}_USDT", symbol.base.to_uppercase());
             let url = format!(
@@ -475,7 +475,7 @@ impl ExchangeConnector for MEXCConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut balances = std::collections::HashMap::new();
+        let mut balances = std::collections::HashMap::with_capacity(64);
 
         if let Some(balance_array) = response_json.get("balances").and_then(|b| b.as_array()) {
             for balance in balance_array {
@@ -542,7 +542,7 @@ impl ExchangeConnector for MEXCConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(order_array) = response_json.as_array() {
             for order_data in order_array {
@@ -713,13 +713,13 @@ impl MEXCConnector {
         _config: &ConnectorConfig,
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
+        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
         let mut last_ping = std::time::Instant::now();
 
         loop {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_params = Vec::new();
+                let mut new_params = Vec::with_capacity(symbols.len());
 
                 for symbol in symbols.iter() {
                     let mexc_symbol = Self::symbol_to_mexc_static(symbol);
@@ -937,7 +937,7 @@ impl MEXCConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for ask in asks_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
@@ -951,7 +951,7 @@ impl MEXCConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for bid in bids_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
