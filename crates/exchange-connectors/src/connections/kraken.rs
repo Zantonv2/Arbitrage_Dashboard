@@ -392,7 +392,7 @@ impl ExchangeConnector for KrakenConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, _symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/0/private/CancelOrder", self.config.rest_url);
 
         let body = serde_json::json!({

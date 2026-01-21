@@ -466,14 +466,24 @@ impl ExchangeConnector for BybitConnector {
         }
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
+    async fn cancel_order(
+        &self,
+        symbol: &Symbol,
+        order_id: &str,
+    ) -> Result<crate::connector::CancelResponse> {
         use crate::connector::{CancelResponse, OrderStatusType};
 
         let url = format!("{}/v5/order/cancel", self.config.rest_url);
 
+        let bybit_symbol = self.symbol_to_bybit(symbol);
+        debug_assert!(
+            !bybit_symbol.is_empty(),
+            "Symbol should not be empty for cancel_order"
+        );
+
         let cancel_request = serde_json::json!({
             "category": "spot",
-            "symbol": "BTCUSDT", // This should be dynamic based on the order
+            "symbol": bybit_symbol,
             "orderId": order_id,
         });
 
@@ -811,6 +821,8 @@ impl BybitConnector {
         let mut backoff =
             ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
+        debug_assert!(backoff.attempt() == 0, "Backoff should start at attempt 0");
+
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
@@ -821,12 +833,14 @@ impl BybitConnector {
                     *status.write().await = ConnectionStatus::Connected;
 
                     // Send status change event
-                    let _ = event_sender.send(ConnectionEvent::StatusChange {
+                    if let Err(e) = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::ByBit,
                         old_status: ConnectionStatus::Connecting,
                         new_status: ConnectionStatus::Connected,
                         timestamp: chrono::Utc::now(),
-                    });
+                    }) {
+                        error!("Failed to send ByBit status change event: {}", e);
+                    }
 
                     // Handle WebSocket messages
                     if let Err(e) = Self::handle_websocket_connection(
@@ -850,11 +864,13 @@ impl BybitConnector {
                         ConnectionStatus::Error("WebSocket connection failed".to_string());
 
                     // Send error event
-                    let _ = event_sender.send(ConnectionEvent::Error {
+                    if let Err(e) = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::ByBit,
                         error: format!("WebSocket connection failed: {}", e),
                         timestamp: chrono::Utc::now(),
-                    });
+                    }) {
+                        error!("Failed to send ByBit error event: {}", e);
+                    }
                 }
             }
 
@@ -1043,7 +1059,9 @@ impl BybitConnector {
                         timestamp: chrono::Utc::now(),
                     });
 
-                    let _ = event_sender.send(event);
+                    if let Err(e) = event_sender.send(event) {
+                        error!("Failed to send ByBit market data event: {}", e);
+                    }
                 }
             }
         }
@@ -1085,6 +1103,10 @@ impl BybitConnector {
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(50) {
             if let Some(ask_array) = ask.as_array() {
+                debug_assert!(
+                    ask_array.len() >= 2,
+                    "Ask array should have at least 2 elements"
+                );
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
                     let quantity = parse_decimal(&ask_array[1])?;
@@ -1096,6 +1118,10 @@ impl BybitConnector {
         let mut bids = Vec::new();
         for bid in bids_data.iter().take(50) {
             if let Some(bid_array) = bid.as_array() {
+                debug_assert!(
+                    bid_array.len() >= 2,
+                    "Bid array should have at least 2 elements"
+                );
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;
                     let quantity = parse_decimal(&bid_array[1])?;
@@ -1164,6 +1190,10 @@ impl BybitConnector {
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(ask_array) = ask.as_array() {
+                debug_assert!(
+                    ask_array.len() >= 2,
+                    "Ask array should have at least 2 elements"
+                );
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
                     let quantity = parse_decimal(&ask_array[1])?;
@@ -1175,6 +1205,10 @@ impl BybitConnector {
         let mut bids = Vec::new();
         for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(bid_array) = bid.as_array() {
+                debug_assert!(
+                    bid_array.len() >= 2,
+                    "Bid array should have at least 2 elements"
+                );
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;
                     let quantity = parse_decimal(&bid_array[1])?;

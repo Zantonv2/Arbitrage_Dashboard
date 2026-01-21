@@ -409,11 +409,12 @@ impl ExchangeConnector for OKXConnector {
         }
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/api/v5/trade/cancel-order", self.base.config.rest_url);
 
+        let inst_id = format!("{}-{}", symbol.base, symbol.quote);
         let cancel_request = serde_json::json!({
-            "instId": "BTC-USDT",
+            "instId": inst_id,
             "ordId": order_id,
         });
 

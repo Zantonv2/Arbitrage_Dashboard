@@ -345,7 +345,7 @@ impl ExchangeConnector for GateioConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, _symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/api/v4/spot/orders/{}", self.config.rest_url, order_id);
 
         let response = self.client.delete(&url).send().await?;

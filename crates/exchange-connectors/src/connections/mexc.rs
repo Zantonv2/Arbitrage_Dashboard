@@ -334,7 +334,7 @@ impl ExchangeConnector for MEXCConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, _symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/api/v3/order", self.base.config.rest_url);
 
         let cancel_request = serde_json::json!({
