@@ -48,6 +48,14 @@ const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const JWT_SECRET_ENV: &str = "JWT_SECRET";
 const JWT_EXPIRY_HOURS: u64 = 24;
 
+fn sanitize_path(path: &str) -> Result<std::path::PathBuf, String> {
+    if path.contains("..") {
+        return Err("Path traversal sequences not allowed".to_string());
+    }
+
+    std::fs::canonicalize(path).map_err(|e| format!("Failed to canonicalize path: {}", e))
+}
+
 /// Shared application state accessible by all route handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -430,8 +438,13 @@ impl ArbitrageServer {
             .with_state(state.clone());
 
         // Static file serving for frontend
-        let static_files = ServeDir::new(&config.server.static_files_path).not_found_service(
-            ServeDir::new(&config.server.static_files_path).append_index_html_on_directories(true),
+        let sanitized_static_path =
+            sanitize_path(&config.server.static_files_path).map_err(|e| {
+                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
+                    as Box<dyn std::error::Error>
+            })?;
+        let static_files = ServeDir::new(&sanitized_static_path).not_found_service(
+            ServeDir::new(&sanitized_static_path).append_index_html_on_directories(true),
         );
 
         // Combine all routes

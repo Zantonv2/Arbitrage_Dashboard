@@ -2,6 +2,18 @@ use arbitrage_core::config::Config;
 use std::path::Path;
 use thiserror::Error;
 
+fn sanitize_path(path: &str) -> Result<std::path::PathBuf, ConfigError> {
+    if path.contains("..") {
+        return Err(ConfigError::Validation(
+            "Path traversal sequences not allowed".to_string(),
+        ));
+    }
+
+    let absolute = std::fs::canonicalize(path).map_err(|e| ConfigError::Io(e))?;
+
+    Ok(absolute)
+}
+
 #[derive(Error, Debug)]
 pub enum ConfigError {
     #[error("IO error: {0}")]
@@ -38,7 +50,8 @@ impl ConfigManager {
 
     /// Load configuration from file
     fn load_config(path: &str) -> Result<Config, ConfigError> {
-        let content = std::fs::read_to_string(path)?;
+        let sanitized_path = sanitize_path(path)?;
+        let content = std::fs::read_to_string(sanitized_path)?;
         let config: Config = toml::from_str(&content)?;
 
         // Validate config
@@ -88,11 +101,12 @@ impl ConfigManager {
     pub fn update_config(&mut self, new_config: Config) -> Result<(), ConfigError> {
         Self::validate_config(&new_config)?;
 
-        // Save to file
+        let sanitized_path = sanitize_path(&self.config_path)?;
+
         let content = toml::to_string_pretty(&new_config)
             .map_err(|e| ConfigError::Validation(format!("Failed to serialize config: {}", e)))?;
 
-        std::fs::write(&self.config_path, content)?;
+        std::fs::write(sanitized_path, content)?;
 
         self.config = new_config;
         tracing::info!("Configuration updated and saved");
@@ -101,6 +115,8 @@ impl ConfigManager {
 
     /// Create default config file if it doesn't exist
     pub fn create_default_config(path: &str) -> Result<(), ConfigError> {
+        sanitize_path(path)?;
+
         if Path::new(path).exists() {
             return Ok(());
         }
