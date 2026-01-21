@@ -623,3 +623,158 @@ pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i
     let profit_ratio = (sell_price - buy_price) / buy_price;
     (profit_ratio * Decimal::from(10000)).to_i32()
 }
+
+#[cfg(test)]
+mod types_tests {
+    use super::*;
+
+    #[test]
+    fn test_vwap_buy_empty_order_book() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![],
+        );
+        let result = order_book.vwap_buy(Decimal::from(10));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_vwap_sell_empty_order_book() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        let result = order_book.vwap_sell(Decimal::from(10));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_vwap_buy_partial_fill() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(5))],
+        );
+        let result = order_book.vwap_buy(Decimal::from(10));
+        assert!(result.is_some());
+        let vwap = result.unwrap();
+        assert!(vwap.filled_quantity < Decimal::from(10));
+        assert!(!vwap.is_fully_filled);
+    }
+
+    #[test]
+    fn test_vwap_sell_partial_fill() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(5))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        let result = order_book.vwap_sell(Decimal::from(10));
+        assert!(result.is_some());
+        let vwap = result.unwrap();
+        assert!(vwap.filled_quantity < Decimal::from(10));
+        assert!(!vwap.is_fully_filled);
+    }
+
+    #[test]
+    fn test_vwap_buy_full_fill() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(10))],
+        );
+        let result = order_book.vwap_buy(Decimal::from(5));
+        assert!(result.is_some());
+        let vwap = result.unwrap();
+        assert_eq!(vwap.filled_quantity, Decimal::from(5));
+        assert!(vwap.is_fully_filled);
+    }
+
+    #[test]
+    fn test_vwap_sell_full_fill() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(10))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        let result = order_book.vwap_sell(Decimal::from(5));
+        assert!(result.is_some());
+        let vwap = result.unwrap();
+        assert_eq!(vwap.filled_quantity, Decimal::from(5));
+        assert!(vwap.is_fully_filled);
+    }
+
+    #[test]
+    fn test_vwap_buy_zero_quantity() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(10))],
+        );
+        let result = order_book.vwap_buy(Decimal::ZERO);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_vwap_sell_zero_quantity() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(10))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        let result = order_book.vwap_sell(Decimal::ZERO);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_vwap_slippage_bps_non_negative() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(10))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(10))],
+        );
+        let result = order_book.vwap_buy(Decimal::from(5));
+        assert!(result.is_some());
+        let vwap = result.unwrap();
+        assert!(vwap.slippage_bps >= 0);
+    }
+
+    #[test]
+    fn test_calculate_profit_bps_zero_buy_price() {
+        let result = calculate_profit_bps(Decimal::ZERO, Decimal::from(50000));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_calculate_profit_bps_negative_prices() {
+        let result = calculate_profit_bps(Decimal::from(-100), Decimal::from(50000));
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_calculate_profit_bps_normal_case() {
+        let result = calculate_profit_bps(Decimal::from(50000), Decimal::from(50100));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 20);
+    }
+}

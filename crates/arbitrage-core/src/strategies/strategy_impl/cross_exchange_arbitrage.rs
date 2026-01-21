@@ -543,3 +543,94 @@ impl Strategy for CrossExchangeArbitrageStrategy {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod cross_exchange_arbitrage_tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn test_calculate_gross_profit_bps_zero_buy_price() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::ZERO, Decimal::from(50000));
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("zero"));
+        }
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_negative_buy_price() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(-100), Decimal::from(50000));
+        assert!(result.is_err() || result.unwrap() < 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_negative_sell_price() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(-100));
+        assert!(result.is_err() || result.unwrap() < 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_both_negative() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result = strategy.calculate_gross_profit_bps(Decimal::from(-100), Decimal::from(-50));
+        assert!(result.is_err() || result.unwrap() != 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_positive_profit() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(50100));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert!(profit_bps > 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_zero_profit() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50000), Decimal::from(50000));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert_eq!(profit_bps, 0);
+    }
+
+    #[test]
+    fn test_calculate_gross_profit_bps_loss() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result =
+            strategy.calculate_gross_profit_bps(Decimal::from(50100), Decimal::from(50000));
+        assert!(result.is_ok());
+        let profit_bps = result.unwrap();
+        assert!(profit_bps < 0);
+    }
+
+    #[test]
+    fn test_estimate_net_profit_bps_no_rebalancing() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result =
+            strategy.estimate_net_profit_bps(100, ExchangeId::OKX, ExchangeId::ByBit, false);
+        assert!(result <= 100);
+    }
+
+    #[test]
+    fn test_estimate_net_profit_bps_with_rebalancing() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result =
+            strategy.estimate_net_profit_bps(100, ExchangeId::OKX, ExchangeId::ByBit, true);
+        assert!(result < 100);
+    }
+
+    #[test]
+    fn test_estimate_net_profit_bps_loss_after_fees_and_rebalancing() {
+        let strategy = CrossExchangeArbitrageStrategy::new();
+        let result =
+            strategy.estimate_net_profit_bps(5, ExchangeId::MEXC, ExchangeId::GateIo, true);
+        assert!(result <= 0);
+    }
+}

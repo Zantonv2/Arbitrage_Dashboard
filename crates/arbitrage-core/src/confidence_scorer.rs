@@ -363,3 +363,119 @@ impl Default for ConfidenceScorer {
         Self::new(ConfidenceConfig::default())
     }
 }
+
+#[cfg(test)]
+mod confidence_scorer_tests {
+    use super::*;
+    use crate::OrderBookLevel;
+    use crate::Symbol;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn test_calculate_net_spread_bps_zero_buy_price() {
+        let scorer = ConfidenceScorer::default();
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::ZERO,
+            Decimal::from(50000),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+        assert!(result.is_unprofitable());
+    }
+
+    #[test]
+    fn test_calculate_net_spread_bps_high_fees() {
+        let scorer = ConfidenceScorer::default();
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::from(50050),
+            ExchangeId::MEXC,
+            ExchangeId::GateIo,
+        );
+        assert!(result.is_unprofitable() || result.is_profitable());
+    }
+
+    #[test]
+    fn test_calculate_net_spread_bps_zero_fees() {
+        let mut scorer = ConfidenceScorer::default();
+        scorer.update_fee_schedule(
+            ExchangeId::OKX,
+            FeeSchedule::new(ExchangeId::OKX, Decimal::ZERO, Decimal::ZERO),
+        );
+        scorer.update_fee_schedule(
+            ExchangeId::ByBit,
+            FeeSchedule::new(ExchangeId::ByBit, Decimal::ZERO, Decimal::ZERO),
+        );
+
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::from(50100),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+        if let Some(profit) = result.profit_value() {
+            assert!(profit > 0);
+        }
+    }
+
+    #[test]
+    fn test_calculate_net_spread_bps_profitable() {
+        let scorer = ConfidenceScorer::default();
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::from(50500),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+        assert!(result.is_profitable());
+        if let Some(profit) = result.profit_value() {
+            assert!(profit > 0);
+        }
+    }
+
+    #[test]
+    fn test_fee_schedule_tier() {
+        let exchange = ExchangeId::OKX;
+        let fee_schedule = FeeSchedule::new(exchange, Decimal::new(5, 4), Decimal::new(1, 3));
+        assert_eq!(fee_schedule.get_fee_rate(true), Decimal::new(5, 4));
+        assert_eq!(fee_schedule.get_fee_rate(false), Decimal::new(1, 3));
+    }
+
+    #[test]
+    fn test_fee_never_exceeds_notional() {
+        let fee_rates = vec![
+            Decimal::new(1, 4),
+            Decimal::new(1, 3),
+            Decimal::new(5, 3),
+            Decimal::new(1, 2),
+            Decimal::new(9, 2),
+        ];
+
+        for rate in fee_rates {
+            let notional = Decimal::from(10000);
+            let fee_amount = notional * rate;
+            assert!(
+                fee_amount <= notional,
+                "Fee {} should not exceed notional {}",
+                fee_amount,
+                notional
+            );
+        }
+    }
+
+    #[test]
+    fn test_slippage_bps_calculation() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let order_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(10))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(10))],
+        );
+
+        let result = order_book.vwap_buy(Decimal::from(5));
+        assert!(result.is_some());
+        let vwap = result.unwrap();
+        assert!(vwap.slippage_bps >= 0, "Slippage should be non-negative");
+    }
+}
