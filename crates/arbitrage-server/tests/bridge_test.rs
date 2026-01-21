@@ -64,7 +64,7 @@ async fn test_ticker_update() -> Result<()> {
 
     engine.update_ticker(ticker).await?;
 
-    let cached = engine.get_ticker(ExchangeId::OKX, &symbol);
+    let cached = engine.get_ticker(ExchangeId::OKX, Arc::new(symbol));
     assert!(cached.is_some(), "Ticker should be cached");
 
     let cached_ticker = cached.expect("Ticker should exist");
@@ -90,7 +90,7 @@ async fn test_funding_rate_update() -> Result<()> {
 
     engine.update_funding_rate(funding_rate).await?;
 
-    let cached = engine.get_funding_rate(ExchangeId::OKX, &symbol);
+    let cached = engine.get_funding_rate(ExchangeId::OKX, Arc::new(symbol));
     assert!(cached.is_some(), "Funding rate should be cached");
 
     let cached_fr = cached.expect("Funding rate should exist");
@@ -267,7 +267,7 @@ async fn test_all_exchanges() -> Result<()> {
         engine.update_order_book(order_book).await?;
 
         // Verify it was cached
-        let cached = engine.get_order_book(exchange, &symbol);
+        let cached = engine.get_order_book(exchange, Arc::new(symbol));
         assert!(
             cached.is_some(),
             "Order book for {} should be cached",

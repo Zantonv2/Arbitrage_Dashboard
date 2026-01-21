@@ -560,3 +560,244 @@ mod validation_error_message_tests {
         );
     }
 }
+
+mod malformed_orderbook_confidence_tests {
+    use super::*;
+    use arbitrage_core::types::VwapResult;
+
+    fn create_valid_orderbook(exchange: ExchangeId) -> OrderBook {
+        OrderBook::new(
+            exchange,
+            Symbol::new("BTC", "USDT"),
+            vec![OrderBookLevel::new(Decimal::from(49900), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        )
+    }
+
+    fn create_invalid_empty_orderbook(exchange: ExchangeId) -> OrderBook {
+        OrderBook::new(exchange, Symbol::new("BTC", "USDT"), vec![], vec![])
+    }
+
+    fn create_invalid_bids_ask_orderbook(exchange: ExchangeId) -> OrderBook {
+        OrderBook::new(
+            exchange,
+            Symbol::new("BTC", "USDT"),
+            vec![],
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+        )
+    }
+
+    fn create_invalid_asks_bids_orderbook(exchange: ExchangeId) -> OrderBook {
+        OrderBook::new(
+            exchange,
+            Symbol::new("BTC", "USDT"),
+            vec![OrderBookLevel::new(Decimal::from(49900), Decimal::from(1))],
+            vec![],
+        )
+    }
+
+    fn create_invalid_spread_orderbook(exchange: ExchangeId) -> OrderBook {
+        OrderBook::new(
+            exchange,
+            Symbol::new("BTC", "USDT"),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(49900), Decimal::from(1))],
+        )
+    }
+
+    fn create_valid_vwap_result() -> VwapResult {
+        VwapResult {
+            vwap_price: Decimal::from(50000),
+            filled_quantity: Decimal::from(1),
+            total_cost: Decimal::from(50000),
+            is_fully_filled: true,
+            slippage_bps: 10,
+        }
+    }
+
+    fn create_invalid_vwap_result() -> VwapResult {
+        VwapResult {
+            vwap_price: Decimal::from(50000),
+            filled_quantity: Decimal::from(1),
+            total_cost: Decimal::from(50000),
+            is_fully_filled: false,
+            slippage_bps: 10,
+        }
+    }
+
+    #[test]
+    fn test_confidence_with_empty_buy_orderbook() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let invalid_buy_book = create_invalid_empty_orderbook(ExchangeId::OKX);
+        let valid_sell_book = create_valid_orderbook(ExchangeId::ByBit);
+
+        let factors = scorer.calculate_confidence_factors(
+            &create_valid_vwap_result(),
+            &create_valid_vwap_result(),
+            &invalid_buy_book,
+            &valid_sell_book,
+        );
+
+        assert!(factors.reliability_score < Decimal::from(100));
+    }
+
+    #[test]
+    fn test_confidence_with_empty_sell_orderbook() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let valid_buy_book = create_valid_orderbook(ExchangeId::OKX);
+        let invalid_sell_book = create_invalid_empty_orderbook(ExchangeId::ByBit);
+
+        let factors = scorer.calculate_confidence_factors(
+            &create_valid_vwap_result(),
+            &create_valid_vwap_result(),
+            &valid_buy_book,
+            &invalid_sell_book,
+        );
+
+        assert!(factors.reliability_score < Decimal::from(100));
+    }
+
+    #[test]
+    fn test_confidence_with_both_invalid_orderbooks() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let invalid_buy_book = create_invalid_empty_orderbook(ExchangeId::OKX);
+        let invalid_sell_book = create_invalid_empty_orderbook(ExchangeId::ByBit);
+
+        let factors = scorer.calculate_confidence_factors(
+            &create_invalid_vwap_result(),
+            &create_invalid_vwap_result(),
+            &invalid_buy_book,
+            &invalid_sell_book,
+        );
+
+        assert_eq!(factors.reliability_score, Decimal::from(20));
+    }
+
+    #[test]
+    fn test_confidence_with_invalid_bids_buy_orderbook() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let invalid_buy_book = create_invalid_bids_ask_orderbook(ExchangeId::OKX);
+        let valid_sell_book = create_valid_orderbook(ExchangeId::ByBit);
+
+        let factors = scorer.calculate_confidence_factors(
+            &create_valid_vwap_result(),
+            &create_valid_vwap_result(),
+            &invalid_buy_book,
+            &valid_sell_book,
+        );
+
+        assert!(!invalid_buy_book.is_valid());
+        assert!(factors.reliability_score < Decimal::from(100));
+    }
+
+    #[test]
+    fn test_confidence_with_invalid_asks_sell_orderbook() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let valid_buy_book = create_valid_orderbook(ExchangeId::OKX);
+        let invalid_sell_book = create_invalid_asks_bids_orderbook(ExchangeId::ByBit);
+
+        let factors = scorer.calculate_confidence_factors(
+            &create_valid_vwap_result(),
+            &create_valid_vwap_result(),
+            &valid_buy_book,
+            &invalid_sell_book,
+        );
+
+        assert!(!invalid_sell_book.is_valid());
+        assert!(factors.reliability_score < Decimal::from(100));
+    }
+
+    #[test]
+    fn test_confidence_with_invalid_spread_orderbook() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let invalid_spread_buy = create_invalid_spread_orderbook(ExchangeId::OKX);
+        let valid_sell_book = create_valid_orderbook(ExchangeId::ByBit);
+
+        assert!(!invalid_spread_buy.is_valid());
+
+        let factors = scorer.calculate_confidence_factors(
+            &create_valid_vwap_result(),
+            &create_valid_vwap_result(),
+            &invalid_spread_buy,
+            &valid_sell_book,
+        );
+
+        assert!(factors.reliability_score < Decimal::from(100));
+    }
+}
+
+mod net_spread_price_validation_tests {
+    use super::*;
+
+    #[test]
+    fn test_zero_sell_price_rejected() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::ZERO,
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+
+        assert!(result.is_unprofitable());
+    }
+
+    #[test]
+    fn test_negative_sell_price_rejected() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::from(-100),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+
+        assert!(result.is_unprofitable());
+    }
+
+    #[test]
+    fn test_equal_prices_rejected() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::from(50000),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+
+        assert!(result.is_unprofitable());
+    }
+
+    #[test]
+    fn test_sell_lower_than_buy_rejected() {
+        let config = ConfidenceConfig::default();
+        let scorer = ConfidenceScorer::new(config);
+
+        let result = scorer.calculate_net_spread_bps(
+            Decimal::from(50000),
+            Decimal::from(49900),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+
+        assert!(result.is_unprofitable());
+    }
+}

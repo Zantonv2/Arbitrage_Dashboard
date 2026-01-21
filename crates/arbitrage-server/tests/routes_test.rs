@@ -91,7 +91,7 @@ async fn test_orderbook_caching() -> Result<()> {
     engine.update_order_book(order_book.clone()).await?;
 
     // Retrieve from cache
-    let cached = engine.get_order_book(ExchangeId::OKX, &symbol);
+    let cached = engine.get_order_book(ExchangeId::OKX, Arc::new(symbol));
     assert!(cached.is_some(), "Order book should be cached");
 
     let cached_ob = cached.expect("Order book should exist");
@@ -110,7 +110,7 @@ async fn test_orderbook_not_found() -> Result<()> {
     let (engine, _storage, _receiver) = create_test_engine(config).await?;
 
     let symbol = Symbol::new("NONEXISTENT", "TOKEN");
-    let cached = engine.get_order_book(ExchangeId::OKX, &symbol);
+    let cached = engine.get_order_book(ExchangeId::OKX, Arc::new(symbol));
 
     assert!(
         cached.is_none(),
