@@ -444,7 +444,7 @@ impl Strategy for CrossExchangeArbitrageStrategy {
         }
 
         // Must have exactly 2 legs (buy + sell)
-        if signal.legs.len() != 2 {
+        if signal.legs.len() < 2 {
             return Ok(false);
         }
 

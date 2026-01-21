@@ -396,4 +396,390 @@ mod tests {
         let debug = format!("{:?}", bundle);
         assert!(debug.contains("order_books"));
     }
+
+    // === Strategy Filter Bounds Checking Tests ===
+
+    fn create_test_signal_with_legs(num_legs: usize) -> RawSignal {
+        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT").into());
+        signal.set_profit_bps(100);
+        for i in 0..num_legs {
+            signal.add_leg(TradeLeg::new(
+                ExchangeId::OKX,
+                Symbol::new("BTC", "USDT").into(),
+                crate::Side::Buy,
+                Decimal::from(50000 + i),
+                Decimal::from(1),
+            ));
+        }
+        signal
+    }
+
+    fn create_test_context() -> crate::strategies::FilterContext {
+        let mut context = crate::strategies::FilterContext::new(10);
+        context.max_exposure = Decimal::from(1000000);
+        context.min_notional_usd = Decimal::from(10);
+        context.allowed_exchanges = vec![ExchangeId::OKX, ExchangeId::ByBit, ExchangeId::MEXC];
+        context.set_inventory_limit(ExchangeId::OKX, "BTC", Decimal::from(100));
+        context.set_inventory_limit(ExchangeId::OKX, "USDT", Decimal::from(1000000));
+        context.set_inventory_limit(ExchangeId::ByBit, "BTC", Decimal::from(100));
+        context.set_inventory_limit(ExchangeId::ByBit, "USDT", Decimal::from(1000000));
+        context
+    }
+
+    // === Hedged Funding Strategy Filter Tests ===
+
+    #[test]
+    fn test_hedged_funding_filter_empty_legs() {
+        let strategy =
+            crate::strategies::strategy_impl::hedged_funding::HedgedFundingStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_hedged_funding_filter_single_leg() {
+        let strategy =
+            crate::strategies::strategy_impl::hedged_funding::HedgedFundingStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_hedged_funding_filter_two_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::hedged_funding::HedgedFundingStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_hedged_funding_filter_three_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::hedged_funding::HedgedFundingStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_hedged_funding_filter_many_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::hedged_funding::HedgedFundingStrategy::new();
+        let signal = create_test_signal_with_legs(10);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === CEX Arbitrage Strategy Filter Tests ===
+
+    #[test]
+    fn test_cex_arbitrage_filter_empty_legs() {
+        let strategy = crate::strategies::strategy_impl::cex_arbitrage::CexArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_cex_arbitrage_filter_single_leg() {
+        let strategy = crate::strategies::strategy_impl::cex_arbitrage::CexArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_cex_arbitrage_filter_two_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::cex_arbitrage::CexArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_cex_arbitrage_filter_three_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::cex_arbitrage::CexArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === Convergence Arbitrage Strategy Filter Tests ===
+
+    #[test]
+    fn test_convergence_arbitrage_filter_empty_legs() {
+        let strategy = crate::strategies::strategy_impl::convergence_arbitrage::ConvergenceArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_filter_single_leg() {
+        let strategy = crate::strategies::strategy_impl::convergence_arbitrage::ConvergenceArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_filter_two_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::convergence_arbitrage::ConvergenceArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_filter_three_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::convergence_arbitrage::ConvergenceArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === Spread Capture Strategy Filter Tests ===
+
+    #[test]
+    fn test_spread_capture_filter_empty_legs() {
+        let strategy =
+            crate::strategies::strategy_impl::spread_capture::SpreadCaptureStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_spread_capture_filter_single_leg() {
+        let strategy =
+            crate::strategies::strategy_impl::spread_capture::SpreadCaptureStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_spread_capture_filter_two_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::spread_capture::SpreadCaptureStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_spread_capture_filter_three_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::spread_capture::SpreadCaptureStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === Cross Exchange Arbitrage Strategy Filter Tests ===
+
+    #[test]
+    fn test_cross_exchange_arbitrage_filter_empty_legs() {
+        let strategy = crate::strategies::strategy_impl::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_cross_exchange_arbitrage_filter_single_leg() {
+        let strategy = crate::strategies::strategy_impl::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_cross_exchange_arbitrage_filter_two_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_cross_exchange_arbitrage_filter_three_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === New Listing Arbitrage Strategy Filter Tests ===
+
+    #[test]
+    fn test_new_listing_arbitrage_filter_empty_legs() {
+        let strategy = crate::strategies::strategy_impl::new_listing_arbitrage::NewListingArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_new_listing_arbitrage_filter_single_leg() {
+        let strategy = crate::strategies::strategy_impl::new_listing_arbitrage::NewListingArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_new_listing_arbitrage_filter_two_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::new_listing_arbitrage::NewListingArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_new_listing_arbitrage_filter_three_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::new_listing_arbitrage::NewListingArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === Spot Perp Arbitrage Strategy Filter Tests ===
+
+    #[test]
+    fn test_spot_perp_arbitrage_filter_empty_legs() {
+        let strategy =
+            crate::strategies::strategy_impl::spot_perp_arbitrage::SpotPerpArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_spot_perp_arbitrage_filter_single_leg() {
+        let strategy =
+            crate::strategies::strategy_impl::spot_perp_arbitrage::SpotPerpArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_spot_perp_arbitrage_filter_two_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::spot_perp_arbitrage::SpotPerpArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_spot_perp_arbitrage_filter_three_legs_no_panic() {
+        let strategy =
+            crate::strategies::strategy_impl::spot_perp_arbitrage::SpotPerpArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    // === Funding Rate Arbitrage Strategy Filter Tests ===
+
+    #[test]
+    fn test_funding_rate_arbitrage_filter_empty_legs() {
+        let strategy = crate::strategies::strategy_impl::funding_rate_arbitrage::FundingRateArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(0);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Empty legs should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_funding_rate_arbitrage_filter_single_leg() {
+        let strategy = crate::strategies::strategy_impl::funding_rate_arbitrage::FundingRateArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(1);
+        let context = create_test_context();
+        let result = strategy.filter(&signal, &context);
+        assert!(
+            !result.unwrap_or(true),
+            "Single leg should return Ok(false)"
+        );
+    }
+
+    #[test]
+    fn test_funding_rate_arbitrage_filter_two_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::funding_rate_arbitrage::FundingRateArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(2);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
+
+    #[test]
+    fn test_funding_rate_arbitrage_filter_three_legs_no_panic() {
+        let strategy = crate::strategies::strategy_impl::funding_rate_arbitrage::FundingRateArbitrageStrategy::new();
+        let signal = create_test_signal_with_legs(3);
+        let context = create_test_context();
+        let _ = strategy.filter(&signal, &context);
+    }
 }
