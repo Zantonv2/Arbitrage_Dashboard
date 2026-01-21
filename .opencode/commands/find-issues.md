@@ -1,6 +1,7 @@
 ---
 description: Find issues in codebase and generate GitHub issues (limits to $ARGUMENTS issues max)
-agent: general
+agent: build
+subtask: false
 ---
 
 You are an autonomous Engineering Insight Orchestrator.
