@@ -73,6 +73,7 @@ pub struct Config {
     pub notifications: NotificationConfig,
     pub storage: StorageConfig,
     pub logging: LoggingConfig,
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +279,25 @@ impl Default for LoggingConfig {
             max_file_size_mb: 100,
             max_files: 10,
             json_format: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    pub signal_cache_max_size: usize,
+    pub signal_cache_memory_limit_mb: u64,
+    pub memory_pressure_threshold_percent: u64,
+    pub eviction_alert_threshold: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            signal_cache_max_size: 10000,
+            signal_cache_memory_limit_mb: 100,
+            memory_pressure_threshold_percent: 80,
+            eviction_alert_threshold: 1000,
         }
     }
 }

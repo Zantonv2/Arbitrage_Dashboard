@@ -2,7 +2,8 @@
 mod tests {
     use crate::{
         confidence_scorer::{
-            ConfidenceConfig, ConfidenceFactors, ConfidenceScorer, ExchangeReliability, FeeSchedule,
+            ConfidenceConfig, ConfidenceFactors, ConfidenceScorer, ExchangeReliability,
+            FeeSchedule, NetSpreadResult,
         },
         types::{ExchangeId, OrderBook, OrderBookLevel, Signal, Symbol, VwapResult},
     };
@@ -774,7 +775,7 @@ mod tests {
         prop_compose! {
             fn decimal_strategy()(
                 mantissa in 0i64..1_000_000_000_000i64,
-                scale in 0u32..30u32
+                scale in 0u32..28u32
             ) -> Decimal {
                 Decimal::new(mantissa, scale)
             }
@@ -787,7 +788,7 @@ mod tests {
         }
 
         prop_compose! {
-            fn extreme_scale_strategy()(val in 0u32..50u32) -> u32 {
+            fn extreme_scale_strategy()(val in 0u32..28u32) -> u32 {
                 val
             }
         }

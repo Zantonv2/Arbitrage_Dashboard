@@ -972,7 +972,7 @@ impl ArbitrageEngine {
         };
 
         let is_under_memory_pressure =
-            memory_pressure_percent >= self.config.cache.memory_pressure_threshold_percent;
+            memory_pressure_percent >= self.config.cache.memory_pressure_threshold_percent as usize;
 
         CacheStats {
             current_size: Arc::new(AtomicUsize::new(cache_size)),
