@@ -17,6 +17,7 @@
 //! - Emits validated signals for UI display or auto-execution
 
 use crate::{
+    arbitrage_constants::*,
     confidence_scorer::{ConfidenceScorer, NetSpreadResult},
     config::Config,
     execution_preparer::ExecutionPreparer,
@@ -140,7 +141,7 @@ impl ArbitrageEngine {
         execution_preparer: Arc<ExecutionPreparer>,
         storage: Arc<StorageService>,
     ) -> Result<(Self, broadcast::Receiver<Signal>)> {
-        let (signal_sender, signal_receiver) = broadcast::channel(1000);
+        let (signal_sender, signal_receiver) = broadcast::channel(SIGNAL_CHANNEL_CAPACITY);
 
         let engine = Self {
             order_books: Arc::new(DashMap::new()),
@@ -155,8 +156,8 @@ impl ArbitrageEngine {
             storage,
             config,
             execution_mode: ExecutionMode::default(),
-            profit_change_threshold_bps: 5, // 0.05% change triggers new signal
-            signal_ttl: Duration::seconds(300), // 5 minute TTL
+            profit_change_threshold_bps: PROFIT_CHANGE_THRESHOLD_BPS,
+            signal_ttl: Duration::seconds(SIGNAL_TTL_SECONDS),
             stats: Arc::new(DashMap::new()),
         };
 

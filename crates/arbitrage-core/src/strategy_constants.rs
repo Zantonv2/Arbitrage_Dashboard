@@ -1,0 +1,31 @@
+pub const CEX_ARBITRAGE_MAX_SPREAD_BPS: u32 = 30;
+
+pub const CEX_ARBITRAGE_MIN_EXCHANGES: usize = 2;
+
+pub const SPOT_PERP_MAX_SPREAD_BPS: u32 = 20;
+
+pub const SPOT_PERP_MIN_EXCHANGES: usize = 2;
+
+pub const FUNDING_RATE_MAX_SPREAD_BPS: u32 = 15;
+
+pub const FUNDING_RATE_MIN_EXCHANGES: usize = 2;
+
+pub const SPREAD_CAPTURE_MAX_SPREAD_BPS: u32 = 10;
+
+pub const SPREAD_CAPTURE_MIN_EXCHANGES: usize = 3;
+
+pub const LATENCY_ARBITRAGE_MAX_SPREAD_BPS: u32 = 5;
+
+pub const LATENCY_ARBITRAGE_MIN_EXCHANGES: usize = 3;
+
+pub const STABLECOIN_MAX_SPREAD_BPS: u32 = 100;
+
+pub const STABLECOIN_MIN_EXCHANGES: usize = 2;
+
+pub const CONVERGENCE_MAX_SPREAD_BPS: u32 = 25;
+
+pub const CONVERGENCE_MIN_EXCHANGES: usize = 2;
+
+pub const NEW_LISTING_MAX_SPREAD_BPS: u32 = 500;
+
+pub const NEW_LISTING_MIN_EXCHANGES: usize = 1;
