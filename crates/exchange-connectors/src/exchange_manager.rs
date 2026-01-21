@@ -381,11 +381,12 @@ impl ExchangeManager {
     pub async fn cancel_order(
         &self,
         exchange: &ExchangeId,
+        symbol: &Symbol,
         order_id: &str,
     ) -> Result<crate::connector::CancelResponse> {
         if let Some(connector) = self.connectors.get(exchange) {
             let connector = connector.read().await;
-            connector.cancel_order(order_id).await
+            connector.cancel_order(symbol, order_id).await
         } else {
             Err(arbitrage_core::ArbitrageError::Validation(format!(
                 "Exchange {} not available",

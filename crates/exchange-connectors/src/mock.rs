@@ -305,7 +305,11 @@ impl ExchangeConnector for MockConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> arbitrage_core::Result<CancelResponse> {
+    async fn cancel_order(
+        &self,
+        _symbol: &Symbol,
+        order_id: &str,
+    ) -> arbitrage_core::Result<CancelResponse> {
         self.check_failure()?;
         Ok(CancelResponse {
             order_id: order_id.to_string(),
@@ -519,7 +523,11 @@ macro_rules! impl_mock_connector {
                 })
             }
 
-            async fn cancel_order(&self, order_id: &str) -> arbitrage_core::Result<CancelResponse> {
+            async fn cancel_order(
+                &self,
+                _symbol: &Symbol,
+                order_id: &str,
+            ) -> arbitrage_core::Result<CancelResponse> {
                 Ok(CancelResponse {
                     order_id: order_id.to_string(),
                     client_order_id: None,

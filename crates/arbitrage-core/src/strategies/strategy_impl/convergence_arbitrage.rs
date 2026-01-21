@@ -613,8 +613,18 @@ impl Strategy for ConvergenceArbitrageStrategy {
             return Ok(false);
         }
 
+        debug_assert!(
+            signal.legs.len() >= 2,
+            "Signal should have at least 2 legs for convergence arbitrage"
+        );
+
         let long_leg = &signal.legs[0];
         let short_leg = &signal.legs[1];
+
+        debug_assert_eq!(
+            long_leg.exchange, short_leg.exchange,
+            "Both legs should be on the same exchange for convergence arbitrage"
+        );
 
         // Both legs should be on the same exchange
         if long_leg.exchange != short_leg.exchange {
@@ -644,6 +654,14 @@ impl Strategy for ConvergenceArbitrageStrategy {
 
         // Check inventory for both legs
         let _long_base = &long_leg.symbol.base;
+        debug_assert!(
+            !long_leg.price.is_zero() && !long_leg.quantity.is_zero(),
+            "Long leg price and quantity should be non-zero"
+        );
+        debug_assert!(
+            !short_leg.price.is_zero() && !short_leg.quantity.is_zero(),
+            "Short leg price and quantity should be non-zero"
+        );
         let long_quote = &long_leg.symbol.quote;
         let short_base = &short_leg.symbol.base;
 
