@@ -445,6 +445,11 @@ impl Strategy for CexArbitrageStrategy {
             return Ok(false);
         }
 
+        debug_assert!(
+            signal.legs.len() >= 2,
+            "Signal should have at least 2 legs for CEX arbitrage"
+        );
+
         let buy_leg = &signal.legs[0];
         let sell_leg = &signal.legs[1];
 
@@ -490,6 +495,15 @@ impl Strategy for CexArbitrageStrategy {
             let base_asset = &signal.symbol.base;
             let quote_asset = &signal.symbol.quote;
 
+            debug_assert!(
+                !sell_leg.quantity.is_zero(),
+                "Sell leg quantity should be non-zero for inventory check"
+            );
+            debug_assert!(
+                !(buy_leg.price * buy_leg.quantity).is_zero(),
+                "Required quote amount should be non-zero for inventory check"
+            );
+
             println!(
                 "Checking inventory for base: {}, quote: {}",
                 base_asset, quote_asset
@@ -517,6 +531,11 @@ impl Strategy for CexArbitrageStrategy {
 
         // Check maximum exposure
         let total_notional = signal.total_notional();
+        debug_assert!(
+            total_notional > Decimal::ZERO,
+            "Total notional should be positive for a valid signal"
+        );
+
         if total_notional > context.max_exposure {
             return Ok(false);
         }
