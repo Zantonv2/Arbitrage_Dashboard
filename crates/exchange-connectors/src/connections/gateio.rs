@@ -130,7 +130,7 @@ impl ExchangeConnector for GateioConnector {
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
-        let mut symbols = Vec::new();
+        let mut symbols = Vec::with_capacity(1024);
         if let Some(pairs) = data.as_array() {
             for pair in pairs {
                 if let Some(id) = pair["id"].as_str() {
@@ -148,7 +148,7 @@ impl ExchangeConnector for GateioConnector {
         let response = self.client.get(&url).send().await?;
         let data: Value = response.json().await?;
 
-        let mut tickers = HashMap::new();
+        let mut tickers = HashMap::with_capacity(symbols.len());
         if let Some(ticker_array) = data.as_array() {
             for ticker_data in ticker_array {
                 if let Some(currency_pair) = ticker_data["currency_pair"].as_str() {
@@ -430,7 +430,7 @@ impl ExchangeConnector for GateioConnector {
         let response = self.client.get(&url).send().await?;
         let accounts: Value = response.json().await?;
 
-        let mut balances = HashMap::new();
+        let mut balances = HashMap::with_capacity(128);
 
         if let Some(account_array) = accounts.as_array() {
             for account in account_array {
@@ -476,7 +476,7 @@ impl ExchangeConnector for GateioConnector {
         let response = self.client.get(&url).send().await?;
         let response_json: Value = response.json().await?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(order_array) = response_json.as_array() {
             for order_data in order_array {
@@ -625,13 +625,13 @@ impl GateioConnector {
         _config: &ConnectorConfig,
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
+        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
         let mut subscription_id = 1u64;
 
         loop {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_params = Vec::new();
+                let mut new_params = Vec::with_capacity(symbols.len());
 
                 for symbol in symbols.iter() {
                     let gateio_symbol = Self::symbol_to_gateio_static(symbol);
@@ -762,31 +762,22 @@ impl GateioConnector {
         })?;
 
         if params.len() < 3 {
-            warn!(
-                "Gate.io orderbook message has insufficient params: expected >= 3, got {}",
-                params.len()
-            );
             return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
                 "Invalid params length".to_string(),
             ));
         }
 
-        let currency_pair = params.get(2).and_then(|v| v.as_str()).ok_or_else(|| {
+        let currency_pair = params[2].as_str().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing currency pair".to_string())
         })?;
 
         let symbol = Self::symbol_from_gateio_static(currency_pair)?;
 
-        let book_data = params.get(1).ok_or_else(|| {
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing book data".to_string())
-        })?;
-        let mut asks = Vec::new();
-        let mut bids = Vec::new();
+        let book_data = &params[1];
+        let mut asks = Vec::with_capacity(50);
+        let mut bids = Vec::with_capacity(50);
 
         if let Some(asks_data) = book_data["asks"].as_array() {
-            if asks_data.is_empty() {
-                warn!("Gate.io orderbook received empty asks for {}", symbol);
-            }
             for ask in asks_data.iter().take(50) {
                 if let Some(ask_arr) = ask.as_array() {
                     if ask_arr.len() >= 2 {
@@ -799,9 +790,6 @@ impl GateioConnector {
         }
 
         if let Some(bids_data) = book_data["bids"].as_array() {
-            if bids_data.is_empty() {
-                warn!("Gate.io orderbook received empty bids for {}", symbol);
-            }
             for bid in bids_data.iter().take(50) {
                 if let Some(bid_arr) = bid.as_array() {
                     if bid_arr.len() >= 2 {
@@ -811,15 +799,6 @@ impl GateioConnector {
                     }
                 }
             }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "Gate.io orderbook has empty side for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
         }
 
         Ok(OrderBook {
@@ -848,14 +827,7 @@ impl GateioConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        if asks_data.is_empty() {
-            warn!("Gate.io REST API returned empty asks for {}", symbol);
-        }
-        if bids_data.is_empty() {
-            warn!("Gate.io REST API returned empty bids for {}", symbol);
-        }
-
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.config.order_book_depth as usize);
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(ask_array) = ask.as_array() {
                 if ask_array.len() >= 2 {
@@ -866,7 +838,7 @@ impl GateioConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.config.order_book_depth as usize);
         for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(bid_array) = bid.as_array() {
                 if bid_array.len() >= 2 {
@@ -875,15 +847,6 @@ impl GateioConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "Gate.io orderbook parsing resulted in empty data for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
         }
 
         Ok(OrderBook {
