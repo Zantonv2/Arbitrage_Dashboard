@@ -18,10 +18,10 @@ Monitors order books on OKX, ByBit, MEXC, Gate.io, Kraken, and Bitstamp for pric
 
 | Metric | Value |
 |--------|-------|
-| Tests | 526 passing (100%) |
+| Tests | 1,083 passing (100%) |
 | Exchanges | 6 connected |
 | Strategies | 10 implemented |
-| Benchmarks | 30+ |
+| Crates | 3 (core, connectors, server) |
 
 ### Implemented
 

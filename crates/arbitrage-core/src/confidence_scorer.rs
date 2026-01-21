@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```rust
-//! use arbitrage_core::confidence_scorer::{ConfidenceScorer, ConfidenceConfig};
+//! use arbitrage_core::confidence_scorer::{ConfidenceScorer, ConfidenceConfig, NetSpreadResult};
 //!
 //! let config = ConfidenceConfig::default();
 //! let scorer = ConfidenceScorer::new(config);
@@ -26,7 +26,7 @@
 //! // Calculate net spread after fees
 //! let result = scorer.calculate_net_spread_bps(
 //!     rust_decimal::Decimal::from(50000),
-//!     rust_decimal::Decimal::from(50100),
+//!     rust_decimal::Decimal::from(50200),
 //!     arbitrage_core::types::ExchangeId::Binance,
 //!     arbitrage_core::types::ExchangeId::ByBit,
 //! );
@@ -222,7 +222,7 @@ impl FeeSchedule {
 /// # Example
 ///
 /// ```rust
-/// use arbitrage_core::confidence_scorer::{ConfidenceScorer, ConfidenceConfig};
+/// use arbitrage_core::confidence_scorer::{ConfidenceScorer, ConfidenceConfig, NetSpreadResult};
 /// use arbitrage_core::types::{ExchangeId, OrderBook, OrderBookLevel, Symbol, VwapResult};
 /// use rust_decimal::Decimal;
 ///
@@ -232,7 +232,7 @@ impl FeeSchedule {
 /// // Calculate fee-adjusted spread
 /// let result = scorer.calculate_net_spread_bps(
 ///     Decimal::from(50000),  // buy price
-///     Decimal::from(50100),  // sell price
+///     Decimal::from(50200),  // sell price
 ///     ExchangeId::Binance,
 ///     ExchangeId::ByBit,
 /// );

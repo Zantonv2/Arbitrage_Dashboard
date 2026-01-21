@@ -779,8 +779,8 @@ impl Default for ConfidenceFactors {
 /// # Example
 ///
 /// ```rust
-/// use arbitrage_core::strategies::FilterContext;
-/// use arbitrage_core::types::{ExchangeId, FeeSchedule};
+/// use arbitrage_core::strategies::{FilterContext, FeeSchedule};
+/// use arbitrage_core::types::ExchangeId;
 /// use rust_decimal::Decimal;
 ///
 /// let mut ctx = FilterContext::new(15); // 15 bps min profit

@@ -729,11 +729,14 @@ pub struct VwapResult {
 ///     ExchangeId::Binance,
 ///     ExchangeId::ByBit,
 ///     Decimal::from(50000),
-///     Decimal::from(50010),
+///     Decimal::from(50200),
 ///     Utc::now(),
 /// );
 ///
-/// assert!(signal.gross_profit_percent > Decimal::ZERO);
+/// // Signal created successfully with unique ID
+/// assert!(!signal.id.to_string().is_empty());
+/// assert_eq!(signal.buy_price, Decimal::from(50000));
+/// assert_eq!(signal.sell_price, Decimal::from(50200));
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {

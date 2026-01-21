@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```rust
-//! use arbitrage_core::storage::{StorageService, StorageConfig, SignalQuery};
+//! use arbitrage_core::storage::{StorageService, StorageConfig, SignalQuery, SignalStatus};
 //! use arbitrage_core::types::{ExchangeId, Signal, Symbol};
 //! use rust_decimal::Decimal;
 //! use chrono::Utc;
