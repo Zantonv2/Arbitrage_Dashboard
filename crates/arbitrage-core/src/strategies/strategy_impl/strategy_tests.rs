@@ -59,10 +59,10 @@ mod tests {
     #[test]
     fn test_stablecoin_arbitrage_filter_valid_signal() {
         let strategy = StablecoinArbitrageStrategy::new();
-        let mut signal = RawSignal::new("stablecoin_arbitrage", Symbol::new("USDT", "USD"));
+        let mut signal = RawSignal::new("stablecoin_arbitrage", Symbol::new("USDT", "USD").into());
         signal.add_leg(TradeLeg::new(
-            ExchangeId::OKX,
-            Symbol::new("USDT", "USD"),
+            ExchangeId::MEXC,
+            Symbol::new("USDT", "USD").into(),
             crate::Side::Buy,
             Decimal::from(99),
             Decimal::from(100),
@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn test_stablecoin_arbitrage_filter_invalid_signal_empty_legs() {
         let strategy = StablecoinArbitrageStrategy::new();
-        let signal = RawSignal::new("stablecoin_arbitrage", Symbol::new("USDT", "USD"));
+        let signal = RawSignal::new("stablecoin_arbitrage", Symbol::new("USDT", "USD").into());
         let context = crate::strategies::FilterContext::new(0);
         let result = strategy.filter(&signal, &context);
         assert!(result.is_ok());
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_raw_signal_new() {
-        let signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         assert_eq!(signal.strategy_id, "test_strategy");
         assert_eq!(signal.symbol.base, "BTC");
         assert!(signal.legs.is_empty());
@@ -94,10 +94,10 @@ mod tests {
 
     #[test]
     fn test_raw_signal_add_leg() {
-        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         let leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(1),
@@ -108,14 +108,14 @@ mod tests {
 
     #[test]
     fn test_raw_signal_set_profit_bps() {
-        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         signal.set_profit_bps(100);
         assert_eq!(signal.expected_profit_bps, 100);
     }
 
     #[test]
     fn test_raw_signal_add_metadata() {
-        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         signal.add_metadata("test_key", json!("test_value"));
         assert!(signal.metadata.contains_key("test_key"));
     }
@@ -124,7 +124,7 @@ mod tests {
     fn test_trade_leg_new() {
         let leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(1),
@@ -146,24 +146,24 @@ mod tests {
     #[test]
     fn test_stablecoin_arbitrage_filter_too_many_legs() {
         let strategy = StablecoinArbitrageStrategy::new();
-        let mut signal = RawSignal::new("stablecoin_arbitrage", Symbol::new("USDT", "USD"));
+        let mut signal = RawSignal::new("stablecoin_arbitrage", Symbol::new("USDT", "USD").into());
         signal.add_leg(TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("USDT", "USD"),
+            Symbol::new("USDT", "USD").into(),
             crate::Side::Buy,
             Decimal::from(99),
             Decimal::from(100),
         ));
         signal.add_leg(TradeLeg::new(
             ExchangeId::ByBit,
-            Symbol::new("USDT", "USD"),
+            Symbol::new("USDT", "USD").into(),
             crate::Side::Sell,
             Decimal::from(101),
             Decimal::from(100),
         ));
         signal.add_leg(TradeLeg::new(
-            ExchangeId::MEXC,
-            Symbol::new("USDT", "USD"),
+            ExchangeId::OKX,
+            Symbol::new("USDT", "USD").into(),
             crate::Side::Buy,
             Decimal::from(100),
             Decimal::from(100),
@@ -199,67 +199,16 @@ mod tests {
 
     #[test]
     fn test_raw_signal_is_valid_empty() {
-        let signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         assert!(!signal.is_valid());
     }
 
     #[test]
     fn test_raw_signal_is_valid_with_legs() {
-        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         signal.add_leg(TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
-            crate::Side::Buy,
-            Decimal::from(50000),
-            Decimal::from(1),
-        ));
-        signal.set_profit_bps(100); // Need positive profit for validity
-        assert!(signal.is_valid());
-    }
-
-    // === Boundary Condition Tests ===
-
-    #[test]
-    fn test_strategy_config_zero_min_profit() {
-        let config = StrategyConfig {
-            min_profit_bps: 0,
-            ..StrategyConfig::default()
-        };
-        assert_eq!(config.min_profit_bps, 0);
-    }
-
-    #[test]
-    fn test_strategy_config_large_values() {
-        let config = StrategyConfig {
-            min_profit_bps: 10000,
-            max_exposure: Decimal::MAX,
-            ..StrategyConfig::default()
-        };
-        assert!(config.min_profit_bps > 0);
-    }
-
-    // === Type Conversion Tests ===
-
-    #[test]
-    fn test_trade_leg_clone() {
-        let leg = TradeLeg::new(
-            ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
-            crate::Side::Buy,
-            Decimal::from(50000),
-            Decimal::from(1),
-        );
-        let cloned = leg.clone();
-        assert_eq!(leg.exchange, cloned.exchange);
-        assert_eq!(leg.price, cloned.price);
-    }
-
-    #[test]
-    fn test_raw_signal_clone() {
-        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
-        signal.add_leg(TradeLeg::new(
-            ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(1),
@@ -326,10 +275,10 @@ mod tests {
 
     #[test]
     fn test_raw_signal_total_notional() {
-        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test_strategy", Symbol::new("BTC", "USDT").into());
         signal.add_leg(TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(2),

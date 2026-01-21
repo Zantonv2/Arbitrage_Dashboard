@@ -143,10 +143,8 @@ impl SizeCalculator {
         };
 
         // Determine limiting factor using real signal prices
-        let limiting_factor = self.determine_limiting_factor(
-            recommended_size,
-            signal.buy_price.max(signal.sell_price), // Use higher price for USD calculation
-        );
+        let limiting_factor = self
+            .determine_limiting_factor(recommended_size, signal.buy_price.max(signal.sell_price))?;
 
         Ok(SizeRecommendation {
             recommended_size,
@@ -215,7 +213,17 @@ impl SizeCalculator {
             return Ok((Decimal::ZERO, start_price));
         }
 
-        let max_price_change = start_price * max_slippage / Decimal::from(100);
+        let max_price_change = start_price
+            .checked_mul(max_slippage)
+            .ok_or_else(|| {
+                ArbitrageError::Calculation("Overflow in price change calculation".to_string())
+            })?
+            .checked_div(Decimal::from(100))
+            .ok_or_else(|| {
+                ArbitrageError::Calculation(
+                    "Division by zero in price change calculation".to_string(),
+                )
+            })?;
         let price_limit = if is_buying {
             start_price + max_price_change
         } else {
@@ -237,7 +245,9 @@ impl SizeCalculator {
             }
 
             total_quantity += level.quantity;
-            total_cost += level.price * level.quantity;
+            total_cost += level.price.checked_mul(level.quantity).ok_or_else(|| {
+                ArbitrageError::Calculation("Overflow in cost calculation".to_string())
+            })?;
         }
 
         let avg_price = if total_quantity > Decimal::ZERO {
@@ -250,24 +260,21 @@ impl SizeCalculator {
     }
 
     /// Determine what factor is limiting the position size
-    fn determine_limiting_factor(
-        &self,
-        size: Decimal,
-        price: Decimal, // Use actual price instead of hardcoded value
-    ) -> LimitingFactor {
-        // Check against configured limits
-        let size_usd = size * price;
+    fn determine_limiting_factor(&self, size: Decimal, price: Decimal) -> Result<LimitingFactor> {
+        let size_usd = size.checked_mul(price).ok_or_else(|| {
+            ArbitrageError::Calculation("Overflow in size calculation".to_string())
+        })?;
 
         if size_usd < self.config.min_order_size_usd {
-            LimitingFactor::ExchangeMinimum
+            Ok(LimitingFactor::ExchangeMinimum)
         } else if size_usd > self.config.max_order_size_usd {
-            LimitingFactor::ExchangeMaximum
+            Ok(LimitingFactor::ExchangeMaximum)
         } else if size_usd > self.config.max_position_size_usd {
-            LimitingFactor::UserPositionLimit
+            Ok(LimitingFactor::UserPositionLimit)
         } else if size <= Decimal::ZERO {
-            LimitingFactor::InsufficientDepth
+            Ok(LimitingFactor::InsufficientDepth)
         } else {
-            LimitingFactor::OrderBookDepth
+            Ok(LimitingFactor::OrderBookDepth)
         }
     }
 
@@ -279,7 +286,9 @@ impl SizeCalculator {
         size: Decimal,
         price: Decimal,
     ) -> Result<()> {
-        let notional = size * price;
+        let notional = size.checked_mul(price).ok_or_else(|| {
+            ArbitrageError::Calculation("Overflow in notional calculation".to_string())
+        })?;
 
         if notional < self.config.min_order_size_usd {
             return Err(ArbitrageError::Validation(format!(
@@ -340,5 +349,135 @@ impl SizeCalculator {
 impl Default for SizeCalculator {
     fn default() -> Self {
         Self::new(SizeConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    fn create_test_config() -> SizeConfig {
+        SizeConfig {
+            max_slippage_percent: Decimal::new(1, 3),
+            conservative_multiplier: Decimal::new(8, 1),
+            min_order_size_usd: Decimal::from(10),
+            max_order_size_usd: Decimal::from(50000),
+            max_position_size_usd: Decimal::from(10000),
+            slippage_tiers: vec![
+                Decimal::new(5, 4),
+                Decimal::new(1, 3),
+                Decimal::new(2, 3),
+                Decimal::new(5, 3),
+            ],
+            fee_aware_sizing: true,
+        }
+    }
+
+    #[test]
+    fn test_validate_size_overflow_returns_error() {
+        let calculator = SizeCalculator::new(create_test_config());
+        let symbol = Symbol::new("BTC", "USDT");
+        let exchange = ExchangeId::Binance;
+
+        let huge_size = Decimal::MAX;
+        let price = Decimal::new(100000, 0);
+
+        let result = calculator.validate_size(&symbol, exchange, huge_size, price);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            ArbitrageError::Calculation(msg) => {
+                assert!(msg.contains("Overflow"));
+            }
+            _ => panic!("Expected Calculation error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_determine_limiting_factor_overflow_returns_error() {
+        let calculator = SizeCalculator::new(create_test_config());
+
+        let huge_size = Decimal::MAX;
+        let price = Decimal::new(100000, 0);
+
+        let result = calculator.determine_limiting_factor(huge_size, price);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            ArbitrageError::Calculation(msg) => {
+                assert!(msg.contains("Overflow"));
+            }
+            _ => panic!("Expected Calculation error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_calculate_max_size_slippage_overflow_returns_error() {
+        let calculator = SizeCalculator::new(create_test_config());
+
+        let levels = vec![OrderBookLevel {
+            price: Decimal::new(50000, 0),
+            quantity: Decimal::new(1, 0),
+        }];
+
+        let huge_start_price = Decimal::MAX;
+        let max_slippage = Decimal::new(100, 0);
+
+        let result = calculator.calculate_max_size_for_slippage(
+            &levels,
+            huge_start_price,
+            max_slippage,
+            true,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            ArbitrageError::Calculation(msg) => {
+                assert!(msg.contains("Overflow"));
+            }
+            _ => panic!("Expected Calculation error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_validate_size_normal_values_succeeds() {
+        let calculator = SizeCalculator::new(create_test_config());
+        let symbol = Symbol::new("BTC", "USDT");
+        let exchange = ExchangeId::Binance;
+
+        let size = Decimal::from(1);
+        let price = Decimal::new(50000, 0);
+
+        let result = calculator.validate_size(&symbol, exchange, size, price);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_determine_limiting_factor_normal_values_succeeds() {
+        let calculator = SizeCalculator::new(create_test_config());
+
+        let size = Decimal::from(1);
+        let price = Decimal::new(50000, 0);
+
+        let result = calculator.determine_limiting_factor(size, price);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_calculate_max_size_slippage_normal_values_succeeds() {
+        let calculator = SizeCalculator::new(create_test_config());
+
+        let levels = vec![OrderBookLevel {
+            price: Decimal::new(50000, 0),
+            quantity: Decimal::new(1, 0),
+        }];
+
+        let start_price = Decimal::new(50000, 0);
+        let max_slippage = Decimal::new(1, 0);
+
+        let result =
+            calculator.calculate_max_size_for_slippage(&levels, start_price, max_slippage, true);
+        assert!(result.is_ok());
     }
 }

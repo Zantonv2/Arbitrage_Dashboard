@@ -21,10 +21,9 @@ fn test_market_bundle_empty() {
 #[test]
 fn test_market_bundle_add_order_book() {
     let mut bundle = MarketBundle::new();
-    let symbol = Symbol::new("BTC", "USDT");
     let order_book = OrderBook::new(
         ExchangeId::OKX,
-        symbol.clone(),
+        Symbol::new("BTC", "USDT"),
         vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
         vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
     );

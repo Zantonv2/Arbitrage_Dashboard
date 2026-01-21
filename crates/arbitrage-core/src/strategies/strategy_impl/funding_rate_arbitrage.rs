@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Funding Rate Arbitrage Strategy
@@ -285,7 +286,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             }
 
             // Create signal
-            let mut signal = RawSignal::new(self.id(), (**symbol).clone());
+            let mut signal = RawSignal::new(self.id(), (**symbol).clone().into());
 
             // Determine position side based on funding rate sign
             let (perp_side, spot_side) = if funding_rate.rate > Decimal::ZERO {
@@ -301,7 +302,7 @@ impl Strategy for FundingRateArbitrageStrategy {
             // Add perpetual leg
             let perp_leg = TradeLeg::new(
                 *exchange,
-                (**symbol).clone(),
+                Arc::new((**symbol).clone()),
                 perp_side,
                 spot_price, // Use spot price as approximation for perp price
                 position_quantity,
@@ -316,7 +317,7 @@ impl Strategy for FundingRateArbitrageStrategy {
 
             let spot_leg = TradeLeg::new(
                 *exchange,
-                (**symbol).clone(),
+                Arc::new((**symbol).clone()),
                 spot_side,
                 spot_price,
                 hedge_quantity,
@@ -353,7 +354,7 @@ impl Strategy for FundingRateArbitrageStrategy {
     }
 
     fn filter(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool> {
-        println!(
+        tracing::debug!(
             "Filtering signal: strategy_id={}, legs={}, profit_bps={}",
             signal.strategy_id,
             signal.legs.len(),
@@ -362,20 +363,20 @@ impl Strategy for FundingRateArbitrageStrategy {
 
         // Basic validation
         if !signal.is_valid() {
-            println!("Signal failed is_valid() check");
+            tracing::debug!("Signal failed is_valid() check");
             return Ok(false);
         }
 
         // Must have exactly 2 legs (perpetual + spot hedge)
         if signal.legs.len() != 2 {
-            println!("Signal has {} legs, expected 2", signal.legs.len());
+            tracing::debug!("Signal has {} legs, expected 2", signal.legs.len());
             return Ok(false);
         }
 
         let perp_leg = &signal.legs[0];
         let spot_leg = &signal.legs[1];
 
-        println!(
+        tracing::debug!(
             "Perp leg: {} {:?} @ {}, Spot leg: {} {:?} @ {}",
             perp_leg.exchange,
             perp_leg.side,
@@ -387,15 +388,16 @@ impl Strategy for FundingRateArbitrageStrategy {
 
         // Validate exchange is allowed
         if !context.is_exchange_allowed(perp_leg.exchange) {
-            println!("Exchange {} not allowed", perp_leg.exchange);
+            tracing::debug!("Exchange {} not allowed", perp_leg.exchange);
             return Ok(false);
         }
 
         // Check profit threshold
         if signal.expected_profit_bps < context.min_profit_bps {
-            println!(
+            tracing::debug!(
                 "Profit too low: {} < {}",
-                signal.expected_profit_bps, context.min_profit_bps
+                signal.expected_profit_bps,
+                context.min_profit_bps
             );
             return Ok(false);
         }
@@ -403,9 +405,10 @@ impl Strategy for FundingRateArbitrageStrategy {
         // Check maximum exposure
         let total_notional = signal.total_notional();
         if total_notional > context.max_exposure {
-            println!(
+            tracing::debug!(
                 "Exposure too high: {} > {}",
-                total_notional, context.max_exposure
+                total_notional,
+                context.max_exposure
             );
             return Ok(false);
         }
@@ -414,23 +417,28 @@ impl Strategy for FundingRateArbitrageStrategy {
         let base_asset = &signal.symbol.base;
         let quote_asset = &signal.symbol.quote;
 
-        println!(
+        tracing::debug!(
             "Checking inventory for base: {}, quote: {}",
-            base_asset, quote_asset
+            base_asset,
+            quote_asset
         );
 
         // Check spot leg inventory requirements
         match spot_leg.side {
             Side::Sell => {
                 let available = context.get_inventory(spot_leg.exchange, base_asset);
-                println!(
+                tracing::debug!(
                     "Spot leg sell: need {} {}, have {}",
-                    spot_leg.quantity, base_asset, available
+                    spot_leg.quantity,
+                    base_asset,
+                    available
                 );
                 if !context.can_sell(spot_leg.exchange, base_asset, spot_leg.quantity) {
-                    println!(
+                    tracing::debug!(
                         "Cannot sell {} {} on {}",
-                        spot_leg.quantity, base_asset, spot_leg.exchange
+                        spot_leg.quantity,
+                        base_asset,
+                        spot_leg.exchange
                     );
                     return Ok(false);
                 }
@@ -441,14 +449,18 @@ impl Strategy for FundingRateArbitrageStrategy {
                     .checked_mul(spot_leg.quantity)
                     .unwrap_or(Decimal::ZERO);
                 let available = context.get_inventory(spot_leg.exchange, quote_asset);
-                println!(
+                tracing::debug!(
                     "Spot leg buy: need {} {}, have {}",
-                    required_quote, quote_asset, available
+                    required_quote,
+                    quote_asset,
+                    available
                 );
                 if !context.can_sell(spot_leg.exchange, quote_asset, required_quote) {
-                    println!(
+                    tracing::debug!(
                         "Cannot buy with {} {} on {}",
-                        required_quote, quote_asset, spot_leg.exchange
+                        required_quote,
+                        quote_asset,
+                        spot_leg.exchange
                     );
                     return Ok(false);
                 }
@@ -457,14 +469,15 @@ impl Strategy for FundingRateArbitrageStrategy {
 
         // Check minimum notional
         if total_notional < context.min_notional_usd {
-            println!(
+            tracing::debug!(
                 "Notional too low: {} < {}",
-                total_notional, context.min_notional_usd
+                total_notional,
+                context.min_notional_usd
             );
             return Ok(false);
         }
 
-        println!("All checks passed!");
+        tracing::info!("All checks passed!");
         Ok(true)
     }
 

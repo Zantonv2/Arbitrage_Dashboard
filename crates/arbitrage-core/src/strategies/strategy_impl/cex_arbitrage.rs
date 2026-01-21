@@ -367,12 +367,12 @@ impl Strategy for CexArbitrageStrategy {
             println!("Creating signal...");
 
             // Create raw signal
-            let mut signal = RawSignal::new(self.id(), (*symbol).clone());
+            let mut signal = RawSignal::new(self.id(), (*symbol).clone().into());
 
             // Add buy leg
             let buy_leg = TradeLeg::new(
                 buy_exchange,
-                (*symbol).clone(),
+                (*symbol).clone().into(),
                 Side::Buy,
                 buy_price,
                 liquidity,
@@ -382,7 +382,7 @@ impl Strategy for CexArbitrageStrategy {
             // Add sell leg
             let sell_leg = TradeLeg::new(
                 sell_exchange,
-                (*symbol).clone(),
+                (*symbol).clone().into(),
                 Side::Sell,
                 sell_price,
                 liquidity,

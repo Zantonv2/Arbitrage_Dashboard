@@ -186,11 +186,11 @@ async fn test_stablecoin_arbitrage_filtering() -> Result<()> {
     let symbol = Symbol::new("USDT", "USD");
 
     // Create a valid peg arbitrage signal with higher profit to overcome fees
-    let mut signal = RawSignal::new("stablecoin_arbitrage", symbol.clone());
+    let mut signal = RawSignal::new("stablecoin_arbitrage", Arc::new(symbol.clone()));
 
     let leg = TradeLeg::new(
         ExchangeId::OKX, // Use OKX which has lower fees
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Sell,
         Decimal::new(1005, 3), // $1.005 - higher deviation
         Decimal::from(1000),

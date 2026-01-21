@@ -8,6 +8,7 @@ use crate::{ArbitrageError, ExchangeId, Result, Side, Symbol};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Cross-Exchange Arbitrage Strategy
@@ -383,12 +384,12 @@ impl Strategy for CrossExchangeArbitrageStrategy {
             }
 
             // Create signal
-            let mut signal = RawSignal::new(self.id(), (*symbol).clone());
+            let mut signal = RawSignal::new(self.id(), Arc::new((*symbol).clone()));
 
             // Add buy leg
             let buy_leg = TradeLeg::new(
                 buy_exchange,
-                (*symbol).clone(),
+                Arc::new((*symbol).clone()),
                 Side::Buy,
                 buy_price,
                 available_liquidity,
@@ -398,7 +399,7 @@ impl Strategy for CrossExchangeArbitrageStrategy {
             // Add sell leg
             let sell_leg = TradeLeg::new(
                 sell_exchange,
-                (*symbol).clone(),
+                Arc::new((*symbol).clone()),
                 Side::Sell,
                 sell_price,
                 available_liquidity,

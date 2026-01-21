@@ -118,6 +118,7 @@ pub struct MarketBundle {
     pub funding_rates: HashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>,
     pub tickers: HashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>,
     pub timestamp: DateTime<Utc>,
+    cached_exchanges: Vec<ExchangeId>,
 }
 
 impl MarketBundle {
@@ -127,10 +128,18 @@ impl MarketBundle {
             funding_rates: HashMap::new(),
             tickers: HashMap::new(),
             timestamp: Utc::now(),
+            cached_exchanges: Vec::new(),
+        }
+    }
+
+    fn update_cached_exchanges(&mut self, exchange: ExchangeId) {
+        if !self.cached_exchanges.contains(&exchange) {
+            self.cached_exchanges.push(exchange);
         }
     }
 
     pub fn add_order_book(&mut self, order_book: Arc<OrderBook>) {
+        self.update_cached_exchanges(order_book.exchange);
         self.order_books.insert(
             (order_book.exchange, Arc::new(order_book.symbol.clone())),
             Arc::clone(&order_book),
@@ -138,6 +147,7 @@ impl MarketBundle {
     }
 
     pub fn add_funding_rate(&mut self, funding_rate: Arc<FundingRate>) {
+        self.update_cached_exchanges(funding_rate.exchange);
         self.funding_rates.insert(
             (funding_rate.exchange, Arc::new(funding_rate.symbol.clone())),
             Arc::clone(&funding_rate),
@@ -145,6 +155,7 @@ impl MarketBundle {
     }
 
     pub fn add_ticker(&mut self, ticker: Arc<Ticker>) {
+        self.update_cached_exchanges(ticker.exchange);
         self.tickers.insert(
             (ticker.exchange, Arc::new(ticker.symbol.clone())),
             Arc::clone(&ticker),
@@ -169,33 +180,30 @@ impl MarketBundle {
     }
 
     pub fn get_exchanges_for_symbol(&self, symbol: &Symbol) -> Vec<ExchangeId> {
-        self.order_books
-            .keys()
-            .filter(|(_, s)| *s == Arc::new(symbol.clone()))
-            .map(|(exchange, _)| *exchange)
+        let target_symbol = Arc::new(symbol.clone());
+        self.cached_exchanges
+            .iter()
+            .filter_map(|exchange| {
+                self.order_books
+                    .contains_key(&(*exchange, Arc::clone(&target_symbol)))
+                    .then_some(*exchange)
+            })
             .collect()
     }
 
     pub fn get_all_symbols(&self) -> Vec<Arc<Symbol>> {
-        let mut symbols: Vec<Arc<Symbol>> = Vec::new();
-
-        symbols.extend(
-            self.order_books
-                .keys()
-                .map(|(_, symbol)| Arc::clone(symbol)),
-        );
-
-        symbols.extend(self.tickers.keys().map(|(_, symbol)| Arc::clone(symbol)));
-
-        symbols.extend(
-            self.funding_rates
-                .keys()
-                .map(|(_, symbol)| Arc::clone(symbol)),
-        );
-
-        symbols.sort_by_key(|a| a.to_pair());
-        symbols.dedup();
-        symbols
+        self.order_books
+            .keys()
+            .map(|(_, symbol)| Arc::clone(symbol))
+            .chain(self.tickers.keys().map(|(_, symbol)| Arc::clone(symbol)))
+            .chain(
+                self.funding_rates
+                    .keys()
+                    .map(|(_, symbol)| Arc::clone(symbol)),
+            )
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub fn has_data(&self, exchange: ExchangeId, symbol: &Symbol) -> bool {
@@ -237,7 +245,7 @@ impl Default for MarketBundle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawSignal {
     pub strategy_id: String,
-    pub symbol: Symbol,
+    pub symbol: Arc<Symbol>,
     pub legs: Vec<TradeLeg>,
     pub expected_profit_bps: i32,
     pub basis_bps: Option<i32>,
@@ -247,7 +255,7 @@ pub struct RawSignal {
 }
 
 impl RawSignal {
-    pub fn new(strategy_id: impl Into<String>, symbol: Symbol) -> Self {
+    pub fn new(strategy_id: impl Into<String>, symbol: Arc<Symbol>) -> Self {
         Self {
             strategy_id: strategy_id.into(),
             symbol,
@@ -266,14 +274,26 @@ impl RawSignal {
 
     /// Add a buy leg with fluent builder pattern
     pub fn add_buy_leg(mut self, exchange: ExchangeId, price: Decimal, quantity: Decimal) -> Self {
-        let leg = TradeLeg::new(exchange, self.symbol.clone(), Side::Buy, price, quantity);
+        let leg = TradeLeg::new(
+            exchange,
+            Arc::clone(&self.symbol),
+            Side::Buy,
+            price,
+            quantity,
+        );
         self.legs.push(leg);
         self
     }
 
     /// Add a sell leg with fluent builder pattern
     pub fn add_sell_leg(mut self, exchange: ExchangeId, price: Decimal, quantity: Decimal) -> Self {
-        let leg = TradeLeg::new(exchange, self.symbol.clone(), Side::Sell, price, quantity);
+        let leg = TradeLeg::new(
+            exchange,
+            Arc::clone(&self.symbol),
+            Side::Sell,
+            price,
+            quantity,
+        );
         self.legs.push(leg);
         self
     }
@@ -310,7 +330,9 @@ impl RawSignal {
 
     /// Get total notional value of all legs
     pub fn total_notional(&self) -> Decimal {
-        self.legs.iter().map(|leg| leg.price * leg.quantity).sum()
+        self.legs.iter().fold(Decimal::ZERO, |acc, leg| {
+            acc.saturating_add(leg.price.saturating_mul(leg.quantity))
+        })
     }
 
     /// Get unique exchanges involved in this signal
@@ -331,7 +353,7 @@ impl RawSignal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeLeg {
     pub exchange: ExchangeId,
-    pub symbol: Symbol,
+    pub symbol: Arc<Symbol>,
     pub side: Side,
     pub price: Decimal,
     pub quantity: Decimal,
@@ -341,7 +363,7 @@ pub struct TradeLeg {
 impl TradeLeg {
     pub fn new(
         exchange: ExchangeId,
-        symbol: Symbol,
+        symbol: Arc<Symbol>,
         side: Side,
         price: Decimal,
         quantity: Decimal,
@@ -422,11 +444,17 @@ impl FilterContext {
 
     pub fn can_sell(&self, exchange: ExchangeId, asset: &str, quantity: Decimal) -> bool {
         let key = (exchange, asset.to_string());
-        let available = self
-            .inventory_limits
-            .get(&key)
-            .copied()
-            .unwrap_or(Decimal::ZERO);
+        let available = match self.inventory_limits.get(&key).copied() {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    exchange = %exchange,
+                    asset = asset,
+                    "Inventory lookup in can_sell defaulted to zero - no limit configured"
+                );
+                Decimal::ZERO
+            }
+        };
 
         available >= quantity
     }
@@ -443,10 +471,21 @@ impl FilterContext {
 
     /// Get inventory balance for an asset on an exchange
     pub fn get_inventory(&self, exchange: ExchangeId, asset: &str) -> Decimal {
-        self.inventory_limits
+        match self
+            .inventory_limits
             .get(&(exchange, asset.to_string()))
             .copied()
-            .unwrap_or(Decimal::ZERO)
+        {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    exchange = %exchange,
+                    asset = asset,
+                    "Inventory lookup defaulted to zero - no limit configured"
+                );
+                Decimal::ZERO
+            }
+        }
     }
 
     /// Set inventory limit for an asset on an exchange
@@ -488,10 +527,21 @@ impl ExecutionContext {
     }
 
     pub fn get_balance(&self, exchange: ExchangeId, asset: &str) -> Decimal {
-        self.available_balances
+        match self
+            .available_balances
             .get(&(exchange, asset.to_string()))
             .copied()
-            .unwrap_or(Decimal::ZERO)
+        {
+            Some(value) => value,
+            None => {
+                tracing::warn!(
+                    exchange = %exchange,
+                    asset = asset,
+                    "Balance lookup defaulted to zero - no balance configured"
+                );
+                Decimal::ZERO
+            }
+        }
     }
 
     pub fn set_balance(
@@ -732,5 +782,129 @@ impl FeeSchedule {
         notional
             .checked_mul(rate)
             .ok_or_else(|| ArbitrageError::Calculation("Fee calculation overflow".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    mod filter_context_inventory_tests {
+        use super::*;
+
+        #[test]
+        fn test_get_inventory_returns_configured_value() {
+            let mut context = FilterContext::new(10);
+            context.set_inventory_limit(ExchangeId::OKX, "BTC", Decimal::from(100));
+
+            let inventory = context.get_inventory(ExchangeId::OKX, "BTC");
+
+            assert_eq!(inventory, Decimal::from(100));
+        }
+
+        #[test]
+        fn test_get_inventory_returns_zero_when_not_configured() {
+            let context = FilterContext::new(10);
+
+            let inventory = context.get_inventory(ExchangeId::OKX, "BTC");
+
+            assert_eq!(inventory, Decimal::ZERO);
+        }
+
+        #[test]
+        fn test_can_sell_returns_true_when_sufficient_inventory() {
+            let mut context = FilterContext::new(10);
+            context.set_inventory_limit(ExchangeId::OKX, "BTC", Decimal::from(100));
+
+            let can_sell = context.can_sell(ExchangeId::OKX, "BTC", Decimal::from(50));
+
+            assert!(can_sell);
+        }
+
+        #[test]
+        fn test_can_sell_returns_false_when_insufficient_inventory() {
+            let mut context = FilterContext::new(10);
+            context.set_inventory_limit(ExchangeId::OKX, "BTC", Decimal::from(30));
+
+            let can_sell = context.can_sell(ExchangeId::OKX, "BTC", Decimal::from(50));
+
+            assert!(!can_sell);
+        }
+
+        #[test]
+        fn test_can_sell_returns_false_when_no_inventory_configured() {
+            let context = FilterContext::new(10);
+
+            let can_sell = context.can_sell(ExchangeId::OKX, "BTC", Decimal::from(1));
+
+            assert!(!can_sell);
+        }
+
+        #[test]
+        fn test_can_sell_returns_true_for_exact_inventory_match() {
+            let mut context = FilterContext::new(10);
+            context.set_inventory_limit(ExchangeId::OKX, "BTC", Decimal::from(100));
+
+            let can_sell = context.can_sell(ExchangeId::OKX, "BTC", Decimal::from(100));
+
+            assert!(can_sell);
+        }
+    }
+
+    mod execution_context_balance_tests {
+        use super::*;
+
+        #[test]
+        fn test_get_balance_returns_configured_value() {
+            let mut context = ExecutionContext::new();
+            context.set_balance(ExchangeId::OKX, "USDT", Decimal::from(50000));
+
+            let balance = context.get_balance(ExchangeId::OKX, "USDT");
+
+            assert_eq!(balance, Decimal::from(50000));
+        }
+
+        #[test]
+        fn test_get_balance_returns_zero_when_not_configured() {
+            let context = ExecutionContext::new();
+
+            let balance = context.get_balance(ExchangeId::OKX, "USDT");
+
+            assert_eq!(balance, Decimal::ZERO);
+        }
+
+        #[test]
+        fn test_has_sufficient_balance_returns_true_when_sufficient() {
+            let mut context = ExecutionContext::new();
+            context.set_balance(ExchangeId::OKX, "USDT", Decimal::from(10000));
+
+            let has_sufficient =
+                context.has_sufficient_balance(ExchangeId::OKX, "USDT", Decimal::from(5000));
+
+            assert!(has_sufficient);
+        }
+
+        #[test]
+        fn test_has_sufficient_balance_returns_false_when_insufficient() {
+            let mut context = ExecutionContext::new();
+            context.set_balance(ExchangeId::OKX, "USDT", Decimal::from(1000));
+
+            let has_sufficient =
+                context.has_sufficient_balance(ExchangeId::OKX, "USDT", Decimal::from(5000));
+
+            assert!(!has_sufficient);
+        }
+
+        #[test]
+        fn test_has_sufficient_balance_returns_false_when_no_balance_configured() {
+            let context = ExecutionContext::new();
+
+            let has_sufficient =
+                context.has_sufficient_balance(ExchangeId::OKX, "USDT", Decimal::from(1));
+
+            assert!(!has_sufficient);
+        }
     }
 }

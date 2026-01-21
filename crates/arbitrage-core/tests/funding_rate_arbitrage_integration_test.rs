@@ -167,12 +167,12 @@ async fn test_funding_rate_arbitrage_filtering() -> Result<()> {
     let symbol = Symbol::new("BTC", "USDT");
 
     // Create a valid signal
-    let mut signal = RawSignal::new("funding_rate_arbitrage", symbol.clone());
+    let mut signal = RawSignal::new("funding_rate_arbitrage", Arc::new(symbol.clone()));
 
     // Add perpetual leg (long)
     let perp_leg = TradeLeg::new(
         ExchangeId::OKX,
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Buy,
         Decimal::from(50000),
         Decimal::from(1),
@@ -182,7 +182,7 @@ async fn test_funding_rate_arbitrage_filtering() -> Result<()> {
     // Add spot hedge leg (short)
     let spot_leg = TradeLeg::new(
         ExchangeId::OKX,
-        symbol.clone(),
+        Arc::new(symbol.clone()),
         Side::Sell,
         Decimal::from(50000),
         Decimal::from(1),

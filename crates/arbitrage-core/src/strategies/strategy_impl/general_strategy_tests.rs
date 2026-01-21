@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn test_raw_signal_profit_bps_boundary() {
-        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT").into());
         signal.set_profit_bps(i32::MAX);
         assert_eq!(signal.expected_profit_bps, i32::MAX);
 
@@ -78,11 +78,11 @@ mod tests {
 
     #[test]
     fn test_raw_signal_multiple_legs() {
-        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT").into());
         for i in 1..=5 {
             signal.add_leg(TradeLeg::new(
                 ExchangeId::OKX,
-                Symbol::new("BTC", "USDT"),
+                Symbol::new("BTC", "USDT").into(),
                 crate::Side::Buy,
                 Decimal::from(50000),
                 Decimal::from(i),
@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_raw_signal_metadata_types() {
-        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT").into());
         signal.add_metadata("string", serde_json::json!("value"));
         signal.add_metadata("number", serde_json::json!(42));
         signal.add_metadata("float", serde_json::json!(3.14));
@@ -109,7 +109,7 @@ mod tests {
     fn test_trade_leg_sides() {
         let buy_leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(1),
@@ -118,7 +118,7 @@ mod tests {
 
         let sell_leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Sell,
             Decimal::from(50001),
             Decimal::from(1),
@@ -130,7 +130,7 @@ mod tests {
     fn test_trade_leg_extreme_values() {
         let leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::MAX,
             Decimal::MAX,
@@ -143,7 +143,7 @@ mod tests {
     fn test_trade_leg_notional() {
         let leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(2),
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_raw_signal_debug() {
-        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT"));
+        let mut signal = RawSignal::new("test", Symbol::new("BTC", "USDT").into());
         signal.set_profit_bps(100);
         let debug = format!("{:?}", signal);
         assert!(debug.contains("test"));
@@ -380,7 +380,7 @@ mod tests {
     fn test_trade_leg_debug() {
         let leg = TradeLeg::new(
             ExchangeId::OKX,
-            Symbol::new("BTC", "USDT"),
+            Symbol::new("BTC", "USDT").into(),
             crate::Side::Buy,
             Decimal::from(50000),
             Decimal::from(1),
