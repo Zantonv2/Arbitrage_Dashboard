@@ -118,6 +118,7 @@ pub struct MarketBundle {
     pub funding_rates: HashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>,
     pub tickers: HashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>,
     pub timestamp: DateTime<Utc>,
+    cached_exchanges: Vec<ExchangeId>,
 }
 
 impl MarketBundle {
@@ -127,10 +128,18 @@ impl MarketBundle {
             funding_rates: HashMap::new(),
             tickers: HashMap::new(),
             timestamp: Utc::now(),
+            cached_exchanges: Vec::new(),
+        }
+    }
+
+    fn update_cached_exchanges(&mut self, exchange: ExchangeId) {
+        if !self.cached_exchanges.contains(&exchange) {
+            self.cached_exchanges.push(exchange);
         }
     }
 
     pub fn add_order_book(&mut self, order_book: Arc<OrderBook>) {
+        self.update_cached_exchanges(order_book.exchange);
         self.order_books.insert(
             (order_book.exchange, Arc::new(order_book.symbol.clone())),
             Arc::clone(&order_book),
@@ -138,6 +147,7 @@ impl MarketBundle {
     }
 
     pub fn add_funding_rate(&mut self, funding_rate: Arc<FundingRate>) {
+        self.update_cached_exchanges(funding_rate.exchange);
         self.funding_rates.insert(
             (funding_rate.exchange, Arc::new(funding_rate.symbol.clone())),
             Arc::clone(&funding_rate),
@@ -145,6 +155,7 @@ impl MarketBundle {
     }
 
     pub fn add_ticker(&mut self, ticker: Arc<Ticker>) {
+        self.update_cached_exchanges(ticker.exchange);
         self.tickers.insert(
             (ticker.exchange, Arc::new(ticker.symbol.clone())),
             Arc::clone(&ticker),
@@ -169,33 +180,30 @@ impl MarketBundle {
     }
 
     pub fn get_exchanges_for_symbol(&self, symbol: &Symbol) -> Vec<ExchangeId> {
-        self.order_books
-            .keys()
-            .filter(|(_, s)| *s == Arc::new(symbol.clone()))
-            .map(|(exchange, _)| *exchange)
+        let target_symbol = Arc::new(symbol.clone());
+        self.cached_exchanges
+            .iter()
+            .filter_map(|exchange| {
+                self.order_books
+                    .contains_key(&(*exchange, Arc::clone(&target_symbol)))
+                    .then_some(*exchange)
+            })
             .collect()
     }
 
     pub fn get_all_symbols(&self) -> Vec<Arc<Symbol>> {
-        let mut symbols: Vec<Arc<Symbol>> = Vec::new();
-
-        symbols.extend(
-            self.order_books
-                .keys()
-                .map(|(_, symbol)| Arc::clone(symbol)),
-        );
-
-        symbols.extend(self.tickers.keys().map(|(_, symbol)| Arc::clone(symbol)));
-
-        symbols.extend(
-            self.funding_rates
-                .keys()
-                .map(|(_, symbol)| Arc::clone(symbol)),
-        );
-
-        symbols.sort_by_key(|a| a.to_pair());
-        symbols.dedup();
-        symbols
+        self.order_books
+            .keys()
+            .map(|(_, symbol)| Arc::clone(symbol))
+            .chain(self.tickers.keys().map(|(_, symbol)| Arc::clone(symbol)))
+            .chain(
+                self.funding_rates
+                    .keys()
+                    .map(|(_, symbol)| Arc::clone(symbol)),
+            )
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub fn has_data(&self, exchange: ExchangeId, symbol: &Symbol) -> bool {
