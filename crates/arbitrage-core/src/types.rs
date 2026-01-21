@@ -214,15 +214,23 @@ impl OrderBook {
             return false;
         }
 
-        let bids_sorted = self.bids.windows(2).all(|w| w[0].price >= w[1].price);
-        let asks_sorted = self.asks.windows(2).all(|w| w[0].price <= w[1].price);
+        if let (Some(bid), Some(ask)) = (self.best_bid(), self.best_ask()) {
+            if bid.price >= ask.price {
+                return false;
+            }
+        } else {
+            return false;
+        }
 
-        let spread_valid = match (self.best_bid(), self.best_ask()) {
-            (Some(bid), Some(ask)) => bid.price < ask.price,
-            _ => false,
-        };
+        if !self.bids.windows(2).all(|w| w[0].price >= w[1].price) {
+            return false;
+        }
 
-        bids_sorted && asks_sorted && spread_valid
+        if !self.asks.windows(2).all(|w| w[0].price <= w[1].price) {
+            return false;
+        }
+
+        true
     }
 
     /// Calculate VWAP for buying a given quantity
