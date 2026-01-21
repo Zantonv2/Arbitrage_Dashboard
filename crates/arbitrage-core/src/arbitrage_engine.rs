@@ -32,10 +32,140 @@ use dashmap::DashMap;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rustc_hash::FxHashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
+
+use std::ops::Deref;
+
+// ============================================================================
+// LRU Cache Implementation
+// ============================================================================
+
+const _MAX_CACHE_SIZE: usize = 10000;
+
+struct LruCache<K: Clone + Eq + std::hash::Hash, V> {
+    max_size: usize,
+    map: DashMap<K, V>,
+    access_order: Mutex<VecDeque<K>>,
+    size: AtomicUsize,
+    evictions: AtomicU64,
+}
+
+impl<K: Clone + Eq + std::hash::Hash + std::fmt::Debug, V> LruCache<K, V> {
+    fn new(max_size: usize) -> Self {
+        Self {
+            max_size,
+            map: DashMap::new(),
+            access_order: Mutex::new(VecDeque::new()),
+            size: AtomicUsize::new(0),
+            evictions: AtomicU64::new(0),
+        }
+    }
+
+    fn get<Q: std::hash::Hash + Eq>(&self, key: &Q) -> Option<impl Deref<Target = V> + '_>
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        if let Some(entry) = self.map.get(key) {
+            let key_cloned = entry.key().clone();
+            let mut access = self.access_order.lock().unwrap();
+            if let Some(pos) = access.iter().position(|k| k == &key_cloned) {
+                access.remove(pos);
+            }
+            access.push_back(key_cloned);
+            Some(entry)
+        } else {
+            None
+        }
+    }
+
+    fn insert(&self, key: K, value: V) {
+        let mut access = self.access_order.lock().unwrap();
+        let is_new = !self.map.contains_key(&key);
+
+        if is_new {
+            // Evict entries if we're at capacity before adding
+            while self.size.load(Ordering::SeqCst) >= self.max_size {
+                if let Some(oldest) = access.pop_front() {
+                    self.map.remove(&oldest);
+                    self.size.fetch_sub(1, Ordering::SeqCst);
+                    let ev_count = self.evictions.fetch_add(1, Ordering::SeqCst);
+                    debug!("Evicted LRU entry: {:?}", oldest);
+                    if ev_count > 0 && ev_count % 1000 == 0 {
+                        warn!("High cache eviction rate: {} total evictions", ev_count);
+                    }
+                }
+            }
+            self.size.fetch_add(1, Ordering::SeqCst);
+        } else {
+            // Update existing entry - move to back of access order
+            if let Some(pos) = access.iter().position(|k| k == &key) {
+                access.remove(pos);
+            }
+        }
+
+        self.map.insert(key.clone(), value);
+        access.push_back(key);
+    }
+
+    fn contains_key<Q: std::hash::Hash + Eq>(&self, key: &Q) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.map.contains_key(key)
+    }
+
+    fn len(&self) -> usize {
+        self.size.load(Ordering::SeqCst)
+    }
+
+    fn evictions(&self) -> u64 {
+        self.evictions.load(Ordering::SeqCst)
+    }
+
+    fn entry_count(&self) -> u64 {
+        self.map.len() as u64
+    }
+
+    fn invalidate<Q: std::hash::Hash + Eq>(&self, key: &Q)
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        let mut access = self.access_order.lock().unwrap();
+        if let Some(k) = self.map.get(key).map(|e| e.key().clone()) {
+            self.map.remove(key);
+            if let Some(pos) = access.iter().position(|x| x == &k) {
+                access.remove(pos);
+            }
+            self.size.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn iter(&self) -> dashmap::iter::Iter<'_, K, V> {
+        self.map.iter()
+    }
+
+    fn retain<F: FnMut(&K, &V) -> bool>(&self, mut f: F) {
+        let mut access = self.access_order.lock().unwrap();
+        let keys_to_remove: Vec<K> = self
+            .map
+            .iter()
+            .filter(|entry| !f(entry.key(), entry.value()))
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in &keys_to_remove {
+            self.map.remove(key);
+            if let Some(pos) = access.iter().position(|k| k == key) {
+                access.remove(pos);
+            }
+        }
+        self.size.store(self.map.len(), Ordering::SeqCst);
+    }
+}
 
 // ============================================================================
 // Types
@@ -84,7 +214,34 @@ pub struct EngineStats {
     pub signals_detected: u64,
     pub signals_filtered: u64,
     pub signals_emitted: u64,
+    pub cache_evictions: u64,
+    pub cache_eviction_rate: f64,
+    pub memory_pressure_percent: usize,
     pub last_detection_time: Option<DateTime<Utc>>,
+}
+
+/// Cache statistics for monitoring memory pressure and eviction patterns
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub current_size: Arc<AtomicUsize>,
+    pub max_size: usize,
+    pub total_evictions: Arc<AtomicU64>,
+    pub memory_usage_estimate_bytes: u64,
+    pub is_under_memory_pressure: bool,
+    pub eviction_alert_threshold: u64,
+}
+
+impl Default for CacheStats {
+    fn default() -> Self {
+        Self {
+            current_size: Arc::new(AtomicUsize::new(0)),
+            max_size: 10000,
+            total_evictions: Arc::new(AtomicU64::new(0)),
+            memory_usage_estimate_bytes: 0,
+            is_under_memory_pressure: false,
+            eviction_alert_threshold: 1000,
+        }
+    }
 }
 
 // ============================================================================
@@ -103,8 +260,12 @@ pub struct ArbitrageEngine {
     tickers: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<Ticker>>>,
     funding_rates: Arc<DashMap<(ExchangeId, Arc<Symbol>), Arc<FundingRate>>>,
 
-    // Signal deduplication cache
-    signal_cache: Arc<DashMap<OpportunityKey, CachedSignal>>,
+    // Signal deduplication cache with LRU eviction
+    signal_cache: Arc<LruCache<OpportunityKey, CachedSignal>>,
+
+    // Cache statistics for monitoring
+    cache_stats: Arc<CacheStats>,
+    recent_evictions_counter: Arc<AtomicU64>,
 
     // Signal broadcasting
     signal_sender: broadcast::Sender<Signal>,
@@ -142,11 +303,22 @@ impl ArbitrageEngine {
     ) -> Result<(Self, broadcast::Receiver<Signal>)> {
         let (signal_sender, signal_receiver) = broadcast::channel(1000);
 
+        let cache_max_size = config.cache.signal_cache_max_size;
+        let cache_stats = Arc::new(CacheStats::default());
+        let recent_evictions_counter = Arc::new(AtomicU64::new(0));
+        let _recent_evictions_clone = recent_evictions_counter.clone();
+        let _cache_stats_clone = cache_stats.clone();
+        let cache_stats_for_engine = cache_stats.clone();
+
+        let signal_cache = LruCache::new(cache_max_size);
+
         let engine = Self {
             order_books: Arc::new(DashMap::new()),
             tickers: Arc::new(DashMap::new()),
             funding_rates: Arc::new(DashMap::new()),
-            signal_cache: Arc::new(DashMap::new()),
+            signal_cache: Arc::new(signal_cache),
+            cache_stats: cache_stats_for_engine,
+            recent_evictions_counter,
             signal_sender,
             normalizer,
             confidence_scorer,
@@ -155,8 +327,8 @@ impl ArbitrageEngine {
             storage,
             config,
             execution_mode: ExecutionMode::default(),
-            profit_change_threshold_bps: 5, // 0.05% change triggers new signal
-            signal_ttl: Duration::seconds(300), // 5 minute TTL
+            profit_change_threshold_bps: 5,
+            signal_ttl: Duration::seconds(300),
             stats: Arc::new(DashMap::new()),
         };
 
@@ -633,6 +805,8 @@ impl ArbitrageEngine {
 
     /// Update signal cache for deduplication
     fn update_signal_cache(&self, key: &OpportunityKey, _signal: &Signal, profit_bps: i32) {
+        let was_present = self.signal_cache.get(key).is_some();
+
         self.signal_cache.insert(
             key.clone(),
             CachedSignal {
@@ -640,6 +814,12 @@ impl ArbitrageEngine {
                 profit_bps,
             },
         );
+
+        // Track cache size manually since entry_count() can be unreliable
+        if !was_present {
+            let current = self.cache_stats.current_size.fetch_add(1, Ordering::SeqCst);
+            tracing::debug!("Cache entry added: {:?}, new size: {}", key, current + 1);
+        }
     }
 
     /// Emit signal to subscribers
@@ -663,11 +843,23 @@ impl ArbitrageEngine {
             unique_symbols.insert(Arc::clone(&entry.key().1));
         }
 
+        let cache_size = self.get_cache_size();
+        let total_evictions = self.signal_cache.evictions();
+        let recent_evictions = self.recent_evictions_counter.swap(0, Ordering::SeqCst);
+
+        let memory_usage_estimate = cache_size as u64 * std::mem::size_of::<CachedSignal>() as u64;
+        let memory_limit = self.config.cache.signal_cache_memory_limit_mb as u64 * 1024 * 1024;
+        let memory_pressure_percent = if memory_limit > 0 {
+            ((memory_usage_estimate as f64 / memory_limit as f64) * 100.0) as usize
+        } else {
+            0
+        };
+
         EngineStats {
             order_books_count: self.order_books.len(),
             tickers_count: self.tickers.len(),
             funding_rates_count: self.funding_rates.len(),
-            cached_signals_count: self.signal_cache.len(),
+            cached_signals_count: cache_size,
             active_symbols_count: unique_symbols.len(),
             signals_detected: self
                 .stats
@@ -684,6 +876,13 @@ impl ArbitrageEngine {
                 .get("signals_emitted")
                 .map(|v| v.load(Ordering::SeqCst))
                 .unwrap_or(0),
+            cache_evictions: total_evictions,
+            cache_eviction_rate: if total_evictions > 0 {
+                recent_evictions as f64 / total_evictions as f64
+            } else {
+                0.0
+            },
+            memory_pressure_percent,
             last_detection_time: Some(Utc::now()),
         }
     }
@@ -702,9 +901,28 @@ impl ArbitrageEngine {
         self.tickers
             .retain(|_, ticker| now - ticker.timestamp < stale_threshold);
 
-        // Clean expired signals from cache
-        self.signal_cache
-            .retain(|_, cached| now - cached.last_updated < self.signal_ttl);
+        // Clean expired signals from cache by iterating and removing stale entries
+        let ttl_seconds = self.signal_ttl.num_seconds();
+        let now = Utc::now();
+
+        let mut keys_to_remove = Vec::new();
+        for item in self.signal_cache.iter() {
+            let key = item.key();
+            let cached = item.value();
+            let age = now - cached.last_updated;
+            if age.num_seconds() > ttl_seconds {
+                keys_to_remove.push(key.clone());
+            }
+        }
+
+        for key in keys_to_remove {
+            self.signal_cache.invalidate(&key);
+        }
+
+        // Update cache stats
+        self.cache_stats
+            .current_size
+            .store(self.signal_cache.len(), Ordering::SeqCst);
     }
 
     /// Get order book from cache
@@ -739,5 +957,81 @@ impl ArbitrageEngine {
         self.funding_rates
             .get(&(exchange, symbol))
             .map(|v| Arc::clone(&v))
+    }
+
+    /// Get cache statistics for monitoring
+    pub fn get_cache_stats(&self) -> CacheStats {
+        let cache_size = self.signal_cache.len();
+        let memory_usage_estimate = cache_size as u64 * std::mem::size_of::<CachedSignal>() as u64;
+        let memory_limit = self.config.cache.signal_cache_memory_limit_mb as u64 * 1024 * 1024;
+
+        let memory_pressure_percent = if memory_limit > 0 {
+            ((memory_usage_estimate as f64 / memory_limit as f64) * 100.0) as usize
+        } else {
+            0
+        };
+
+        let is_under_memory_pressure =
+            memory_pressure_percent >= self.config.cache.memory_pressure_threshold_percent;
+
+        CacheStats {
+            current_size: Arc::new(AtomicUsize::new(cache_size)),
+            max_size: self.config.cache.signal_cache_max_size,
+            total_evictions: Arc::new(AtomicU64::new(self.signal_cache.evictions())),
+            memory_usage_estimate_bytes: memory_usage_estimate,
+            is_under_memory_pressure,
+            eviction_alert_threshold: self.config.cache.eviction_alert_threshold,
+        }
+    }
+
+    /// Check and report memory pressure status
+    pub fn check_memory_pressure(&self) -> bool {
+        let stats = self.get_cache_stats();
+        if stats.is_under_memory_pressure {
+            warn!(
+                "Memory pressure detected: {}% (limit: {}%)",
+                stats.memory_usage_estimate_bytes,
+                self.config.cache.memory_pressure_threshold_percent
+            );
+        }
+        stats.is_under_memory_pressure
+    }
+
+    /// Get the current cache size
+    pub fn get_cache_size(&self) -> usize {
+        self.signal_cache.len()
+    }
+
+    /// Get the configured max cache size
+    pub fn get_max_cache_size(&self) -> usize {
+        self.config.cache.signal_cache_max_size
+    }
+
+    pub fn update_signal_cache_for_test(&self, key: &OpportunityKey, profit_bps: i32) {
+        let size_before = self.signal_cache.len();
+        self.update_signal_cache(
+            key,
+            &Signal::new(
+                key.symbol.clone(),
+                key.buy_exchange,
+                key.sell_exchange,
+                Decimal::from(0),
+                Decimal::from(0),
+                Utc::now(),
+            ),
+            profit_bps,
+        );
+        let size_after = self.signal_cache.len();
+        tracing::debug!(
+            "Cache update: key={:?}, profit_bps={}, size_before={}, size_after={}",
+            key,
+            profit_bps,
+            size_before,
+            size_after
+        );
+    }
+
+    pub fn process_should_emit_for_test(&self, key: &OpportunityKey, profit_bps: i32) -> bool {
+        self.should_emit_signal(key, profit_bps)
     }
 }
