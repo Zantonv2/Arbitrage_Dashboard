@@ -43,6 +43,30 @@ pub struct PrepareExecutionRequest {
     pub quantity: Option<f64>,
 }
 
+impl PrepareExecutionRequest {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        // Validate signal_id is proper UUID format
+        if let Err(_) = uuid::Uuid::parse_str(&self.signal_id) {
+            errors.push("signal_id must be a valid UUID format".to_string());
+        }
+
+        // Validate quantity is positive if provided
+        if let Some(qty) = self.quantity {
+            if qty <= 0.0 {
+                errors.push("quantity must be a positive number greater than 0".to_string());
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 /// Response for execution preparation
 #[derive(Debug, Serialize)]
 pub struct PrepareExecutionResponse {
@@ -264,6 +288,37 @@ pub async fn prepare_execution(
     Json(request): Json<PrepareExecutionRequest>,
 ) -> Result<Json<PrepareExecutionResponse>, StatusCode> {
     debug!("POST /api/executions/prepare: {:?}", request);
+
+    // Validate request
+    if let Err(errors) = request.validate() {
+        let response = PrepareExecutionResponse {
+            instruction_id: String::new(),
+            buy_order: OrderPreview {
+                exchange: String::new(),
+                symbol: String::new(),
+                side: String::new(),
+                quantity: 0.0,
+                price: None,
+                estimated_cost: 0.0,
+                estimated_fee: 0.0,
+            },
+            sell_order: OrderPreview {
+                exchange: String::new(),
+                symbol: String::new(),
+                side: String::new(),
+                quantity: 0.0,
+                price: None,
+                estimated_cost: 0.0,
+                estimated_fee: 0.0,
+            },
+            expected_profit: 0.0,
+            worst_case_profit: 0.0,
+            total_fees: 0.0,
+            is_valid: false,
+            validation_errors: errors,
+        };
+        return Ok(Json(response));
+    }
 
     // Parse signal ID
     let signal_uuid = match uuid::Uuid::parse_str(&request.signal_id) {
@@ -504,6 +559,32 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+impl LoginRequest {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        // Validate username: 3-50 chars, alphanumeric
+        if self.username.len() < 3 {
+            errors.push("username must be at least 3 characters".to_string());
+        } else if self.username.len() > 50 {
+            errors.push("username must be at most 50 characters".to_string());
+        } else if !self.username.chars().all(|c| c.is_alphanumeric()) {
+            errors.push("username must be alphanumeric".to_string());
+        }
+
+        // Validate password: minimum 8 chars
+        if self.password.len() < 8 {
+            errors.push("password must be at least 8 characters".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub success: bool,
@@ -516,7 +597,17 @@ pub async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    debug!("POST /api/auth/login for user: {}", request.username);
+    debug!("POST /api/auth/login request received");
+
+    // Validate request
+    if let Err(errors) = request.validate() {
+        return Ok(Json(LoginResponse {
+            success: false,
+            token: None,
+            expires_at: None,
+            message: format!("Validation failed: {}", errors.join(", ")),
+        }));
+    }
 
     let admin_username = std::env::var("ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
     let admin_password =
@@ -545,7 +636,7 @@ pub async fn login(
             }
         }
     } else {
-        warn!("Failed login attempt for user: {}", request.username);
+        debug!("Failed login attempt");
         Ok(Json(LoginResponse {
             success: false,
             token: None,

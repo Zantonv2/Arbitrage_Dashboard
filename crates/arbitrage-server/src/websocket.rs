@@ -8,12 +8,26 @@ use axum::{
 };
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use jsonwebtoken::{DecodingKey, Validation};
+use serde::Deserialize;
 use serde_json::json;
 use std::fmt;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 const WS_AUTH_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Debug, Deserialize)]
+struct WsAuthMessage {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientMessage {
+    #[serde(default)]
+    msg_type: String,
+    #[serde(default)]
+    r#type: String,
+}
 
 #[derive(Debug)]
 struct WebSocketAuthError;
@@ -42,12 +56,10 @@ async fn authenticate_websocket(
     if let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                let parsed: serde_json::Value =
+                let auth_msg: WsAuthMessage =
                     serde_json::from_str(&text).map_err(|_| WebSocketAuthError)?;
-                if let Some(token) = parsed.get("token").and_then(|t| t.as_str()) {
-                    let secret = state.jwt_secret.as_str();
-                    return Ok(validate_ws_token(token, secret));
-                }
+                let secret = state.jwt_secret.as_str();
+                return Ok(validate_ws_token(&auth_msg.token, secret));
             }
             Ok(Message::Close(_)) => {
                 return Ok(false);
@@ -241,25 +253,23 @@ async fn handle_client_message(
     message: &str,
     _state: &AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let parsed: serde_json::Value = serde_json::from_str(message)?;
+    let client_msg: ClientMessage = serde_json::from_str(message)?;
 
-    let msg_type = parsed
-        .get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("unknown");
+    let msg_type = if !client_msg.msg_type.is_empty() {
+        &client_msg.msg_type
+    } else {
+        &client_msg.r#type
+    };
 
-    match msg_type {
+    match msg_type.as_str() {
         "ping" => {
             debug!("Received ping from client");
-            // Pong response will be handled by the sender task
         }
         "subscribe" => {
-            debug!("Client subscription request: {:?}", parsed);
-            // TODO: Handle subscription to specific symbols/exchanges
+            debug!("Client subscription request: {:?}", client_msg);
         }
         "unsubscribe" => {
-            debug!("Client unsubscription request: {:?}", parsed);
-            // TODO: Handle unsubscription
+            debug!("Client unsubscription request: {:?}", client_msg);
         }
         _ => {
             warn!("Unknown message type: {}", msg_type);
