@@ -66,22 +66,38 @@ use std::collections::HashMap;
 /// ```
 #[derive(Debug, Clone)]
 pub struct Normalizer {
-    /// Symbol mappings (canonical -> mapping)
     symbol_mappings: HashMap<Symbol, SymbolMapping>,
-    /// Fee schedules by exchange
+    exchange_symbol_index: HashMap<(ExchangeId, String), Symbol>,
     fee_schedules: HashMap<ExchangeId, FeeSchedule>,
-    /// Stablecoin groups for equivalence checking
+    #[allow(dead_code)]
     stablecoin_groups: Vec<StablecoinGroup>,
+    stablecoin_index: HashMap<String, Vec<String>>,
 }
 
 impl Normalizer {
     /// Creates a new Normalizer with default settings.
     pub fn new() -> Self {
+        let stablecoin_groups = vec![StablecoinGroup::default()];
+        let stablecoin_index = Self::build_stablecoin_index(&stablecoin_groups);
+
         Self {
-            symbol_mappings: HashMap::new(),
-            fee_schedules: HashMap::new(),
-            stablecoin_groups: vec![StablecoinGroup::default()],
+            symbol_mappings: HashMap::with_capacity(1024),
+            exchange_symbol_index: HashMap::with_capacity(2048),
+            fee_schedules: HashMap::with_capacity(32),
+            stablecoin_groups,
+            stablecoin_index,
         }
+    }
+
+    fn build_stablecoin_index(groups: &[StablecoinGroup]) -> HashMap<String, Vec<String>> {
+        let mut index: HashMap<String, Vec<String>> = HashMap::with_capacity(groups.len() * 16);
+        for group in groups {
+            let group_upper: Vec<String> = group.symbols.iter().map(|s| s.to_uppercase()).collect();
+            for symbol_upper in &group_upper {
+                index.insert(symbol_upper.clone(), group_upper.clone());
+            }
+        }
+        index
     }
 
     /// Loads symbol mappings from configuration.
@@ -90,9 +106,16 @@ impl Normalizer {
     ///
     /// * `mappings` - Vector of symbol mappings to load
     pub fn load_symbol_mappings(&mut self, mappings: Vec<SymbolMapping>) {
+        self.symbol_mappings.reserve(mappings.len());
+        self.exchange_symbol_index.reserve(mappings.len() * 4);
+
         for mapping in mappings {
-            self.symbol_mappings
-                .insert(mapping.canonical.clone(), mapping);
+            let canonical = mapping.canonical.clone();
+            for (exchange, exchange_symbol) in &mapping.exchange_symbols {
+                self.exchange_symbol_index
+                    .insert((*exchange, exchange_symbol.clone()), canonical.clone());
+            }
+            self.symbol_mappings.insert(canonical, mapping);
         }
     }
 
@@ -102,6 +125,7 @@ impl Normalizer {
     ///
     /// * `schedules` - Vector of fee schedules to load
     pub fn load_fee_schedules(&mut self, schedules: Vec<FeeSchedule>) {
+        self.fee_schedules.reserve(schedules.len());
         for schedule in schedules {
             self.fee_schedules.insert(schedule.exchange, schedule);
         }
@@ -129,14 +153,9 @@ impl Normalizer {
     /// // let canonical = normalizer.map_symbol(ExchangeId::Binance, "BTCUSDT");
     /// ```
     pub fn map_symbol(&self, exchange: ExchangeId, exchange_symbol: &str) -> Option<Symbol> {
-        for (canonical, mapping) in &self.symbol_mappings {
-            if let Some(mapped_symbol) = mapping.exchange_symbols.get(&exchange) {
-                if mapped_symbol == exchange_symbol {
-                    return Some(canonical.clone());
-                }
-            }
-        }
-        None
+        self.exchange_symbol_index
+            .get(&(exchange, exchange_symbol.to_string()))
+            .cloned()
     }
 
     /// Gets exchange-specific symbol from canonical.
@@ -264,11 +283,8 @@ impl Normalizer {
             return true;
         }
 
-        for group in &self.stablecoin_groups {
-            let group_upper: Vec<String> = group.symbols.iter().map(|s| s.to_uppercase()).collect();
-            if group_upper.contains(&sym1) && group_upper.contains(&sym2) {
-                return true;
-            }
+        if let Some(group1) = self.stablecoin_index.get(&sym1) {
+            return group1.contains(&sym2);
         }
 
         false
@@ -346,15 +362,15 @@ impl Normalizer {
             ))
         })?;
 
-        let mut bid_levels: Vec<OrderBookLevel> = bids
-            .into_iter()
-            .map(|(price, qty)| OrderBookLevel::new(price, qty))
-            .collect();
+        let mut bid_levels: Vec<OrderBookLevel> = Vec::with_capacity(bids.len());
+        for (price, qty) in bids {
+            bid_levels.push(OrderBookLevel::new(price, qty));
+        }
 
-        let mut ask_levels: Vec<OrderBookLevel> = asks
-            .into_iter()
-            .map(|(price, qty)| OrderBookLevel::new(price, qty))
-            .collect();
+        let mut ask_levels: Vec<OrderBookLevel> = Vec::with_capacity(asks.len());
+        for (price, qty) in asks {
+            ask_levels.push(OrderBookLevel::new(price, qty));
+        }
 
         bid_levels.sort_by(|a, b| b.price.cmp(&a.price));
         ask_levels.sort_by(|a, b| a.price.cmp(&b.price));
