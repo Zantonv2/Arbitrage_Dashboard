@@ -226,6 +226,40 @@ mod okx_connector_tests {
     }
 
     #[test]
+    fn test_okx_parse_order_book_empty_bids() {
+        let connector = OKXConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "ts": "1704067200000",
+            "bids": [],
+            "asks": [["50001.00", "1.0"]]
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_okx_parse_order_book_empty_asks() {
+        let connector = OKXConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "ts": "1704067200000",
+            "bids": [["50000.00", "1.0"]],
+            "asks": []
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
+    }
+
+    #[test]
     fn test_okx_funding_rate_parsing() {
         let connector = OKXConnector::new();
         let symbol = Symbol::new("BTC", "USDT");
@@ -334,18 +368,41 @@ mod bybit_connector_tests {
     }
 
     #[test]
-    fn test_bybit_parse_order_book_missing_bids() {
+    fn test_bybit_parse_order_book_empty_bids() {
         let connector = BybitConnector::new();
         let symbol = Symbol::new("BTC", "USDT");
         let data = json!({
-            "a": [["50001.00", "1.0"]]
+            "a": [["50001.00", "1.0"]],
+            "b": []
         })
         .as_object()
         .unwrap()
         .clone();
 
         let result = connector.parse_order_book(&data, &symbol);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_bybit_parse_order_book_empty_asks() {
+        let connector = BybitConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "a": [],
+            "b": [["50000.00", "1.0"]]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
     }
 
     #[test]
@@ -374,6 +431,44 @@ mod bybit_connector_tests {
         assert!(result.is_ok());
         let funding = result.unwrap();
         assert_eq!(funding.exchange, ExchangeId::ByBit);
+    }
+
+    #[test]
+    fn test_bybit_parse_order_book_empty_bids() {
+        let connector = BybitConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "a": [["50001.00", "1.0"]],
+            "b": []
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_bybit_parse_order_book_empty_asks() {
+        let connector = BybitConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "a": [],
+            "b": [["50000.00", "1.0"]]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
     }
 
     #[test]
@@ -493,6 +588,38 @@ mod mexc_connector_tests {
         let result = connector.parse_funding_rate(&data, &symbol);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_mexc_parse_order_book_empty_bids() {
+        let connector = MEXCConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [["50001.00", "1.0"]],
+            "bids": []
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_mexc_parse_order_book_empty_asks() {
+        let connector = MEXCConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [],
+            "bids": [["50000.00", "1.0"]]
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
+    }
 }
 
 #[cfg(test)]
@@ -584,6 +711,54 @@ mod gateio_connector_tests {
         let ticker = result.unwrap();
         assert_eq!(ticker.exchange, ExchangeId::GateIo);
     }
+
+    #[test]
+    fn test_gateio_parse_order_book_empty_bids() {
+        let connector = GateioConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [["50001.00", "1.0"]],
+            "bids": []
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_gateio_parse_order_book_empty_asks() {
+        let connector = GateioConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [],
+            "bids": [["50000.00", "1.0"]]
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
+    }
+
+    #[test]
+    fn test_gateio_parse_order_book_empty_both() {
+        let connector = GateioConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [],
+            "bids": []
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -673,6 +848,53 @@ mod kraken_connector_tests {
         assert!(result.is_ok());
         let ticker = result.unwrap();
         assert_eq!(ticker.exchange, ExchangeId::Kraken);
+    }
+
+    #[test]
+    fn test_kraken_parse_ticker_empty_arrays() {
+        let connector = KrakenConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "c": [],
+            "b": [],
+            "a": [],
+            "v": []
+        });
+
+        let result = connector.parse_ticker(&data, &symbol);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kraken_parse_order_book_empty_bids() {
+        let connector = KrakenConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [["50001.00", "1.0", "1704067200000"]],
+            "bids": []
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_kraken_parse_order_book_empty_asks() {
+        let connector = KrakenConnector::new();
+        let symbol = Symbol::new("BTC", "USDT");
+        let data = json!({
+            "asks": [],
+            "bids": [["50000.00", "1.0", "1704067200000"]]
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
     }
 }
 
@@ -773,6 +995,38 @@ mod bitstamp_connector_tests {
         assert!(result.is_ok());
         let ticker = result.unwrap();
         assert_eq!(ticker.exchange, ExchangeId::Bitstamp);
+    }
+
+    #[test]
+    fn test_bitstamp_parse_order_book_empty_bids() {
+        let connector = BitstampConnector::new();
+        let symbol = Symbol::new("BTC", "USD");
+        let data = json!({
+            "asks": [["50001.00", "1.0"]],
+            "bids": []
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.len() == 1);
+        assert!(orderbook.bids.is_empty());
+    }
+
+    #[test]
+    fn test_bitstamp_parse_order_book_empty_asks() {
+        let connector = BitstampConnector::new();
+        let symbol = Symbol::new("BTC", "USD");
+        let data = json!({
+            "asks": [],
+            "bids": [["50000.00", "1.0"]]
+        });
+
+        let result = connector.parse_order_book(&data, &symbol);
+        assert!(result.is_ok());
+        let orderbook = result.unwrap();
+        assert!(orderbook.asks.is_empty());
+        assert!(orderbook.bids.len() == 1);
     }
 }
 

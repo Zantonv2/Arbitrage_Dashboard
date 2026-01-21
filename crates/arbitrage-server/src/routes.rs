@@ -6,8 +6,9 @@
 //! - Execution preparation and confirmation
 //! - System status and analytics
 //! - Configuration management
+//! - Authentication
 
-use crate::server::AppState;
+use crate::server::{create_jwt, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -491,4 +492,65 @@ pub async fn update_config(
     });
 
     Ok(Json(response))
+}
+
+// ============================================================================
+// Authentication Endpoints
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginResponse {
+    pub success: bool,
+    pub token: Option<String>,
+    pub expires_at: Option<String>,
+    pub message: String,
+}
+
+pub async fn login(
+    State(state): State<AppState>,
+    Json(request): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, StatusCode> {
+    debug!("POST /api/auth/login for user: {}", request.username);
+
+    let admin_username = std::env::var("ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
+    let admin_password =
+        std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "change_me_in_production".to_string());
+
+    if request.username == admin_username && request.password == admin_password {
+        let secret = state.jwt_secret.as_str();
+        match create_jwt(&request.username, secret) {
+            Ok(token) => {
+                let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+                Ok(Json(LoginResponse {
+                    success: true,
+                    token: Some(token),
+                    expires_at: Some(expires_at.to_rfc3339()),
+                    message: "Login successful".to_string(),
+                }))
+            }
+            Err(e) => {
+                warn!("Failed to create JWT token: {}", e);
+                Ok(Json(LoginResponse {
+                    success: false,
+                    token: None,
+                    expires_at: None,
+                    message: "Failed to generate token".to_string(),
+                }))
+            }
+        }
+    } else {
+        warn!("Failed login attempt for user: {}", request.username);
+        Ok(Json(LoginResponse {
+            success: false,
+            token: None,
+            expires_at: None,
+            message: "Invalid credentials".to_string(),
+        }))
+    }
 }

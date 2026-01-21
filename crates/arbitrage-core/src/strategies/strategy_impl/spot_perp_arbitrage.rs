@@ -592,7 +592,7 @@ impl Strategy for SpotPerpArbitrageStrategy {
         }
 
         // Must have exactly 2 legs (spot + perpetual)
-        if signal.legs.len() != 2 {
+        if signal.legs.len() < 2 {
             return Ok(false);
         }
 

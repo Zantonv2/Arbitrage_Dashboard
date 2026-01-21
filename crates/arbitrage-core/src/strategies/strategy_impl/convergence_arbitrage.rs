@@ -580,7 +580,7 @@ impl Strategy for ConvergenceArbitrageStrategy {
         }
 
         // Must have exactly 2 legs (long + short)
-        if signal.legs.len() != 2 {
+        if signal.legs.len() < 2 {
             return Ok(false);
         }
 

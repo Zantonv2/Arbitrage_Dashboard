@@ -441,8 +441,7 @@ impl Strategy for CexArbitrageStrategy {
         }
 
         // Must have exactly 2 legs (buy + sell)
-        if signal.legs.len() != 2 {
-            println!("Signal has {} legs, expected 2", signal.legs.len());
+        if signal.legs.len() < 2 {
             return Ok(false);
         }
 

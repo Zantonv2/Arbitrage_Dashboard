@@ -762,22 +762,31 @@ impl GateioConnector {
         })?;
 
         if params.len() < 3 {
+            warn!(
+                "Gate.io orderbook message has insufficient params: expected >= 3, got {}",
+                params.len()
+            );
             return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
                 "Invalid params length".to_string(),
             ));
         }
 
-        let currency_pair = params[2].as_str().ok_or_else(|| {
+        let currency_pair = params.get(2).and_then(|v| v.as_str()).ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing currency pair".to_string())
         })?;
 
         let symbol = Self::symbol_from_gateio_static(currency_pair)?;
 
-        let book_data = &params[1];
+        let book_data = params.get(1).ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection("Missing book data".to_string())
+        })?;
         let mut asks = Vec::new();
         let mut bids = Vec::new();
 
         if let Some(asks_data) = book_data["asks"].as_array() {
+            if asks_data.is_empty() {
+                warn!("Gate.io orderbook received empty asks for {}", symbol);
+            }
             for ask in asks_data.iter().take(50) {
                 if let Some(ask_arr) = ask.as_array() {
                     if ask_arr.len() >= 2 {
@@ -790,6 +799,9 @@ impl GateioConnector {
         }
 
         if let Some(bids_data) = book_data["bids"].as_array() {
+            if bids_data.is_empty() {
+                warn!("Gate.io orderbook received empty bids for {}", symbol);
+            }
             for bid in bids_data.iter().take(50) {
                 if let Some(bid_arr) = bid.as_array() {
                     if bid_arr.len() >= 2 {
@@ -799,6 +811,15 @@ impl GateioConnector {
                     }
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "Gate.io orderbook has empty side for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {
@@ -827,6 +848,13 @@ impl GateioConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
+        if asks_data.is_empty() {
+            warn!("Gate.io REST API returned empty asks for {}", symbol);
+        }
+        if bids_data.is_empty() {
+            warn!("Gate.io REST API returned empty bids for {}", symbol);
+        }
+
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(ask_array) = ask.as_array() {
@@ -847,6 +875,15 @@ impl GateioConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "Gate.io orderbook parsing resulted in empty data for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {

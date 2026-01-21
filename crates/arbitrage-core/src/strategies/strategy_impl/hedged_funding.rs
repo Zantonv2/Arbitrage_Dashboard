@@ -623,7 +623,7 @@ impl Strategy for HedgedFundingStrategy {
         }
 
         // Must have exactly 2 legs (perpetual + spot hedge)
-        if signal.legs.len() != 2 {
+        if signal.legs.len() < 2 {
             return Ok(false);
         }
 

@@ -1055,14 +1055,17 @@ impl BybitConnector {
     fn parse_orderbook_message(market_data: &BybitMarketData) -> Result<OrderBook> {
         let data = &market_data.data;
 
-        // Extract symbol from topic (e.g., "orderbook.50.BTCUSDT" -> "BTCUSDT")
         let topic_parts: Vec<&str> = market_data.topic.split('.').collect();
         if topic_parts.len() < 3 {
             return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
                 "Invalid topic format".to_string(),
             ));
         }
-        let bybit_symbol = topic_parts[2];
+        let bybit_symbol = topic_parts.get(2).copied().ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Missing symbol in topic".to_string(),
+            )
+        })?;
         let symbol = Self::symbol_from_bybit_static(bybit_symbol)?;
 
         let asks_data = data["a"].as_array().ok_or_else(|| {
@@ -1071,6 +1074,13 @@ impl BybitConnector {
         let bids_data = data["b"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
+
+        if asks_data.is_empty() {
+            warn!("ByBit WebSocket received empty asks for {}", symbol);
+        }
+        if bids_data.is_empty() {
+            warn!("ByBit WebSocket received empty bids for {}", symbol);
+        }
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(50) {
@@ -1094,6 +1104,15 @@ impl BybitConnector {
             }
         }
 
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "ByBit orderbook has empty side for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
+        }
+
         let timestamp = if let Some(cts) = market_data.cts {
             chrono::DateTime::from_timestamp_millis(cts as i64).unwrap_or_else(chrono::Utc::now)
         } else {
@@ -1101,13 +1120,15 @@ impl BybitConnector {
                 .unwrap_or_else(chrono::Utc::now)
         };
 
+        let sequence = data.get("u").and_then(|v| v.as_u64());
+
         Ok(OrderBook {
             exchange: ExchangeId::ByBit,
             symbol,
             bids,
             asks,
             timestamp,
-            sequence: data["u"].as_u64(),
+            sequence,
         })
     }
 
@@ -1126,12 +1147,19 @@ impl BybitConnector {
         data: &serde_json::Map<String, serde_json::Value>,
         symbol: &Symbol,
     ) -> Result<OrderBook> {
-        let asks_data = data["a"].as_array().ok_or_else(|| {
+        let asks_data = data.get("a").and_then(|v| v.as_array()).ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
-        let bids_data = data["b"].as_array().ok_or_else(|| {
+        let bids_data = data.get("b").and_then(|v| v.as_array()).ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
+
+        if asks_data.is_empty() {
+            warn!("ByBit REST API returned empty asks for {}", symbol);
+        }
+        if bids_data.is_empty() {
+            warn!("ByBit REST API returned empty bids for {}", symbol);
+        }
 
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
@@ -1153,6 +1181,15 @@ impl BybitConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "ByBit orderbook parsing resulted in empty data for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {

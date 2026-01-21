@@ -368,8 +368,7 @@ impl Strategy for FundingRateArbitrageStrategy {
         }
 
         // Must have exactly 2 legs (perpetual + spot hedge)
-        if signal.legs.len() != 2 {
-            println!("Signal has {} legs, expected 2", signal.legs.len());
+        if signal.legs.len() < 2 {
             return Ok(false);
         }
 

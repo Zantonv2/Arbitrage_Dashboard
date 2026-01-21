@@ -769,6 +769,9 @@ impl BitstampConnector {
         let mut bids = Vec::new();
 
         if let Some(asks_data) = data["asks"].as_array() {
+            if asks_data.is_empty() {
+                warn!("Bitstamp WebSocket received empty asks for {}", symbol);
+            }
             for ask in asks_data.iter().take(50) {
                 if let Some(ask_arr) = ask.as_array() {
                     if ask_arr.len() >= 2 {
@@ -781,6 +784,9 @@ impl BitstampConnector {
         }
 
         if let Some(bids_data) = data["bids"].as_array() {
+            if bids_data.is_empty() {
+                warn!("Bitstamp WebSocket received empty bids for {}", symbol);
+            }
             for bid in bids_data.iter().take(50) {
                 if let Some(bid_arr) = bid.as_array() {
                     if bid_arr.len() >= 2 {
@@ -790,6 +796,15 @@ impl BitstampConnector {
                     }
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "Bitstamp orderbook has empty side for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {
@@ -830,6 +845,13 @@ impl BitstampConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
+        if asks_data.is_empty() {
+            warn!("Bitstamp REST API returned empty asks for {}", symbol);
+        }
+        if bids_data.is_empty() {
+            warn!("Bitstamp REST API returned empty bids for {}", symbol);
+        }
+
         let mut asks = Vec::new();
         for ask in asks_data
             .iter()
@@ -856,6 +878,15 @@ impl BitstampConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "Bitstamp orderbook parsing resulted in empty data for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {

@@ -868,25 +868,34 @@ impl KrakenConnector {
 
     /// Parse Kraken orderbook message into OrderBook
     fn parse_orderbook_message(arr: &[Value]) -> Result<OrderBook> {
-        // Kraken format: [channelID, {"as":[[price,vol,ts],...], "bs":[[price,vol,ts],...]}, "book-10", "XBT/USD"]
-        // or update: [channelID, {"a":[[price,vol,ts,updateType],...], "b":...}, "book-10", "XBT/USD"]
-
         let pair = arr.last().and_then(|v| v.as_str()).ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing pair".to_string())
         })?;
 
         let symbol = Self::symbol_from_kraken_static(pair)?;
 
-        let data = &arr[1];
+        if arr.len() < 2 {
+            return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Invalid Kraken message: insufficient array length".to_string(),
+            ));
+        }
+
+        let data = arr.get(1).ok_or_else(|| {
+            arbitrage_core::ArbitrageError::ExchangeConnection(
+                "Missing data in message".to_string(),
+            )
+        })?;
 
         let mut asks = Vec::new();
         let mut bids = Vec::new();
 
-        // Handle snapshot (as/bs) or update (a/b)
         let asks_key = if data.get("as").is_some() { "as" } else { "a" };
         let bids_key = if data.get("bs").is_some() { "bs" } else { "b" };
 
         if let Some(asks_data) = data[asks_key].as_array() {
+            if asks_data.is_empty() {
+                warn!("Kraken WebSocket received empty asks for {}", symbol);
+            }
             for ask in asks_data.iter().take(50) {
                 if let Some(ask_arr) = ask.as_array() {
                     if ask_arr.len() >= 2 {
@@ -899,6 +908,9 @@ impl KrakenConnector {
         }
 
         if let Some(bids_data) = data[bids_key].as_array() {
+            if bids_data.is_empty() {
+                warn!("Kraken WebSocket received empty bids for {}", symbol);
+            }
             for bid in bids_data.iter().take(50) {
                 if let Some(bid_arr) = bid.as_array() {
                     if bid_arr.len() >= 2 {
@@ -908,6 +920,15 @@ impl KrakenConnector {
                     }
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "Kraken orderbook has empty side for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {
@@ -938,6 +959,13 @@ impl KrakenConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
+        if asks_data.is_empty() {
+            warn!("Kraken REST API returned empty asks for {}", symbol);
+        }
+        if bids_data.is_empty() {
+            warn!("Kraken REST API returned empty bids for {}", symbol);
+        }
+
         let mut asks = Vec::new();
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(ask_array) = ask.as_array() {
@@ -958,6 +986,15 @@ impl KrakenConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "Kraken orderbook parsing resulted in empty data for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {
@@ -1004,6 +1041,16 @@ impl KrakenConnector {
             .map(parse_decimal)
             .transpose()?
             .unwrap_or_default();
+
+        if data["c"].as_array().is_none_or(|arr| arr.is_empty()) {
+            warn!("Kraken ticker received empty last price for {}", symbol);
+        }
+        if data["b"].as_array().is_none_or(|arr| arr.is_empty()) {
+            warn!("Kraken ticker received empty bid price for {}", symbol);
+        }
+        if data["a"].as_array().is_none_or(|arr| arr.is_empty()) {
+            warn!("Kraken ticker received empty ask price for {}", symbol);
+        }
 
         Ok(TickerData {
             symbol: symbol.clone(),

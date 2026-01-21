@@ -937,6 +937,13 @@ impl MEXCConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
+        if asks_data.is_empty() {
+            warn!("MEXC REST API returned empty asks for {}", symbol);
+        }
+        if bids_data.is_empty() {
+            warn!("MEXC REST API returned empty bids for {}", symbol);
+        }
+
         let mut asks = Vec::new();
         for ask in asks_data
             .iter()
@@ -963,6 +970,15 @@ impl MEXCConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
+        }
+
+        if asks.is_empty() || bids.is_empty() {
+            warn!(
+                "MEXC orderbook parsing resulted in empty data for {}: bids={}, asks={}",
+                symbol,
+                bids.len(),
+                asks.len()
+            );
         }
 
         Ok(OrderBook {
