@@ -58,6 +58,9 @@ pub enum ArbitrageError {
     #[error("Network error: {0}")]
     Network(String),
 
+    #[error("Circuit breaker is open: {0}")]
+    CircuitBreakerOpen(String),
+
     #[error("HTTP request error: {0}")]
     Http(#[from] reqwest::Error),
 
