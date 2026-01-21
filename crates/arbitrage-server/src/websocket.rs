@@ -113,9 +113,12 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
             "type": "auth_error",
             "message": "Authentication required. Please provide a valid JWT token."
         });
-        let _ = sender
+        if let Err(e) = sender
             .send(Message::Text(error_msg.to_string().into()))
-            .await;
+            .await
+        {
+            error!("Failed to send auth error message: {}", e);
+        }
         return;
     }
 

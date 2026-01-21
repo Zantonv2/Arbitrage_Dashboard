@@ -4,6 +4,9 @@ use rustc_hash::FxHashMap;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
+use tokio::time::{sleep, timeout};
 
 use crate::rate_limiter::{RateLimitConfig, RateLimiter, UnifiedRateLimitManager};
 
@@ -20,6 +23,10 @@ pub struct RestClientConfig {
     pub base_url: String,
     pub rate_limit: RateLimitConfig,
     pub timeout_seconds: u64,
+    pub max_retries: u32,
+    pub initial_backoff_ms: u64,
+    pub max_backoff_ms: u64,
+    pub circuit_breaker_threshold: u32,
 }
 
 impl Default for RestClientConfig {
@@ -28,6 +35,10 @@ impl Default for RestClientConfig {
             base_url: String::new(),
             rate_limit: RateLimitConfig::default(),
             timeout_seconds: 30,
+            max_retries: 3,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 1000,
+            circuit_breaker_threshold: 5,
         }
     }
 }
@@ -37,6 +48,8 @@ pub struct BaseRestClient {
     client: Client,
     base_url: String,
     rate_limiter: Option<RateLimiter>,
+    failed_attempts: Mutex<u32>,
+    config: RestClientConfig,
 }
 
 impl BaseRestClient {
@@ -46,16 +59,19 @@ impl BaseRestClient {
             .build()
             .expect("Failed to build reqwest client");
 
-        let rate_limiter = if config.rate_limit.requests_per_second > 0 {
-            Some(RateLimiter::new(config.rate_limit))
+        let rate_limit = config.rate_limit.clone();
+        let rate_limiter = if rate_limit.requests_per_second > 0 {
+            Some(RateLimiter::new(rate_limit))
         } else {
             None
         };
 
         Self {
             client,
-            base_url: config.base_url,
+            base_url: config.base_url.clone(),
             rate_limiter,
+            failed_attempts: Mutex::new(0),
+            config,
         }
     }
 
@@ -70,40 +86,126 @@ impl BaseRestClient {
         format!("{}/{}", base, endpoint)
     }
 
+    fn is_retriable_error(error: &ArbitrageError) -> bool {
+        match error {
+            ArbitrageError::Network(_) => true,
+            ArbitrageError::Timeout(_) => true,
+            ArbitrageError::HttpError(msg) => {
+                let status = msg.find("status=").and_then(|i| {
+                    let substr = &msg[i + 7..].split_whitespace().next()?;
+                    substr.parse::<u16>().ok()
+                });
+                match status {
+                    Some(status) => {
+                        status == 500 || status == 502 || status == 503 || status == 504
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    async fn record_success(&self) {
+        let mut failed = self.failed_attempts.lock().await;
+        if *failed > 0 {
+            *failed = failed.saturating_sub(1);
+        }
+    }
+
+    async fn record_failure(&self) {
+        let mut failed = self.failed_attempts.lock().await;
+        *failed += 1;
+    }
+
+    async fn is_circuit_open(&self) -> bool {
+        let failed = self.failed_attempts.lock().await;
+        *failed >= self.config.circuit_breaker_threshold
+    }
+
     async fn execute_request<T: DeserializeOwned>(
         &self,
         endpoint: &str,
         operation: &str,
         request: impl Fn() -> reqwest::RequestBuilder,
     ) -> Result<T> {
+        if self.is_circuit_open().await {
+            return Err(ArbitrageError::CircuitBreakerOpen(format!(
+                "Circuit breaker open for {} - too many consecutive failures",
+                operation
+            )));
+        }
+
         if let Some(limiter) = &self.rate_limiter {
             limiter.acquire().await?;
         }
 
         let url = self.build_url(endpoint);
-        let request_builder = request();
+        let timeout_duration = Duration::from_secs(self.config.timeout_seconds);
 
-        let response = request_builder.send().await.map_err(|e| {
-            ArbitrageError::Network(format!("{} request to {} failed: {}", operation, url, e))
-        })?;
+        let mut attempt = 0;
+        let max_retries = self.config.max_retries;
+        let initial_backoff_ms = self.config.initial_backoff_ms;
+        let max_backoff_ms = self.config.max_backoff_ms;
 
-        if response.status() == StatusCode::TOO_MANY_REQUESTS {
-            return Err(ArbitrageError::RateLimitExceeded(format!(
-                "Rate limit exceeded for {}",
-                operation
-            )));
+        loop {
+            attempt += 1;
+            let request_builder = request();
+
+            match timeout(timeout_duration, request_builder.send()).await {
+                Ok(Ok(response)) => {
+                    self.record_success().await;
+
+                    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                        return Err(ArbitrageError::RateLimitExceeded(format!(
+                            "Rate limit exceeded for {}",
+                            operation
+                        )));
+                    }
+
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(ArbitrageError::HttpError(format!(
+                            "{} request to {} failed with status {}: {}",
+                            operation, url, status, body
+                        )));
+                    }
+
+                    return response.json().await.map_err(ArbitrageError::from);
+                }
+                Ok(Err(e)) => {
+                    let error = ArbitrageError::Network(format!(
+                        "{} request to {} failed: {}",
+                        operation, url, e
+                    ));
+
+                    if attempt > max_retries || !Self::is_retriable_error(&error) {
+                        self.record_failure().await;
+                        return Err(error);
+                    }
+                }
+                Err(_) => {
+                    let error = ArbitrageError::Timeout(format!(
+                        "{} request to {} timed out after {:?}",
+                        operation, url, timeout_duration
+                    ));
+
+                    if attempt > max_retries {
+                        self.record_failure().await;
+                        return Err(error);
+                    }
+                }
+            }
+
+            if attempt <= max_retries {
+                let backoff = std::cmp::min(
+                    initial_backoff_ms * (2_u64.pow(attempt.saturating_sub(1) as u32)),
+                    max_backoff_ms,
+                );
+                sleep(Duration::from_millis(backoff)).await;
+            }
         }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(ArbitrageError::HttpError(format!(
-                "{} request to {} failed with status {}: {}",
-                operation, url, status, body
-            )));
-        }
-
-        response.json().await.map_err(ArbitrageError::from)
     }
 }
 
@@ -187,6 +289,10 @@ pub fn create_rest_client_config(
             window_seconds: 60,
         },
         timeout_seconds: 30,
+        max_retries: 3,
+        initial_backoff_ms: 100,
+        max_backoff_ms: 1000,
+        circuit_breaker_threshold: 5,
     }
 }
 
@@ -217,6 +323,10 @@ mod tests {
                 window_seconds: 60,
             },
             timeout_seconds: 30,
+            max_retries: 3,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 1000,
+            circuit_breaker_threshold: 5,
         };
 
         let client = BaseRestClient::new(config);
@@ -241,6 +351,10 @@ mod tests {
             base_url: mock_server.uri(),
             rate_limit: RateLimitConfig::default(),
             timeout_seconds: 30,
+            max_retries: 3,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 1000,
+            circuit_breaker_threshold: 5,
         };
 
         let client = BaseRestClient::new(config);
