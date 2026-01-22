@@ -43,6 +43,7 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/minimax-m2.1-free
+          token: ${{ github.token }}
           share: false
           prompt: |
             ${{ github.event_name == 'issue_comment' && 'Review the issue/PR and address the user request in the comment.' || github.event_name == 'pull_request_review_comment' && 'Review the specific code lines mentioned in the PR comment and address the user request.' || 'Review this pull request thoroughly:' }}
