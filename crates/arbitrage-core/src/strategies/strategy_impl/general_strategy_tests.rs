@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::strategies::base::{
-        MarketBundle, RawSignal, Strategy, StrategyConfig, Ticker, TradeLeg,
-    };
+    use crate::strategies::config::StrategyConfig;
+    use crate::strategies::market_types::{MarketBundle, RawSignal, Ticker, TradeLeg};
+    use crate::strategies::traits::Strategy;
     use crate::types::{ExchangeId, OrderBook, OrderBookLevel, Symbol};
     use rust_decimal::Decimal;
 

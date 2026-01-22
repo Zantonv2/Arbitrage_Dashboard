@@ -1,6 +1,8 @@
 use rust_decimal::Decimal;
 
-use crate::strategies::base::{MarketBundle, Strategy, StrategyConfig};
+use crate::strategies::config::StrategyConfig;
+use crate::strategies::market_types::MarketBundle;
+use crate::strategies::traits::Strategy;
 use crate::strategies::{
     CexArbitrageStrategy, FundingRateArbitrageStrategy, StablecoinArbitrageStrategy,
 };

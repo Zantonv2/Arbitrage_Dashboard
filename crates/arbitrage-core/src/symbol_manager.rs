@@ -498,6 +498,7 @@ impl SymbolStrategy for NewListingArbitrageStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strategies::traits::Strategy;
     use crate::symbol_discovery::{EnhancedSymbolStats, MarketInfo, OrderBookDepth};
     use chrono::Utc;
     use rust_decimal::Decimal;

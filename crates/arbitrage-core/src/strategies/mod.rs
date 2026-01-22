@@ -25,8 +25,7 @@ pub mod traits;
 // Individual strategy implementations
 pub mod strategy_impl;
 
-// Re-export core types
-pub use base::*;
+// Re-export core types from submodules
 pub use config::*;
 pub use execution_context::*;
 pub use filter_context::*;
