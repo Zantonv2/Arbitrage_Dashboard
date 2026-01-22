@@ -164,10 +164,18 @@ impl CexArbitrageStrategy {
 
     /// Calculate gross profit percentage before fees
     fn calculate_gross_profit_bps(&self, buy_price: Decimal, sell_price: Decimal) -> Result<i32> {
-        if buy_price.is_zero() {
-            return Err(ArbitrageError::Calculation(
-                "Buy price cannot be zero".to_string(),
-            ));
+        if buy_price <= Decimal::ZERO {
+            return Err(ArbitrageError::Validation(format!(
+                "Buy price must be positive, got {}",
+                buy_price
+            )));
+        }
+
+        if sell_price <= Decimal::ZERO {
+            return Err(ArbitrageError::Validation(format!(
+                "Sell price must be positive, got {}",
+                sell_price
+            )));
         }
 
         let profit_ratio = (sell_price - buy_price)

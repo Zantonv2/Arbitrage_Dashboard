@@ -1,3 +1,4 @@
+use arbitrage_core::calculate_profit_bps;
 use arbitrage_core::test_utils::fixtures::{invalid_btc_order_book, valid_btc_order_book};
 use arbitrage_core::types::*;
 use chrono::Utc;
@@ -136,4 +137,48 @@ fn test_exchange_status() {
     assert!(matches!(status.status, ConnectionStatus::Disconnected));
     assert_eq!(status.error_count, 0);
     assert!(status.subscribed_symbols.is_empty());
+}
+
+#[test]
+fn test_calculate_profit_bps_positive() {
+    let result = calculate_profit_bps(Decimal::from(50000), Decimal::from(50500));
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 100); // 1% = 100 bps
+}
+
+#[test]
+fn test_calculate_profit_bps_negative_profit() {
+    let result = calculate_profit_bps(Decimal::from(50500), Decimal::from(50000));
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), -100); // -1% = -100 bps
+}
+
+#[test]
+fn test_calculate_profit_bps_zero_buy_price() {
+    let result = calculate_profit_bps(Decimal::ZERO, Decimal::from(50500));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_calculate_profit_bps_negative_buy_price() {
+    let result = calculate_profit_bps(Decimal::from(-50000), Decimal::from(50500));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_calculate_profit_bps_zero_sell_price() {
+    let result = calculate_profit_bps(Decimal::from(50000), Decimal::ZERO);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_calculate_profit_bps_negative_sell_price() {
+    let result = calculate_profit_bps(Decimal::from(50000), Decimal::from(-50500));
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_calculate_profit_bps_both_zero() {
+    let result = calculate_profit_bps(Decimal::ZERO, Decimal::ZERO);
+    assert!(result.is_err());
 }

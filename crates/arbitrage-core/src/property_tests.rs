@@ -358,12 +358,12 @@ proptest! {
         buy_price in any_decimal(),
         sell_price in any_decimal()
     ) {
-        if buy_price.is_zero() {
-            let result = calculate_profit_bps(buy_price, sell_price);
-            prop_assert!(result.is_none(), "Should return None for zero buy price");
+        let result = calculate_profit_bps(buy_price, sell_price);
+        if buy_price <= Decimal::ZERO || sell_price <= Decimal::ZERO {
+            prop_assert!(result.is_err(), "Should return error for non-positive prices");
         } else {
-            let result = calculate_profit_bps(buy_price, sell_price);
-            prop_assert!(result.is_some() || buy_price == sell_price);
+            // For valid positive prices, should return Ok
+            prop_assert!(result.is_ok(), "Should return Ok for valid positive prices");
         }
     }
 

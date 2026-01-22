@@ -1015,4 +1015,161 @@ mod tests {
             assert!(tier.expected_fill_price_sell > Decimal::ZERO);
         }
     }
+
+    // === Division by Zero and Negative Price Tests (Issue 132) ===
+
+    #[test]
+    fn test_calculate_size_with_zero_slippage_tier() {
+        let config = SizeConfig {
+            slippage_tiers: vec![Decimal::ZERO],
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        // Should handle zero slippage gracefully without panic
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+        // With zero slippage, should still return valid (possibly zero) size
+        assert!(recommendation.recommended_size >= Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_calculate_size_with_negative_prices() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(-50000), // Negative buy price
+            Decimal::from(50100),
+            chrono::Utc::now(),
+        );
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        // Should return an error instead of panicking
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_calculate_size_with_zero_sell_price() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = Signal::new(
+            Symbol::new("BTC", "USDT"),
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            Decimal::from(50000),
+            Decimal::ZERO, // Zero sell price
+            chrono::Utc::now(),
+        );
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        // Zero prices should be handled gracefully (return Ok with zero size)
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+        assert_eq!(recommendation.recommended_size, Decimal::ZERO);
+    }
+
+    #[test]
+    fn test_calculate_size_with_negative_slippage_tier() {
+        let config = SizeConfig {
+            slippage_tiers: vec![Decimal::from(-1)], // Negative slippage
+            ..SizeConfig::default()
+        };
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let (buy_book, sell_book) = create_test_order_books();
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        // Should handle gracefully without panic, returning Ok with zero/invalid size tier
+        assert!(result.is_ok());
+        let recommendation = result.unwrap();
+        // The tier with negative slippage should have zero max_size
+        assert!(recommendation
+            .size_tiers
+            .iter()
+            .all(|t| t.max_size >= Decimal::ZERO));
+    }
+
+    #[test]
+    fn test_size_calculator_handles_zero_quantity_in_orderbook() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let symbol = Symbol::new("BTC", "USDT");
+
+        // Create order book with zero quantity levels
+        let buy_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            vec![
+                OrderBookLevel::new(Decimal::from(49990), Decimal::ZERO),
+                OrderBookLevel::new(Decimal::from(49980), Decimal::from(3)),
+            ],
+            vec![
+                OrderBookLevel::new(Decimal::from(50010), Decimal::from(2)),
+                OrderBookLevel::new(Decimal::from(50020), Decimal::from(3)),
+            ],
+        );
+        let sell_book = OrderBook::new(
+            ExchangeId::ByBit,
+            symbol.clone(),
+            vec![
+                OrderBookLevel::new(Decimal::from(50100), Decimal::from(2)),
+                OrderBookLevel::new(Decimal::from(50110), Decimal::from(3)),
+            ],
+            vec![
+                OrderBookLevel::new(Decimal::from(50130), Decimal::from(2)),
+                OrderBookLevel::new(Decimal::from(50140), Decimal::from(3)),
+            ],
+        );
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        // Should handle zero quantities gracefully
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_size_calculator_handles_zero_price_in_orderbook() {
+        let config = SizeConfig::default();
+        let calculator = SizeCalculator::new(config);
+        let signal = create_test_signal();
+        let symbol = Symbol::new("BTC", "USDT");
+
+        // Create order book with zero price levels
+        let buy_book = OrderBook::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            vec![
+                OrderBookLevel::new(Decimal::from(49990), Decimal::from(2)),
+                OrderBookLevel::new(Decimal::from(49980), Decimal::from(3)),
+            ],
+            vec![
+                OrderBookLevel::new(Decimal::ZERO, Decimal::from(2)), // Zero price
+                OrderBookLevel::new(Decimal::from(50020), Decimal::from(3)),
+            ],
+        );
+        let sell_book = OrderBook::new(
+            ExchangeId::ByBit,
+            symbol.clone(),
+            vec![
+                OrderBookLevel::new(Decimal::from(50100), Decimal::from(2)),
+                OrderBookLevel::new(Decimal::from(50110), Decimal::from(3)),
+            ],
+            vec![
+                OrderBookLevel::new(Decimal::from(50130), Decimal::from(2)),
+                OrderBookLevel::new(Decimal::from(50140), Decimal::from(3)),
+            ],
+        );
+
+        let result = calculator.calculate_size(&signal, &buy_book, &sell_book);
+        // Should handle zero prices gracefully
+        assert!(result.is_ok());
+    }
 }
