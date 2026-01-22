@@ -529,6 +529,19 @@ impl OrderBook {
             return false;
         }
 
+        let valid_prices_quantities = self
+            .bids
+            .iter()
+            .all(|l| is_valid_decimal(l.price) && is_valid_decimal(l.quantity))
+            && self
+                .asks
+                .iter()
+                .all(|l| is_valid_decimal(l.price) && is_valid_decimal(l.quantity));
+
+        if !valid_prices_quantities {
+            return false;
+        }
+
         let bids_sorted = self.bids.windows(2).all(|w| w[0].price >= w[1].price);
         let asks_sorted = self.asks.windows(2).all(|w| w[0].price <= w[1].price);
 
@@ -1251,4 +1264,120 @@ pub fn calculate_profit_bps(
         })?;
 
     Ok(profit_bps)
+}
+
+fn is_valid_decimal(value: Decimal) -> bool {
+    value
+        .to_f64()
+        .map(|f| !f.is_nan() && f.is_finite())
+        .unwrap_or(false)
+        && value > Decimal::ZERO
+}
+
+#[cfg(test)]
+mod order_book_validation_tests {
+    use super::*;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn test_order_book_valid_with_normal_values() {
+        let bids = vec![
+            OrderBookLevel::new(Decimal::from(50000), Decimal::from(1)),
+            OrderBookLevel::new(Decimal::from(49999), Decimal::from(2)),
+        ];
+        let asks = vec![
+            OrderBookLevel::new(Decimal::from(50001), Decimal::from(1)),
+            OrderBookLevel::new(Decimal::from(50002), Decimal::from(2)),
+        ];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_with_zero_price() {
+        let bids = vec![OrderBookLevel::new(Decimal::ZERO, Decimal::from(1))];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_with_negative_price() {
+        let bids = vec![OrderBookLevel::new(Decimal::from(-100), Decimal::from(1))];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_with_zero_quantity() {
+        let bids = vec![OrderBookLevel::new(Decimal::from(50000), Decimal::ZERO)];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_with_negative_quantity() {
+        let bids = vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(-1))];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_empty_bids() {
+        let bids = vec![];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_empty_asks() {
+        let bids = vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))];
+        let asks = vec![];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_bids_not_sorted() {
+        let bids = vec![
+            OrderBookLevel::new(Decimal::from(49999), Decimal::from(1)),
+            OrderBookLevel::new(Decimal::from(50000), Decimal::from(2)),
+        ];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_asks_not_sorted() {
+        let bids = vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))];
+        let asks = vec![
+            OrderBookLevel::new(Decimal::from(50002), Decimal::from(1)),
+            OrderBookLevel::new(Decimal::from(50001), Decimal::from(2)),
+        ];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
+
+    #[test]
+    fn test_order_book_invalid_bid_greater_than_ask() {
+        let bids = vec![OrderBookLevel::new(Decimal::from(50002), Decimal::from(1))];
+        let asks = vec![OrderBookLevel::new(Decimal::from(50001), Decimal::from(1))];
+
+        let book = OrderBook::new(ExchangeId::Binance, Symbol::new("BTC", "USDT"), bids, asks);
+        assert!(!book.is_valid());
+    }
 }

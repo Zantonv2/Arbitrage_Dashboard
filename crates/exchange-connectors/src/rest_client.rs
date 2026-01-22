@@ -1,4 +1,5 @@
 use arbitrage_core::{types::ExchangeId, ArbitrageError, Result};
+use rand::Rng;
 use reqwest::{Client, StatusCode};
 use rustc_hash::FxHashMap;
 use serde::de::DeserializeOwned;
@@ -166,13 +167,18 @@ impl BaseRestClient {
                     if !response.status().is_success() {
                         let status = response.status();
                         let body = response.text().await.unwrap_or_default();
-                        return Err(ArbitrageError::HttpError(format!(
+                        let error = ArbitrageError::HttpError(format!(
                             "{} request to {} failed with status {}: {}",
                             operation, url, status, body
-                        )));
-                    }
+                        ));
 
-                    return response.json().await.map_err(ArbitrageError::from);
+                        if attempt > max_retries || !Self::is_retriable_error(&error) {
+                            self.record_failure().await;
+                            return Err(error);
+                        }
+                    } else {
+                        return response.json().await.map_err(ArbitrageError::from);
+                    }
                 }
                 Ok(Err(e)) => {
                     let error = ArbitrageError::Network(format!(
@@ -203,7 +209,9 @@ impl BaseRestClient {
                     initial_backoff_ms * (2_u64.pow(attempt.saturating_sub(1) as u32)),
                     max_backoff_ms,
                 );
-                sleep(Duration::from_millis(backoff)).await;
+                let jitter: u64 = rand::thread_rng().gen_range(0..=100);
+                let total_backoff = backoff + jitter;
+                sleep(Duration::from_millis(total_backoff)).await;
             }
         }
     }
@@ -378,5 +386,37 @@ mod tests {
         let client = manager.register_exchange(ExchangeId::ByBit, config);
         assert!(manager.get_client(ExchangeId::ByBit).is_some());
         assert!(manager.get_client(ExchangeId::OKX).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_rest_client_timeout() {
+        let mock_server = MockServer::start().await;
+
+        let mut mock = Mock::given(method("GET"))
+            .and(path("/api/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": "test_value"
+            })).set_delay(Duration::from_secs(10)));
+
+        mock.mount(&mock_server).await;
+
+        let config = RestClientConfig {
+            base_url: mock_server.uri(),
+            rate_limit: RateLimitConfig::default(),
+            timeout_seconds: 1,
+            max_retries: 1,
+            initial_backoff_ms: 100,
+            max_backoff_ms: 500,
+            circuit_breaker_threshold: 5,
+        };
+
+        let client = BaseRestClient::new(config);
+        let result: Result<serde_json::Value> = client.get("/api/test").await;
+        assert!(result.is_err());
+        match result {
+            Err(ArbitrageError::Timeout(_)) => {}
+            Err(ArbitrageError::Network(_)) => {}
+            other => panic!("Expected Timeout or Network error, got: {:?}", other),
+        }
     }
 }
