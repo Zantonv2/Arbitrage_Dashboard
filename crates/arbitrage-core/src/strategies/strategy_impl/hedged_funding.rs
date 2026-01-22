@@ -35,6 +35,16 @@ use tracing::debug;
 /// - Spot prices for hedging calculations
 /// - Cross-exchange basis spreads
 /// - Volatility and correlation metrics
+///
+/// # Example
+///
+/// ```rust
+/// use arbitrage_core::strategies::StrategyConfig;
+///
+/// let strategy = HedgedFundingStrategy::new();
+/// assert_eq!(strategy.id(), "hedged_funding");
+/// assert_eq!(strategy.name(), "Hedged Funding Strategy");
+/// ```
 pub struct HedgedFundingStrategy {
     config: StrategyConfig,
     #[allow(dead_code)]
@@ -49,7 +59,21 @@ pub struct HedgedFundingStrategy {
 }
 
 impl HedgedFundingStrategy {
-    /// Create a new hedged funding strategy with default configuration
+    /// Creates a new hedged funding strategy with default configuration.
+    ///
+    /// Initializes the strategy with default limits and parameters for
+    /// hedged funding arbitrage. The strategy is enabled by default.
+    ///
+    /// # Returns
+    ///
+    /// A new HedgedFundingStrategy instance with default configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let strategy = HedgedFundingStrategy::new();
+    /// assert!(strategy.config().enabled);
+    /// ```
     pub fn new() -> Self {
         let custom_params = StrategyUtils::create_base_custom_params();
 
@@ -68,7 +92,36 @@ impl HedgedFundingStrategy {
         }
     }
 
-    /// Create with custom configuration
+    /// Creates a hedged funding strategy with custom configuration.
+    ///
+    /// Allows overriding the default configuration with custom parameters
+    /// for fine-tuned control over strategy behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Custom strategy configuration
+    ///
+    /// # Returns
+    ///
+    /// A new HedgedFundingStrategy instance with the provided configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use arbitrage_core::strategies::{StrategyConfig, RiskLimits};
+    /// use rust_decimal::Decimal;
+    ///
+    /// let config = StrategyConfig {
+    ///     enabled: true,
+    ///     min_profit_bps: 15,
+    ///     max_exposure: Decimal::from(100000),
+    ///     confidence_threshold: Decimal::new(8, 1),
+    ///     risk_limits: RiskLimits::default(),
+    ///     custom_params: serde_json::Map::new(),
+    /// };
+    ///
+    /// let strategy = HedgedFundingStrategy::with_config(config);
+    /// ```
     pub fn with_config(config: StrategyConfig) -> Self {
         let mut strategy = Self::new();
         strategy.config = config;
@@ -474,14 +527,41 @@ impl Default for HedgedFundingStrategy {
 }
 
 impl Strategy for HedgedFundingStrategy {
+    /// Returns the unique identifier for this strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice identifying the strategy type.
     fn id(&self) -> &'static str {
         "hedged_funding"
     }
 
+    /// Returns the human-readable name for this strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice containing the strategy name.
     fn name(&self) -> &'static str {
         "Hedged Funding Strategy"
     }
 
+    /// Detects arbitrage opportunities in the current market data.
+    ///
+    /// Scans all available funding rates across supported exchanges to identify
+    /// hedged funding opportunities where the funding rate justifies the basis
+    /// risk between perpetual and spot markets.
+    ///
+    /// # Arguments
+    ///
+    /// * `market_data` - Bundle containing market data from all exchanges
+    ///
+    /// # Returns
+    ///
+    /// A vector of detected arbitrage signals, empty if no opportunities found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if market data processing fails.
     fn detect(&self, market_data: &MarketBundle) -> Result<Vec<RawSignal>> {
         debug!("Hedged funding scanning market data");
 
@@ -620,6 +700,23 @@ impl Strategy for HedgedFundingStrategy {
         Ok(signals)
     }
 
+    /// Filters a signal based on additional context and risk checks.
+    ///
+    /// Validates that a detected signal meets all requirements for execution,
+    /// including exchange permissions, inventory constraints, and exposure limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The signal to filter
+    /// * `context` - The filter context containing additional validation rules
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if the signal passes all filters, `Ok(false)` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation encounters an unexpected error.
     fn filter(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool> {
         // Basic validation
         if !signal.is_valid() {
@@ -703,10 +800,27 @@ impl Strategy for HedgedFundingStrategy {
         Ok(true)
     }
 
+    /// Returns a reference to the strategy configuration.
+    ///
+    /// # Returns
+    ///
+    /// Immutable reference to the current strategy configuration.
     fn config(&self) -> &StrategyConfig {
         &self.config
     }
 
+    /// Updates the strategy configuration.
+    ///
+    /// Allows runtime modification of strategy parameters such as
+    /// min profit threshold, max exposure, and risk limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The new strategy configuration
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on successful update.
     fn update_config(&mut self, config: StrategyConfig) -> Result<()> {
         self.config = config;
         Ok(())
