@@ -24,8 +24,8 @@ jobs:
       issues: ${{ steps.collect.outputs.ISSUES }}
       count: ${{ steps.collect.outputs.COUNT }}
     steps:
-      - id: collect
-        name: Collect issues
+      - name: Collect issues
+        id: collect
         run: |
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             ISSUE_NUM=$(echo "${{ github.event.issue.html_url }}" | grep -oE '[0-9]+$' || echo "")
