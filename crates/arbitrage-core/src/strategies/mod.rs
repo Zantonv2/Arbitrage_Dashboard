@@ -15,13 +15,26 @@ pub mod base;
 pub mod registry;
 pub mod strategies_specifics;
 
+pub mod config;
+pub mod execution_context;
+pub mod filter_context;
+pub mod macros;
+pub mod market_types;
+pub mod traits;
+
 // Individual strategy implementations
 pub mod strategy_impl;
 
 // Re-export core types
 pub use base::*;
+pub use config::*;
+pub use execution_context::*;
+pub use filter_context::*;
+pub use macros::*;
+pub use market_types::*;
 pub use registry::StrategyRegistry;
 pub use strategies_specifics::*;
+pub use traits::*;
 
 // Re-export strategy modules for direct access
 pub use strategy_impl::cex_arbitrage;

@@ -121,18 +121,18 @@ impl ExchangeConnector for GateioConnector {
         );
 
         let response = self.client.get(&url).send().await?;
-        let data: Value = response.json().await?;
+        let order_book_json: Value = response.json().await?;
 
-        self.parse_order_book(&data, symbol)
+        self.parse_order_book(&order_book_json, symbol)
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
         let url = format!("{}/api/v4/spot/currency_pairs", self.config.rest_url);
         let response = self.client.get(&url).send().await?;
-        let data: Value = response.json().await?;
+        let currency_pairs_json: Value = response.json().await?;
 
         let mut symbols = Vec::with_capacity(1024);
-        if let Some(pairs) = data.as_array() {
+        if let Some(pairs) = currency_pairs_json.as_array() {
             for pair in pairs {
                 if let Some(id) = pair["id"].as_str() {
                     if let Ok(symbol) = self.symbol_from_gateio(id) {
@@ -147,10 +147,10 @@ impl ExchangeConnector for GateioConnector {
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
         let url = format!("{}/api/v4/spot/tickers", self.config.rest_url);
         let response = self.client.get(&url).send().await?;
-        let data: Value = response.json().await?;
+        let tickers_json: Value = response.json().await?;
 
         let mut tickers = HashMap::with_capacity(symbols.len());
-        if let Some(ticker_array) = data.as_array() {
+        if let Some(ticker_array) = tickers_json.as_array() {
             for ticker_data in ticker_array {
                 if let Some(currency_pair) = ticker_data["currency_pair"].as_str() {
                     if let Ok(symbol) = self.symbol_from_gateio(currency_pair) {

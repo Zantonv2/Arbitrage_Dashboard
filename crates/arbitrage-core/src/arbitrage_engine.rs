@@ -259,6 +259,23 @@ impl ArbitrageEngine {
     /// 2. Run each enabled strategy's detect() method
     /// 3. Process each raw signal through the validation pipeline
     /// 4. Emit validated signals
+    ///
+    /// # Pipeline Flow
+    /// ```text
+    /// Market Data → Cache → Strategy Detection → Deduplicate → Fee Calculation →
+    /// Risk Validation → Size Calculation → Confidence Scoring → Threshold Check →
+    /// Store → Emit Signal
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Run detection across all enabled strategies
+    /// let signals = engine.detect_opportunities(&registry).await?;
+    /// for signal in signals {
+    ///     println!("Found opportunity: {:?}", signal);
+    /// }
+    /// ```
     pub async fn detect_opportunities(&self, registry: &StrategyRegistry) -> Result<Vec<Signal>> {
         let start_time = std::time::Instant::now();
 
@@ -348,6 +365,21 @@ impl ArbitrageEngine {
     /// 7. Confidence scoring (multi-factor scoring)
     /// 8. Threshold check (min profit, min confidence)
     /// 9. Storage and emission
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // A simplified pipeline flow:
+    /// // 1. Filter signal based on strategy rules
+    /// // 2. Check if we've recently seen this opportunity
+    /// // 3. Validate exchanges are healthy
+    /// // 4. Calculate fees and net spread
+    /// // 5. Check risk limits
+    /// // 6. Calculate order size from order books
+    /// // 7. Score confidence based on market conditions
+    /// // 8. Check against thresholds
+    /// // 9. Store and emit the signal
+    /// ```
     async fn process_signal_pipeline(
         &self,
         raw_signal: RawSignal,
@@ -495,6 +527,20 @@ impl ArbitrageEngine {
     // ========================================================================
 
     /// Build market bundle from cached data
+    ///
+    /// Collects all cached market data (order books, tickers, funding rates)
+    /// into a single [`MarketBundle`] for strategy detection.
+    ///
+    /// # Returns
+    /// A new [`MarketBundle`] containing all cached market data
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Build market bundle before running detection
+    /// let market_bundle = engine.build_market_bundle();
+    /// let order_books_count = market_bundle.order_books.len();
+    /// ```
     fn build_market_bundle(&self) -> MarketBundle {
         let mut bundle = MarketBundle::new();
 

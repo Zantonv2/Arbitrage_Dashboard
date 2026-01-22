@@ -137,7 +137,7 @@ impl ExchangeConnector for BybitConnector {
 
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let order_book_json = parse_json_with_retry(
             &bytes,
             ExchangeId::ByBit,
             "fetch_order_book",
@@ -145,7 +145,7 @@ impl ExchangeConnector for BybitConnector {
         )
         .await?;
 
-        if let Some(result) = data["result"].as_object() {
+        if let Some(result) = order_book_json["result"].as_object() {
             return self.parse_order_book(result, symbol);
         }
 
@@ -161,7 +161,7 @@ impl ExchangeConnector for BybitConnector {
         );
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let symbols_json = parse_json_with_retry(
             &bytes,
             ExchangeId::ByBit,
             "fetch_symbols",
@@ -170,7 +170,7 @@ impl ExchangeConnector for BybitConnector {
         .await?;
 
         let mut symbols = Vec::with_capacity(512);
-        if let Some(result) = data["result"].as_object() {
+        if let Some(result) = symbols_json["result"].as_object() {
             if let Some(list) = result["list"].as_array() {
                 for item in list {
                     if let Some(symbol_str) = item["symbol"].as_str() {

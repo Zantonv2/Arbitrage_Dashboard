@@ -103,7 +103,7 @@ impl ExchangeConnector for OKXConnector {
 
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let order_book_json = parse_json_with_retry(
             &bytes,
             ExchangeId::OKX,
             "fetch_order_book",
@@ -111,7 +111,7 @@ impl ExchangeConnector for OKXConnector {
         )
         .await?;
 
-        if let Some(data_array) = data["data"].as_array() {
+        if let Some(data_array) = order_book_json["data"].as_array() {
             if let Some(book) = data_array.first() {
                 return self.parse_order_book(book, symbol);
             }
@@ -129,7 +129,7 @@ impl ExchangeConnector for OKXConnector {
         );
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let symbols_json = parse_json_with_retry(
             &bytes,
             ExchangeId::OKX,
             "fetch_symbols",
@@ -138,7 +138,7 @@ impl ExchangeConnector for OKXConnector {
         .await?;
 
         let mut symbols = Vec::with_capacity(512);
-        if let Some(data_array) = data["data"].as_array() {
+        if let Some(data_array) = symbols_json["data"].as_array() {
             for item in data_array {
                 if let Some(inst_id) = item["instId"].as_str() {
                     if let Some(state) = item["state"].as_str() {
