@@ -259,20 +259,55 @@ impl CexArbitrageStrategy {
     }
 
     /// Estimate net profit after fees
-    fn estimate_net_profit_bps(
+    ///
+    /// Calculates net profit by subtracting combined taker fees from gross profit.
+    /// Fees are converted from percentage to basis points using checked arithmetic
+    /// to prevent overflow for unusual fee values.
+    ///
+    /// # Arguments
+    ///
+    /// * `gross_profit_bps` - Gross profit in basis points
+    /// * `buy_exchange` - Exchange for buy leg
+    /// * `sell_exchange` - Exchange for sell leg
+    ///
+    /// # Returns
+    ///
+    /// Net profit in basis points after fees, or an error if fee calculation overflows.
+    pub(crate) fn estimate_net_profit_bps(
         &self,
         gross_profit_bps: i32,
         buy_exchange: ExchangeId,
         sell_exchange: ExchangeId,
-    ) -> i32 {
+    ) -> Result<i32> {
         let (_, buy_taker_fee) = ExchangeCapabilities::get_typical_fees(buy_exchange);
         let (_, sell_taker_fee) = ExchangeCapabilities::get_typical_fees(sell_exchange);
 
-        // Fees are returned as percentages (e.g., 0.10 = 0.10%), convert to basis points
-        let total_fee_bps = ((buy_taker_fee + sell_taker_fee) * 100.0) as i32;
+        let combined_fee_pct = buy_taker_fee + sell_taker_fee;
 
-        // Net profit = gross profit - fees
-        gross_profit_bps - total_fee_bps
+        if combined_fee_pct > 1.0 {
+            return Err(ArbitrageError::Calculation(format!(
+                "Combined fee rate {} exceeds 100%, cannot calculate fee BPS",
+                combined_fee_pct
+            )));
+        }
+
+        let total_fee_bps = (combined_fee_pct * 100.0).floor() as i32;
+
+        let net_profit = gross_profit_bps.checked_sub(total_fee_bps).ok_or_else(|| {
+            ArbitrageError::Calculation(format!(
+                "Net profit calculation underflow: {} - {}",
+                gross_profit_bps, total_fee_bps
+            ))
+        })?;
+
+        if net_profit < 0 {
+            return Err(ArbitrageError::Calculation(format!(
+                "Net profit would be negative: {} - {} = {}",
+                gross_profit_bps, total_fee_bps, net_profit
+            )));
+        }
+
+        Ok(net_profit)
     }
 }
 
@@ -400,11 +435,20 @@ impl Strategy for CexArbitrageStrategy {
 
             // Estimate net profit after fees
             let net_profit_bps =
-                self.estimate_net_profit_bps(gross_profit_bps, buy_exchange, sell_exchange);
-            println!(
-                "Net profit after fees: {} bps (min required: {} bps)",
-                net_profit_bps, self.config.min_profit_bps
-            );
+                match self.estimate_net_profit_bps(gross_profit_bps, buy_exchange, sell_exchange) {
+                    Ok(net) => {
+                        println!(
+                            "Net profit after fees: {} bps (min required: {} bps)",
+                            net, self.config.min_profit_bps
+                        );
+                        net
+                    }
+                    Err(e) => {
+                        println!("Failed to calculate net profit: {}", e);
+                        warn!("Failed to calculate net profit for {}: {}", symbol, e);
+                        continue;
+                    }
+                };
 
             // Skip if net profit is too low
             if net_profit_bps < self.config.min_profit_bps {

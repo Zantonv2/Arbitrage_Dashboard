@@ -763,4 +763,123 @@ mod tests {
             Decimal::new(2, 3)
         );
     }
+
+    // === Fee Overflow Protection Tests ===
+
+    #[test]
+    fn test_calculate_net_spread_bps_high_fee_schedule() {
+        let config = ConfidenceConfig::default();
+        let mut scorer = ConfidenceScorer::new(config);
+
+        // Set extremely high fees (50% each = 100% total, should make it unprofitable)
+        scorer.update_fee_schedule(
+            ExchangeId::MEXC,
+            FeeSchedule::new(ExchangeId::MEXC, Decimal::from(5), Decimal::from(5)),
+        );
+        scorer.update_fee_schedule(
+            ExchangeId::GateIo,
+            FeeSchedule::new(ExchangeId::GateIo, Decimal::from(5), Decimal::from(5)),
+        );
+
+        // Large spread but 100% fees should still make it unprofitable
+        let buy_price = Decimal::from(50000);
+        let sell_price = Decimal::from(60000); // 20% spread
+        let result = scorer.calculate_net_spread_bps(
+            buy_price,
+            sell_price,
+            ExchangeId::MEXC,
+            ExchangeId::GateIo,
+        );
+        // With 100% fees, effective buy = 2*buy_price, effective sell = 0, so unprofitable
+        assert!(result.is_unprofitable());
+    }
+
+    #[test]
+    fn test_calculate_net_spread_bps_very_high_spread() {
+        let config = ConfidenceConfig::default();
+        let mut scorer = ConfidenceScorer::new(config);
+
+        // Very high spread that should be profitable even with high fees
+        let buy_price = Decimal::from(100);
+        let sell_price = Decimal::from(500); // 400% spread
+        let result = scorer.calculate_net_spread_bps(
+            buy_price,
+            sell_price,
+            ExchangeId::MEXC,
+            ExchangeId::GateIo,
+        );
+        // Even with 0.2% + 0.2% = 0.4% fees, this should still be massively profitable
+        assert!(result.is_profitable());
+        if let Some(bps) = result.profit_value() {
+            assert!(bps > 0);
+        }
+    }
+
+    #[test]
+    fn test_calculate_net_spread_bps_extreme_fees() {
+        let config = ConfidenceConfig::default();
+        let mut scorer = ConfidenceScorer::new(config);
+
+        // Set fees so high that effective prices become invalid
+        scorer.update_fee_schedule(
+            ExchangeId::OKX,
+            FeeSchedule::new(ExchangeId::OKX, Decimal::from(1), Decimal::from(1)),
+        );
+        scorer.update_fee_schedule(
+            ExchangeId::ByBit,
+            FeeSchedule::new(ExchangeId::ByBit, Decimal::from(1), Decimal::from(1)),
+        );
+
+        // 100% fees on each side: effective_buy = 2*price, effective_sell = 0
+        // This should result in unprofitable (or at least not crash)
+        let buy_price = Decimal::from(100);
+        let sell_price = Decimal::from(300);
+        let result = scorer.calculate_net_spread_bps(
+            buy_price,
+            sell_price,
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+        // effective_buy = 200, effective_sell = 0, so unprofitable
+        assert!(result.is_unprofitable());
+    }
+
+    #[test]
+    fn test_calculate_net_spread_bps_zero_fees() {
+        let config = ConfidenceConfig::default();
+        let mut scorer = ConfidenceScorer::new(config);
+
+        // Set zero fees
+        scorer.update_fee_schedule(
+            ExchangeId::OKX,
+            FeeSchedule::new(ExchangeId::OKX, Decimal::ZERO, Decimal::ZERO),
+        );
+        scorer.update_fee_schedule(
+            ExchangeId::ByBit,
+            FeeSchedule::new(ExchangeId::ByBit, Decimal::ZERO, Decimal::ZERO),
+        );
+
+        let buy_price = Decimal::from(50000);
+        let sell_price = Decimal::from(50100); // 2 bps spread
+        let result = scorer.calculate_net_spread_bps(
+            buy_price,
+            sell_price,
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+        assert!(result.is_profitable());
+    }
+
+    #[test]
+    fn test_fee_schedule_fee_calculation_safety() {
+        // Test that extreme fee values don't cause panics
+        let schedule = FeeSchedule::new(
+            ExchangeId::OKX,
+            Decimal::from(100), // 10000% maker fee
+            Decimal::from(100), // 10000% taker fee
+        );
+        // Should not panic
+        assert_eq!(schedule.get_fee_rate(true), Decimal::from(100));
+        assert_eq!(schedule.get_fee_rate(false), Decimal::from(100));
+    }
 }

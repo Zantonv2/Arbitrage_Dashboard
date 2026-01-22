@@ -379,7 +379,10 @@ impl ConfidenceScorer {
             None => return NetSpreadResult::Unprofitable,
         };
 
-        NetSpreadResult::Profit(spread_bps.to_i32().unwrap_or(0))
+        match spread_bps.to_i32() {
+            Some(bps) => NetSpreadResult::Profit(bps),
+            None => NetSpreadResult::Unprofitable,
+        }
     }
 
     /// Checks if market data is fresh enough for signal generation.
