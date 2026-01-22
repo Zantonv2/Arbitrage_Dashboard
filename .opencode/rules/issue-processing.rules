@@ -1,0 +1,80 @@
+---
+description: Issue processing rules for fix-issue command
+---
+# Issue Processing Rules
+
+## Input Parsing Rules
+Parse $ARGUMENTS for issue specification:
+- Single issue: "123" -> ["123"]
+- Range syntax: "105-110" -> ["105", "106", "107", "108", "109", "110"] (format: START-END)
+- Space-separated: "105 106 107" -> ["105", "106", "107"]
+- Comma-separated: "123,124,125" -> ["123", "124", "125"]
+- Single issue: Single number -> ["$ARGUMENTS"]
+
+## Validation Rules
+1. Each number must be positive integer > 0
+2. Filter out: 0, negative numbers, non-numeric strings
+3. Deduplicate issues: Convert to Set, back to sorted Vec
+4. Pre-flight check: gh api "repos/{owner}/{repo}/issues/{num}" for each issue
+5. Skip issues that don't exist or are closed
+6. Log skipped issues to output/issue-fix-artifacts/skipped_issues.json
+
+## Output Format Rules
+Each finding outputs to `docs/outputs/issues/{category}/{filename}.md`:
+```yaml
+---
+title: [P1] Clear title under 70 characters
+problem: One sentence describing the issue
+impact: One sentence on user/system impact
+reproduction: Steps to reproduce or observe
+acceptance_criteria:
+- Criterion 1
+- Criterion 2
+effort: 1-5 scale
+risk: High|Medium|Low
+category: security|critical|performance|reliability|testing|tech-debt
+files:
+- src/file.rs
+labels: security|crash|performance|error-handling|testing|debt
+---
+```
+
+## Merged Issue Template
+When findings > $ARGUMENTS, merge by same file → same category → same risk → related functionality:
+```yaml
+---
+title: [P1] Consolidated: {primary_title}
+merged_from: "{count} findings merged"
+problems:
+- {problem 1}
+- {problem 2}
+impact: Combined impact
+reproduction: |
+  Finding 1: {reproduction 1}
+  Finding 2: {reproduction 2}
+acceptance_criteria:
+- Combined criterion
+effort: {highest effort}
+risk: {highest risk}
+category: {primary category}
+files:
+- {all unique files}
+labels: {all unique labels}
+source_files:
+- docs/outputs/issues/{category}/{file1}.md
+- docs/outputs/issues/{category}/{file2}.md
+---
+```
+
+## Batch Processing Rules
+1. ONE PR only when ALL issues are 100% complete and validated
+2. NO partial PRs
+3. Sequential issue processing, parallel cluster processing
+4. If ANY issue fails, batch FAILS - no partial PRs
+5. If ANY issue fails after all reconciliations: BATCH FAILS, NO PR created
+
+## Transient Failure Handling
+Retry up to 3 times with 5s backoff for:
+- gh api network errors
+- cargo lock contention ("Blocking waiting for file lock")
+- Subagent timeouts (>5min)

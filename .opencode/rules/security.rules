@@ -1,0 +1,249 @@
+---
+description: Security standards for arbitrage trading system
+---
+# Security Standards
+
+## Critical Security Rules
+
+### 1. Secret Management
+
+**NEVER commit secrets:**
+```rust
+// BAD - Will be caught by pre-commit hooks
+const API_KEY: &str = "sk_live_abc123xyz";
+let api_key = "sk_live_abc123xyz";
+
+// GOOD - Load from environment
+let api_key = std::env::var("EXCHANGE_API_KEY")
+    .expect("EXCHANGE_API_KEY must be set");
+```
+
+**Secret Storage:**
+- Use environment variables for all API keys
+- Use `.env.example` with placeholder values (never real keys)
+- Use a secrets manager (AWS Secrets Manager, HashiCorp Vault) for production
+- Rotate keys regularly (every 90 days minimum)
+
+**Pre-commit Hook:**
+```bash
+# Check for secrets before commit
+gitleaks detect --source=. --verbose
+```
+
+### 2. Input Validation
+
+**Validate ALL external input:**
+
+```rust
+// Order size validation
+fn validate_order_size(size: Decimal, min: Decimal, max: Decimal) -> Result<()> {
+    if size < min {
+        return Err(ArbitrageError::Validation("Order below minimum".into()));
+    }
+    if size > max {
+        return Err(ArbitrageError::Validation("Order above maximum".into()));
+    }
+    if size % tick_size != Decimal::ZERO {
+        return Err(ArbitrageError::Validation("Invalid lot size".into()));
+    }
+    Ok(())
+}
+
+// Price validation
+fn validate_price(price: Decimal) -> Result<()> {
+    if price <= Decimal::ZERO {
+        return Err(ArbitrageError::Validation("Price must be positive".into()));
+    }
+    if price > MAX_REASONABLE_PRICE {
+        return Err(ArbitrageError::Validation("Price exceeds maximum".into()));
+    }
+    Ok(())
+}
+```
+
+### 3. Network Security
+
+**Rate Limiting:**
+```rust
+// Implement per-IP and per-API-key rate limits
+#[derive(Clone)]
+pub struct RateLimiter {
+    per_ip: DashMap<String, TokenBucket>,
+    per_key: DashMap<String, TokenBucket>,
+}
+```
+
+**TLS Requirements:**
+- Use TLS 1.2+ for all external connections
+- Validate certificates (never disable verification)
+- Use pinned certificates for critical exchanges
+
+**DoS Protection:**
+- Implement request timeouts (5 second default)
+- Reject requests exceeding size limits
+- Use circuit breakers for external API calls
+
+### 4. Order Execution Safety
+
+**Kill Switch Pattern:**
+```rust
+pub struct KillSwitch {
+    enabled: AtomicBool,
+    max_order_value: AtomicDecimal,
+    allowed_exchanges: AtomicUset<ExchangeId>,
+}
+
+impl KillSwitch {
+    pub fn can_execute(&self, exchange: ExchangeId, value: Decimal) -> bool {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return false;
+        }
+        if value > self.max_order_value.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.allowed_exchanges.load().contains(&exchange)
+    }
+}
+```
+
+**Max Slippage Validation:**
+```rust
+fn validate_slippage(expected_price: Decimal, actual_price: Decimal) -> Result<()> {
+    let slippage = ((actual_price - expected_price) / expected_price).abs();
+    if slippage > MAX_ALLOWED_SLIPPAGE {
+        return Err(ArbitrageError::SlippageExceeded {
+            expected: expected_price,
+            actual: actual_price,
+            threshold: MAX_ALLOWED_SLIPPAGE,
+        });
+    }
+    Ok(())
+}
+```
+
+### 5. Data Integrity
+
+**Order Book Integrity:**
+```rust
+fn validate_order_book(book: &OrderBook) -> Result<()> {
+    // Check bids < asks (no arbitrage within single exchange)
+    let best_bid = book.bids.first().map(|b| b.price);
+    let best_ask = book.asks.first().map(|a| a.price);
+    
+    if let (Some(bid), Some(ask)) = (best_bid, best_ask) {
+        if bid >= ask {
+            return Err(ArbitrageError::InvalidOrderBook(
+                "Best bid >= best ask".into()
+            ));
+        }
+    }
+    
+    // Check prices are positive
+    ensure_positive_prices(book)?;
+    
+    // Check amounts are positive
+    ensure_positive_amounts(book)?;
+    
+    Ok(())
+}
+```
+
+### 6. Error Handling
+
+**Never expose internals in errors:**
+```rust
+// BAD - Leaks internal details
+#[error("Database error: {0}")]
+DatabaseError(String),
+
+// GOOD - Generic error, no internal details
+#[error("Service temporarily unavailable")]
+ServiceUnavailable,
+```
+
+**Log securely:**
+```rust
+// Never log sensitive data
+log::info!("Order placed for {} on {}", symbol, exchange); // OK
+log::debug!("API response: {:?}", response); // BAD if contains keys
+
+// Use structured logging without sensitive fields
+log::info!(
+    "Order executed: id={}, symbol={}, side={}",
+    order.id, order.symbol, order.side
+);
+```
+
+### 7. Concurrency Safety
+
+**Thread-Safe Types:**
+```rust
+// Use appropriate concurrency primitives
+use tokio::sync::{Mutex, RwLock, Semaphore};
+use std::sync::Arc;
+
+// For single-reader, multi-writer: RwLock
+// For single-state, multi-access: Mutex
+// For rate limiting: Semaphore
+// For hot paths with many readers: DashMap
+```
+
+**Panic Safety:**
+```rust
+// Use panic guards for critical sections
+let _guard = panic::panic_hooks::set(|| {
+    // Emergency stop on panic
+    kill_switch.trigger("panic in trading thread");
+});
+```
+
+### 8. Audit Trail
+
+**Log ALL trading decisions:**
+```rust
+#[derive(Debug, Serialize)]
+pub struct TradeDecision {
+    timestamp: chrono::DateTime<Utc>,
+    opportunity_id: Uuid,
+    exchanges: (ExchangeId, ExchangeId),
+    expected_profit: Decimal,
+    actual_profit: Option<Decimal>,
+    status: DecisionStatus,
+}
+
+impl TradeDecision {
+    pub fn log(&self) {
+        // Persist to immutable audit log
+        audit_log.push(self.clone());
+    }
+}
+```
+
+### 9. Dependency Security
+
+**Regular Audits:**
+```bash
+# Check for vulnerabilities
+cargo audit
+
+# Check for outdated dependencies
+cargo outdated
+
+# License compliance
+cargo deny check licenses
+```
+
+### 10. Security Checklist
+
+Before deploying to production:
+- [ ] All API keys loaded from environment/secrets manager
+- [ ] Rate limiting configured
+- [ ] Kill switch implemented and tested
+- [ ] Max slippage validation enabled
+- [ ] TLS verification enabled
+- [ ] No hardcoded secrets in code
+- [ ] Input validation on all external data
+- [ ] Error messages don't leak internals
+- [ ] Audit logging enabled
+- [ ] Dependencies audited (cargo audit)
+- [ ] Panic handlers defined for critical threads

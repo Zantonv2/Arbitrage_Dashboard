@@ -1,0 +1,210 @@
+---
+description: Documentation standards for code and APIs
+---
+# Documentation Standards
+
+## Code Documentation
+
+### Public API Documentation
+Every public item must have `///` doc comments:
+
+```rust
+/// Arbitrage engine for detecting and executing trading opportunities.
+///
+/// The engine monitors multiple exchanges, detects price discrepancies,
+/// and executes profitable arbitrage trades.
+///
+/// # Examples
+///
+/// ```
+/// use arbitrage_core::ArbitrageEngine;
+///
+/// let engine = ArbitrageEngine::new(config).await;
+/// let opportunities = engine.scan().await;
+/// ```
+///
+/// # Errors
+///
+/// Returns `ArbitrageError::NoExchanges` if no exchanges are configured.
+///
+/// # Panics
+///
+/// Never panics under normal operation.
+pub struct ArbitrageEngine { ... }
+```
+
+### Module Documentation
+```rust
+//! Strategies for detecting different types of arbitrage opportunities.
+//!
+//! This module contains implementations for:
+//! - Triangular arbitrage
+//! - Cross-exchange arbitrage
+//! - Funding rate arbitrage
+//!
+//! Each strategy implements the [`Strategy`] trait.
+```
+
+### trait Implementation Documentation
+```rust
+impl Strategy for ConvergenceArbitrage {
+    /// Scans for triangular arbitrage opportunities.
+    ///
+    /// Analyzes price differences between three trading pairs
+    /// on the same exchange to identify profitable paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `symbols` - List of symbols to scan
+    /// * `depth` - Order book depth to analyze
+    ///
+    /// # Returns
+    ///
+    /// Vector of detected opportunities, sorted by expected profit.
+    async fn scan(
+        &self,
+        symbols: &[Symbol],
+        depth: usize,
+    ) -> Vec<Opportunity> {
+        // ...
+    }
+}
+```
+
+## Configuration Documentation
+
+### Config Example
+```toml
+# Arbitrage Engine Configuration
+[arbitrage]
+# Minimum profit threshold in basis points
+min_profit_bps = 10
+
+# Maximum order size in USD
+max_order_size = 100000.0
+
+# Timeout for order execution in seconds
+execution_timeout = 30.0
+
+[exchanges.mexc]
+# API endpoint
+api_url = "https://api.mexc.com"
+
+# Rate limit requests per minute
+rate_limit = 120
+
+[exchanges.mexc.tls]
+# Pin certificate for MITM protection
+pin_sha256 = "sha256:abcdef..."
+```
+
+## API Documentation
+
+### OpenAPI Specification
+All REST endpoints must be documented in OpenAPI format:
+
+```yaml
+paths:
+  /api/v1/opportunities:
+    get:
+      summary: List current arbitrage opportunities
+      description: Returns all detected arbitrage opportunities across configured exchanges.
+      tags:
+        - Opportunities
+      parameters:
+        - name: min_profit_bps
+          in: query
+          description: Minimum profit in basis points
+          schema:
+            type: number
+            minimum: 0
+            default: 10
+        - name: exchange
+          in: query
+          description: Filter by exchange
+          schema:
+            type: string
+            enum: [mexc, kraken, okx]
+      responses:
+        '200':
+          description: List of opportunities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Opportunity'
+```
+
+## README Structure
+
+```markdown
+# Arbitrage Trading Engine
+
+## Overview
+Brief description of the project
+
+## Features
+- Feature 1
+- Feature 2
+- Feature 3
+
+## Architecture
+Diagram and description of system architecture
+
+## Installation
+```bash
+git clone
+cd arbitrage-dashboard
+cargo build --release
+```
+
+## Usage
+```bash
+./target/release/arbitrage-server --config config.toml
+```
+
+## Configuration
+See [CONFIGURATION.md](CONFIGURATION.md)
+
+## API Documentation
+See [API.md](API.md)
+
+## Testing
+```bash
+cargo test --all
+cargo bench
+```
+
+## Contributing
+See [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## License
+MIT License - see [LICENSE](LICENSE)
+```
+
+## Documentation Files
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Project overview and quick start |
+| `ARCHITECTURE.md` | System architecture and design |
+| `CONFIGURATION.md` | Complete configuration reference |
+| `API.md` | REST and WebSocket API docs |
+| `DEPLOYMENT.md` | Deployment instructions |
+| `TROUBLESHOOTING.md` | Common issues and solutions |
+| `CONTRIBUTING.md` | Contribution guidelines |
+| `CHANGELOG.md` | Version history |
+| `docs/` | Additional documentation |
+
+## Documentation Review Checklist
+
+- [ ] All public APIs documented
+- [ ] Examples work and are tested
+- [ ] Error conditions documented
+- [ ] Performance implications noted
+- [ ] Thread safety documented
+- [ ] Configuration options documented
+- [ ] No placeholder text (TODO, FIXME)
+- [ ] Links work (no broken references)
+- [ ] Consistent style across docs

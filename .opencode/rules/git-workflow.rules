@@ -1,0 +1,184 @@
+---
+description: Commit message and git workflow standards
+---
+# Git Workflow Standards
+
+## Commit Message Format
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+### Types
+| Type | Description |
+|------|-------------|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `refactor` | Code restructuring (no behavior change) |
+| `perf` | Performance optimization |
+| `test` | Adding/modifying tests |
+| `docs` | Documentation only |
+| `chore` | Build/tooling/dependency changes |
+| `ci` | CI/CD changes |
+| `revert` | Revert a previous commit |
+
+### Scopes
+| Scope | Description |
+|-------|-------------|
+| `core` | Core arbitrage logic |
+| `server` | HTTP/WebSocket server |
+| `connectors` | Exchange connectors (general) |
+| `mexc` | MEXC connector |
+| `kraken` | Kraken connector |
+| `okx` | OKX connector |
+| `gateio` | Gate.io connector |
+| `bybit` | Bybit connector |
+| `bitstamp` | Bitstamp connector |
+| `api` | Public API |
+| `config` | Configuration |
+
+### Examples
+
+**Feature:**
+```
+feat(core): add funding rate arbitrage strategy
+
+Implement funding rate arbitrage between spot and perpetual futures.
+Detects funding rate differentials and executes triangular arbitrage.
+
+Closes #123
+```
+
+**Bug Fix:**
+```
+fix(connectors): handle rate limit errors on MEXC
+
+Rate limit errors were not properly handled, causing the connector
+to hang indefinitely. Added exponential backoff retry logic.
+
+Fixes #456
+```
+
+**Refactor:**
+```
+refactor(core): extract order size calculation
+
+Moved order size calculation from ArbitrageEngine to dedicated
+SizeCalculator for better testability and reuse.
+
+No functional change.
+```
+
+**Breaking Change:**
+```
+feat(api): change websocket message format
+
+Breaking change to websocket message format for order book updates.
+Old format is deprecated and will be removed in v2.0.
+
+BREAKING CHANGE: orderbook messages now use array format
+```
+
+## Branch Naming
+
+| Branch Type | Pattern | Example |
+|-------------|---------|---------|
+| Feature | `feature/<issue-number>-<description>` | `feature/123-add-funding-arbitrage` |
+| Bug Fix | `fix/<issue-number>-<description>` | `fix/456-mexc-rate-limit` |
+| Hotfix | `hotfix/<issue-number>-<description>` | `hotfix/789-critical-security` |
+| Release | `release/v<version>` | `release/v1.2.0` |
+| Issue Worktree | `issue<number>-<desc>` | `issue105-memory-leak` |
+
+## Branch Strategy
+
+```
+main (production)
+│
+├── develop (integration)
+│   ├── feature/123-new-strategy
+│   ├── feature/124-performance-fix
+│   └── fix/125-bug-description
+│
+├── release/v1.2.0
+│
+└── hotfix/126-critical-fix
+```
+
+## Pull Request Template
+
+```markdown
+## Summary
+Brief description of changes
+
+## Type
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
+- [ ] Documentation
+- [ ] Refactoring
+
+## Testing
+- [ ] Unit tests added/updated
+- [ ] Integration tests added/updated
+- [ ] Property tests added/updated
+- [ ] Manual testing performed
+
+## Checklist
+- [ ] Code follows coding standards
+- [ ] Self-review completed
+- [ ] Documentation updated
+- [ ] Tests pass locally
+- [ ] No new warnings
+
+## Related Issues
+Closes #123
+Fixes #456
+
+## Notes
+Any additional notes for reviewers
+```
+
+## Git Hooks
+
+### pre-commit
+```bash
+#!/bin/bash
+cargo fmt --check
+cargo clippy --all-features -- -D warnings
+cargo test --lib --quiet
+```
+
+### commit-msg
+```bash
+#!/bin/bash
+# Validate commit message format
+PATTERN='^(feat|fix|perf|test|docs|chore|ci|refactor)(\([^)]+\))?: .+'
+if ! grep -qE "$PATTERN" "$1"; then
+    echo "Invalid commit message format"
+    exit 1
+fi
+```
+
+## Tagging
+
+```bash
+# Semantic versioning
+git tag -a v1.2.0 -m "Release v1.2.0"
+
+# Annotated tags for releases
+git tag -s v1.2.0 -m "Release v1.2.0"
+```
+
+## Workflow Rules
+
+1. **Feature branches** from `develop`
+2. **Bug fixes** from `develop` (or `main` for hotfixes)
+3. **PRs** must pass all tests and reviews
+4. **Squash merge** feature branches to `develop`
+5. **Merge commit** for release branches
+6. **Delete** branches after merge
+7. **Never push** directly to `main` or `develop`

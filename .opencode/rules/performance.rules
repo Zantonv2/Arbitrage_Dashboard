@@ -1,0 +1,162 @@
+---
+description: Performance standards for arbitrage trading system
+---
+# Performance Standards
+
+## Latency Requirements
+
+| Operation | Target P50 | Target P95 | Target P99 |
+|-----------|------------|------------|------------|
+| Order book update processing | < 1ms | < 5ms | < 10ms |
+| Opportunity detection | < 10ms | < 50ms | < 100ms |
+| Order execution (per exchange) | < 100ms | < 500ms | < 1000ms |
+| WebSocket broadcast | < 1ms | < 5ms | < 10ms |
+| HTTP API response | < 50ms | < 200ms | < 500ms |
+
+## Throughput Requirements
+
+- Order book updates: 10,000 updates/second (per exchange)
+- Opportunity scans: 100 scans/second
+- Concurrent connections: 1,000 WebSocket connections
+- Orders placed: 50 orders/second
+
+## Benchmarking Standards
+
+### Performance Tests
+```rust
+// benches/lib.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn bench_opportunity_detection(c: &mut Criterion) {
+    let opportunities = generate_test_opportunities(1000);
+    
+    c.bench_function("detect_opportunities_1000", |b| {
+        b.iter(|| {
+            let detector = OpportunityDetector::new();
+            black_box(&detector).scan(black_box(&opportunities))
+        })
+    });
+}
+
+criterion_group!(benches, bench_opportunity_detection);
+```
+
+### Running Benchmarks
+```bash
+# Baseline benchmarks
+cargo bench --baseline main
+
+# Compare against baseline
+cargo bench --compare main
+
+# Profile with flamegraph
+cargo flamegraph --bench opportunity_detection
+```
+
+### Performance Budgets
+
+```toml
+# .cargo/config.toml
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[bench]
+strip = true
+```
+
+## Memory Standards
+
+| Metric | Limit |
+|--------|-------|
+| Memory per exchange connector | 50 MB |
+| Total memory footprint | 500 MB |
+| Order book memory (per symbol) | 10 KB |
+| Max pending orders in memory | 10,000 |
+
+## Optimization Priorities
+
+1. **Hot Path Optimization**
+   ```rust
+   // Use references to avoid cloning
+   fn process_order<'a>(book: &'a OrderBook, order: &'a Order) -> Result<&'a Order> {
+       // ... processing
+   }
+   ```
+
+2. **Batch Operations**
+   ```rust
+   // Subscribe to multiple symbols at once
+   async fn subscribe_all(symbols: &[Symbol]) -> Result<()> {
+       // Single request for all symbols
+       exchange.subscribe_batch(symbols).await
+   }
+   ```
+
+3. **Connection Pooling**
+   ```rust
+   // Reuse HTTP connections
+   let client = reqwest::Client::builder()
+       .pool_max_idle_per_host(10)
+       .build()?;
+   ```
+
+## Profiling Tools
+
+```bash
+# CPU profiling
+cargo flamegraph --bin arbitrage-server
+
+# Memory profiling
+cargo heapstats --bin arbitrage-server
+
+# Allocation tracking
+cargo alloc-instrutor --bin arbitrage-server
+
+# Tracing
+RUST_LOG=trace cargo run --bin arbitrage-server
+```
+
+## Performance Testing
+
+### Load Testing
+```bash
+# Using wrk or similar
+wrk -t12 -c400 -d30s http://localhost:8080/api/v1/opportunities
+```
+
+### Concurrency Testing
+```bash
+# Multiple simultaneous connections
+for i in {1..100}; do
+    websocat wss://localhost:8080/ws &
+done
+wait
+```
+
+## Performance Monitoring in Production
+
+### Metrics to Track
+- Request latency (p50, p95, p99)
+- Memory usage
+- Garbage collection pauses
+- Thread pool utilization
+- Connection pool utilization
+- Queue lengths
+
+### Alerts
+| Metric | Warning Threshold | Critical Threshold |
+|--------|-------------------|-------------------|
+| P99 latency | > 100ms | > 500ms |
+| Memory usage | > 70% | > 90% |
+| CPU usage | > 80% | > 95% |
+| Queue depth | > 1000 | > 10000 |
+
+## Performance Regression Prevention
+
+1. **Baseline comparison** for all performance benchmarks
+2. **Performance regression tests** in CI
+3. **Alert on significant regression** (>10% slowdown)
+4. **Performance budgets** in code reviews
+5. **Regular performance audits** (monthly)

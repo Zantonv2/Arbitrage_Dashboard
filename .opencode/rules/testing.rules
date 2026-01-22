@@ -1,0 +1,219 @@
+---
+description: Testing standards for arbitrage trading system
+---
+# Testing Standards
+
+## Test Categories
+
+### 1. Unit Tests
+**Location**: Same file as implementation, `#[cfg(test)] mod tests { ... }`
+
+**Requirements:**
+- Every public function should have at least one test
+- Test edge cases and error conditions
+- Use table-driven tests for multiple inputs
+- Mock external dependencies
+
+**Example:**
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_calculate_profit_bps_positive() {
+        let result = calculate_profit_bps(100.0, 101.0).unwrap();
+        assert_eq!(result, 100); // 1% = 100 bps
+    }
+    
+    #[test]
+    fn test_calculate_profit_bps_zero_prices() {
+        assert!(calculate_profit_bps(0.0, 100.0).is_err());
+    }
+    
+    #[test]
+    fn test_order_book_serialization() {
+        let cases = vec![
+            (sample_order_book(), expected_json()),
+            // ... more cases
+        ];
+        for (input, expected) in cases {
+            let result = serde_json::to_string(&input);
+            assert_eq!(result, expected);
+        }
+    }
+}
+```
+
+### 2. Integration Tests
+**Location**: `tests/` directory per crate
+
+**Requirements:**
+- Test crate as a black box
+- Test public API contracts
+- Test with real-ish data (not just happy paths)
+- Include negative tests
+
+**Example:**
+```rust
+// tests/convergence_arbitrage_integration_test.rs
+#[tokio::test]
+async fn test_strategy_executes_on_profitable_spread() {
+    let config = TestConfig::standard();
+    let mut engine = ArbitrageEngine::new(config).await;
+    
+    let opportunities = engine.scan_for_opportunities().await;
+    assert!(!opportunities.is_empty());
+    
+    let selected = engine.select_best_opportunity(&opportunities).unwrap();
+    assert!(selected.expected_profit > MIN_PROFIT_THRESHOLD);
+}
+```
+
+### 3. Property Tests
+**Location**: `tests/property/` or inline with `proptest`
+
+**Requirements:**
+- Use `proptest` for numerical functions
+- Test invariants across wide input ranges
+- Test edge cases (zero, negative, max values)
+
+**Example:**
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn test_calculate_profit_symmetric(
+        buy in 0.01..10000.0_f64.prop_map(Decimal),
+        spread in 0.0001..0.1
+    ) {
+        let sell = buy * (Decimal::ONE + Decimal::from_f64(spread).unwrap());
+        let profit = calculate_profit_bps(buy, sell).unwrap();
+        prop_assert!(profit > 0);
+        prop_assert!(profit < 10000); // Reasonable upper bound
+    }
+}
+```
+
+### 4. Load/Performance Tests
+**Location**: `benches/` directory
+
+**Requirements:**
+- Use `criterion` for benchmarking
+- Measure latency percentiles (p50, p95, p99)
+- Track memory usage
+- Document expected performance
+
+**Example:**
+```rust
+// benches/lib.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn bench_order_book_normalization(c: &mut Criterion) {
+    let order_book = generate_large_order_book(1000);
+    
+    c.bench_function("normalize_order_book_1000_levels", |b| {
+        b.iter(|| normalizer::normalize(black_box(&order_book)))
+    });
+}
+
+criterion_group!(benches, bench_order_book_normalization);
+```
+
+## Test Coverage Requirements
+
+| Crate | Minimum Coverage |
+|-------|------------------|
+| arbitrage-core | 85% |
+| arbitrage-server | 80% |
+| exchange-connectors | 90% |
+
+## Test Fixtures
+
+Use `test_utils` module for common setup:
+
+```rust
+// src/test_utils/mod.rs
+pub struct TestContext {
+    pub exchanges: Vec<MockExchange>,
+    pub engine: ArbitrageEngine,
+    pub order_books: HashMap<ExchangeId, OrderBook>,
+}
+
+impl TestContext {
+    pub async fn standard() -> Self {
+        // Setup with standard test configuration
+    }
+    
+    pub fn with_liquidity(specific_liquidity: LiquidityMap) -> Self {
+        // Setup with specific liquidity conditions
+    }
+}
+```
+
+## Mock Patterns
+
+### Exchange Mocks
+```rust
+// mock.rs
+pub struct MockExchange {
+    id: ExchangeId,
+    order_book: Arc<RwLock<OrderBook>>,
+    trades: Arc<RwLock<Vec<Trade>>>,
+}
+
+impl MockExchange {
+    pub fn with_order_book(book: OrderBook) -> Self { ... }
+    
+    pub fn set_spread(&self, spread: Decimal) { ... }
+}
+```
+
+### Time Mocks
+```rust
+// Use tokio::time::pause() for testing time-sensitive code
+#[tokio::test]
+async fn test_timeout_behavior() {
+    tokio::time::pause();
+    // Time is frozen, advance manually
+    tokio::time::advance(Duration::from_secs(60)).await;
+}
+```
+
+## Test Data Quality
+
+- Never use real API keys in tests
+- Use deterministic pseudo-random data
+- Include edge cases: zero, max values, negative (where valid)
+- Test with realistic order book depths
+- Include tests for rate limiting behavior
+
+## Running Tests
+
+```bash
+# All tests
+cargo test --all
+
+# Unit tests only
+cargo test --lib
+
+# Integration tests only
+cargo test --test '*'
+
+# Property tests
+cargo test --test property
+
+# Benchmarks
+cargo bench
+
+# With coverage
+cargo tarpaulin --out Html
+```
+
+## CI Requirements
+
+- All tests must pass before merge
+- Coverage must not decrease by >5%
+- Property tests must run with at least 1000 iterations
+- Benchmarks must complete under 10 minutes

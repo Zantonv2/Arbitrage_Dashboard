@@ -1,0 +1,30 @@
+---
+description: Git branch naming and worktree isolation rules for issue fixing
+---
+# Git Branch and Worktree Rules
+
+## Branch Naming Convention
+- Feature branches for issue fixes: `batch-fix-{ISSUES}` where {ISSUES} is hyphen-separated (e.g., `batch-fix-105-106-107`)
+- Source branch: `upstream/main` (tracks GitHub main branch)
+- Target branch: `main` (PRs merge here)
+- Worktree paths: `../issue{ISSUENUM}-worktree` for per-issue worktrees
+- Batch worktree: `../batch-fix-worktree`
+
+## Branch Hygiene Rules
+1. `upstream/main` = GitHub main branch (read from remote, push back after PR merge)
+2. Local `upstream/main` tracks GitHub main (git fetch upstream)
+3. Feature branch created from local `upstream/main` state
+4. AFTER PR MERGE: sync GitHub `upstream` to match merged `main`
+5. Never push local upstream to GitHub main (would overwrite merged changes)
+6. After merge: push merged commit to GitHub upstream branch
+
+## Worktree Isolation Rules
+1. Per-issue worktrees for isolation (one per issue)
+2. Batch worktree for accumulating changes
+3. Sequential issue processing, parallel cluster processing
+4. Remove issue worktrees after cherry-pick to batch
+5. Keep batch worktree for debugging if batch fails
+
+## Commit Message Rules
+- Subagent commits: `[AUTO] Issue $ISSUE - Cluster {id}: {summary}`
+- Batch commit: `feat: resolve issues $ISSUES - batch fix` with issue list and validation summary

@@ -1,317 +1,113 @@
 ---
 description: Autonomously resolve GitHub issue(s) - extract tasks, delegate to subagents, validate, and create ONE PR with optional auto-merge
-agent: build
+agent: orchestrator
 subtask: false
 ---
 
-You are an autonomous code workflow orchestrator. Your sole purpose is to resolve GitHub issue(s) $ARGUMENTS by executing the following workflow exactly, with full auditability, isolation, and parallelism. You do not write code yourself—you delegate all implementation to subagents.
+@orchestrator
 
-KEY PRINCIPLE: ONE PR only when ALL issues are 100% complete and validated. NO partial PRs.
+You are being invoked to resolve GitHub issue(s) $ARGUMENTS. Execute the fix-issue workflow by delegating to subagents according to the rules.
 
-QUICK REFERENCE:
+## Reference Rules
+Load these rules for this operation:
+- @.opencode/rules/git-branching.rules - Branch naming, worktree isolation, commit messages
+- @.opencode/rules/validation.rules - Validation criteria, thresholds, reconciliation
+- @.opencode/rules/issue-processing.rules - Input parsing, output format, batch processing
+- @.opencode/rules/github-operations.rules - GitHub API operations, PR creation, artifacts
+
+## Quick Reference
 - Issue numbers: $ARGUMENTS (single: #123, range: 105-110, list: 105 106 107)
-- Repository: Current repo (auto-detected via gh repo view`)
-- Worktree path: ../issue{ISSUENUM}-worktree (per-issue)
+- Repository: Current repo (auto-detected via `gh repo view`)
+- Worktree path: `../issue{ISSUENUM}-worktree` (per-issue)
 - Remote: `upstream` points to GitHub repository
 - Source branch: `upstream/main` on GitHub (permanent source, syncs with local upstream)
 - Target branch: `main` on GitHub (PRs merge here)
 - Feature branch: `batch-fix-{ISSUES}` (temporary, deleted after merge)
 
-IMPORTANT BRANCH HYGIENE:
-- `upstream/main` = GitHub main branch (read from remote, push back after PR merge)
-- Local `upstream/main` tracks GitHub main (git fetch upstream)
-- Feature branch created from local `upstream/main` state
-- AFTER PR MERGE: sync GitHub `upstream` to match merged `main`
-
-FLAGS:
-- --auto: Enable strict auto-merge (5 validators, 95% avg success, ONE PR only)
+## Flags
+- `--auto`: Enable strict auto-merge (5 validators, 95% avg success, ONE PR only)
 - Default: Manual approval required (2 validators, ONE PR only)
 
-WORKFLOW (execute in order):
+## Orchestration Steps
 
-0. INPUT PARSING & BATCH SETUP
-0.1 Parse $ARGUMENTS for issue specification:
-   - Single issue: "123" -> ["123"]
-   - Range syntax: "105-110" -> ["105", "106", "107", "108", "109", "110"] (format: START-END)
-   - Space-separated: "105 106 107" -> ["105", "106", "107"]
-   - Comma-separated: "123,124,125" -> ["123", "124", "125"]
-0.2 Extract numbers using regex patterns:
-   - If contains "-": Split on "-", parse as START-END range
-   - Else if contains " ": Split on whitespace
-   - Else if contains ",": Split on ","
-   - Else: Single issue -> ["$ARGUMENTS"]
-0.3 Validate each extracted number:
-   - Must be positive integer > 0
-   - Filter out: 0, negative numbers, non-numeric strings
-0.4 Deduplicate issues: Convert to Set, back to sorted Vec
-0.5 Pre-flight check: gh api "repos/{owner}/{repo}/issues/{num}" for each issue
-   - Skip issues that don't exist or are closed
-   - Log skipped issues to output/issue-fix-artifacts/skipped_issues.json
-0.6 Create batch state file: output/issue-fix-artifacts/batch_state.json
-   { "issues": ["105", "106", "107"], "status": "pending", "completed": [], "failed": [], "reconciliation_counts": {} }
-0.7 Calculate dynamic max_reconciliations based on batch:
-   - Base: 3 reconciliations
-   - Add 1 per 5 issues (batch size adjustment)
-   - Add 1 if any issue has risk_profile="high"
-   - Add 1 if AUTO_MODE=false (more careful default mode)
-   - Maximum: 10 reconciliations
-   Example: 3 issues + 0 (base<5) + 1 (auto mode) = 4 max
-0.8 If --auto flag detected, set AUTO_MODE=true
+1. **Parse & Validate Input**
+   - Parse $ARGUMENTS for issue specification (single, range, list, comma-separated)
+   - Validate each extracted number (positive integer > 0)
+   - Deduplicate issues
+   - Pre-flight check: gh api for each issue, skip closed/non-existent
+   - Create batch state file: output/issue-fix-artifacts/batch_state.json
+   - Calculate dynamic max_reconciliations (base 3 + batch_size + risk + mode factors)
 
-1. BATCH PREPARATION (ONE-TIME)
-1.1 Check for uncommitted changes: git status --porcelain
-   - If changes exist: git stash or abort with error
-1.2 Remove any existing issue worktrees: for each issue, git worktree remove ../issue{ISSUE}-worktree --force 2>/dev/null || true
-1.3 git worktree add ../batch-fix-worktree upstream --detach
-1.4 cd ../batch-fix-worktree
-1.5 Sync baseline: git fetch upstream && git reset --hard upstream/main
-1.6 mkdir -p output/issue-fix-artifacts
-1.7 Record environment: output/issue-fix-artifacts/environment.json
+2. **Batch Preparation**
+   - Check for uncommitted changes
+   - Remove existing issue worktrees
+   - Create batch worktree: `../batch-fix-worktree`
+   - Sync baseline: git fetch upstream && git reset --hard upstream/main
+   - Record environment info
 
-2. PER-ISSUE PROCESSING LOOP (SEQUENTIAL, ACCUMULATE CHANGES)
-For each issue in $ARGUMENTS:
+3. **Per-Issue Processing Loop**
+   For each issue:
+   - Create isolated worktree for this issue
+   - Capture issue context (comments, timeline)
+   - Extract tasks and cluster them (task_extraction.json, clusters.json)
+   - Launch subagents per cluster with unique session_ids
+   - Each subagent commits with `[AUTO] Issue $ISSUE - Cluster {id}: {summary}`
+   - Validate with 5 validators (AUTO_MODE) or 2 validators (default)
+   - Use @fix-issue-validator subagent for validation
+   - If fails after reconciliations: log to failed_issues.json, continue to next issue
+   - Cherry-pick commits to batch worktree
 
-2.1 PREPARATION FOR ISSUE
-2.1.1 Remove existing worktree: git worktree remove ../issue$ISSUE-worktree --force 2>/dev/null || true
-2.1.2 git worktree add ../issue$ISSUE-worktree upstream --detach
-2.1.3 cd ../issue$ISSUE-worktree
-2.1.4 Sync baseline: git fetch upstream && git reset --hard upstream/main
-
-2.2 CONTEXT CAPTURE
-2.2.1 mkdir -p output/issue-fix-artifacts/per-issue/issue_$ISSUE
-2.2.2 Capture issue context:
-    gh issue view $ISSUE --json title,body,author,state,labels > output/issue-fix-artifacts/per-issue/issue_$ISSUE/issue_context.json
-    gh api "repos/{owner}/{repo}/issues/$ISSUE/comments" > output/issue-fix-artifacts/per-issue/issue_$ISSUE/issue_comments.json
-    gh api "repos/{owner}/{repo}/issues/$ISSUE/timeline" > output/issue-fix-artifacts/per-issue/issue_$ISSUE/issue_timeline.json
-2.2.3 Create full_issue_context.json:
-{
-  "issue_number": "$ISSUE",
-  "title": "from issue_context.json",
-  "body": "from issue_context.json",  
-  "state": "from issue_context.json",
-  "labels": "from issue_context.json",
-  "comments": "merged from issue_comments.json",
-  "timeline": "merged from issue_timeline.json",
-  "extracted_at": "ISO timestamp"
-}
-
-2.3 TASK EXTRACTION & CLUSTERING
-2.3.1 Parse full_issue_context.json into atomic tasks
-2.3.2 Output: task_extraction.json, clusters.json, clusters.dot
-
-2.4 PARALLEL SUBAGENT DELEGATION
-2.4.1 Launch ONE subagent per cluster (simultaneously)
-2.4.2 Each subagent works ONLY in ../issue$ISSUE-worktree
-2.4.3 Each subagent commits with [AUTO] Issue $ISSUE - Cluster {id}: {summary}
-2.4.4 Each subagent writes log to output/issue-fix-artifacts/subagent_{id}.log
-2.4.5 Wait for ALL subagents to complete
-
-2.5 VALIDATION FOR THIS ISSUE
-2.5.1 Run validation (see Section 4 below)
-2.5.2 Calculate remaining reconciliations dynamically:
-   - Used: current_reconciliation_count for this issue
-   - Max: batch_state.max_reconciliations
-   - Remaining: max - used
-   - If remaining <= 0: Mark as FAILED, continue to next issue
-2.5.3 If issue FAILS after remaining reconciliations:
-   - Log failure to ../batch-fix-worktree/output/issue-fix-artifacts/failed_issues.json
-   - Mark issue as FAILED in batch_state.json
-   - Continue to next issue (batch continues even if one fails)
-   - Final PR will only include PASSED issues
-
-2.6 ACCUMULATE CHANGES
-2.6.1 cd ../batch-fix-worktree
-2.6.2 ISSUE_COMMIT=$(cd ../issue$ISSUE-worktree && git log --oneline -1 | cut -d' ' -f1)
-2.6.3 git cherry-pick $ISSUE_COMMIT
-     # Note: Direct merge won't work across worktrees. Cherry-pick is reliable.
-2.6.4 Remove issue worktree: git worktree remove ../issue$ISSUE-worktree
-
-3. FINAL VALIDATION (BATCH-LEVEL)
-After ALL issues processed:
-
-3.1 In ../batch-fix-worktree, run FULL validation suite:
+4. **Final Validation**
    - cargo check --all-features
-   - cargo test --all -- --test
+   - cargo test --all
    - cargo clippy --all-features-threads=1 -D warnings
    - cargo fmt -- --check
-   - All acceptance criteria from ALL issues verified
+   - Verify all acceptance criteria
 
-3.2 If ANY issue failed during processing OR final validation fails:
-   - DO NOT create PR
-   - Log detailed failure report to output/issue-fix-artifacts/batch_failure_report.json
-   - Keep batch-fix-worktree for debugging (don't delete)
-   - Abort with error: "Batch failed - see batch_failure_report.json"
+5. **One PR Creation**
+   - Create feature branch: batch-fix-{ISSUES}
+   - Remove output/ artifacts
+   - Commit with structured message
+   - Push to upstream
+   - Create ONE PR with validation summary
 
-3.3 If ALL issues PASSED and final validation PASSED:
-   - Proceed to PR creation
+6. **Merge Decision**
+   - AUTO_MODE with 95%+: auto-merge, close issues, sync upstream branch
+   - Default: wait for /approve, then merge, close issues, sync upstream
 
-4. VALIDATION LOOP (PER-ISSUE OR FINAL BATCH)
-DYNAMIC RECONCILIATION:
-- Initial max_reconciliations calculated from batch characteristics
-- Adaptive extension: If score improved by >=10% from previous attempt, extend by 1
-- Regression check: If score dropped by >5%, reduce remaining attempts by 1
-- Early termination: If score >= threshold on first try, no reconciliation needed
-- Never exceed: max_reconciliations + 2 (hard cap for pathological cases)
+7. **Finalization**
+   - Generate batch_summary.md
+   - Cleanup worktrees and branches
+   - Stash pop if stashed changes existed
 
-AUTO_MODE (5 Validators):
-4.1 Launch 5 independent validator subagents with unique session_ids
-4.2 Each validator scores 7 criteria (0-10) - NO WEIGHTS:
-   - Security: cargo clippy --all-features -D warnings | errors=10, warnings=7, major=4
-   - Edge cases: Manual AC review | all ACs met=10, minor gaps=7, major gaps=4
-   - Tests: cargo test -p arbitrage-core -- --nocapture | 100%=10, 90%=8, 75%=5, <75%=2
-   - Performance: cargo build --all-features --release | success<60s=10, <90s=7, success=4, fail=1
-   - Docs: grep -r "TODO|FIXME" docs/ | 0=10, 1-2=8, 3-5=5, 6+=2
-   - Style: cargo fmt -- --check && cargo clippy | perfect=10, minor=7, issues=4
-   - Regression: cargo test --all | baseline match=10, minor=7, regressions=2
+## Subagents to Invoke
 
-Pass criteria:
-- AUTO_MODE: Average >= 9.5 (95%) across 5 validators - NO LAZINESS
-- Default mode: 2 validators, >=7/10 on EACH criterion (not average)
-- All validators must have unique session_ids
+- **For cluster implementation**: Task tool with cluster-specific sessions
+- **For validation**: @fix-issue-validator with unique session_ids (validator-1 through validator-5)
+- **For task extraction**: Use explore/read tools to analyze issue context
 
-4.3 Write results to output/issue-fix-artifacts/validation_round_{n}_validator_{m}.json
-4.4 On failure: Generate fix tasks in reconciliation_{n}.json
-   - Calculate adaptive_reconciliations = min(max_reconciliations - current, 1 + improvement_bonus)
-   - If improvement >=10% from previous: add 1 to remaining
-   - If regression >5%: subtract 1 from remaining
-   - Restart validation with remaining reconciliations
-4.5 Track progress: output/issue-fix-artifacts/validation_progress.json
-   { "round": n, "score": X, "improvement": Y%, "remaining_attempts": Z, "adaptive": true/false }
-4.6 No partial passing - must achieve threshold
-
-5. ONE PULL REQUEST CREATION (BATCH-LEVEL)
-5.1 git checkout -b batch-fix-{ISSUES} (created from local upstream/main tracking GitHub main)
-5.2 Remove artifacts: rm -rf output/
-5.3 git add -A && git commit -m "feat: resolve issues $ISSUES - batch fix
-
-- Issue #105: {title} - {summary}
-- Issue #106: {title} - {summary}
-- Issue #107: {title} - {summary}
-
-Validation: 100% complete | All criteria passed | Project compiles and works"
-5.4 git push upstream batch-fix-{ISSUES}
-5.5 Create ONE PR from upstream/batch-fix-{ISSUES} to main:
-    gh pr create --head batch-fix-{ISSUES} --base main \
-      --title "Fix issues #$ISSUES: Batch resolution" \
-      --body "Batch of $COUNT issues resolved with 100% completion.
-
-ISSUES RESOLVED:
-$ISSUE_LIST
-
-VALIDATION RESULTS:
-- All 5 validators passed (AUTO_MODE) OR 2 validators passed (default)
-- Average score: {avg_score}%
-- All acceptance criteria met
-- Project compiles: YES
-- All tests pass: YES
-- No regressions: YES
-- Code style compliant: YES
-
-MODE: {AUTO_MODE}" \
-      --label "auto-pr,needs-review"
-    - If label fails: Retry without labels (labels are optional)
-
-6. MERGE DECISION
-IF AUTO_MODE=true AND 95% avg success:
-6.1 Auto-merge: gh pr merge --admin --squash --delete-branch --body "AUTO-MERGED: 100% complete ({avg_score}% avg, 5 validators)"
-6.2 Close ALL issues: for issue in $ISSUES; gh issue close $issue
-6.3 SYNC UPSTREAM BRANCH:
-    - Get merged commit SHA: git log -1 --format=%H
-    - Push to GitHub upstream: git push upstream <SHA>:refs/heads/upstream --force
-    - This updates the permanent source branch to include the merged changes
-6.4 Cleanup: 
-    - git worktree remove ../batch-fix-worktree
-    - git branch -D batch-fix-{ISSUES}
-    - Remove all issue worktrees
-    - Keep remote upstream branch (synced above)
-
-ELSE (Default mode):
-6.1 Output PR URL and wait for /approve comment
-6.2 On /approve: gh pr merge --admin --squash --delete-branch
-6.3 Close all issues
-6.4 SYNC UPSTREAM BRANCH: Same as 6.3 in AUTO_MODE block above
-6.5 Cleanup as above
-
-7. FINALIZATION
-7.1 Generate batch_summary.md with:
-   - All issues resolved
-   - PR URL
-   - Validation scores per issue
-   - Merge status
-7.2 Cleanup any remaining worktrees
-7.3 Stash pop if stashed changes exist
-
-CONSTRAINTS:
+## Constraints (Critical)
 - Worktree isolation: Per-issue worktrees + ONE batch worktree
 - Sequential issue processing, parallel cluster processing
 - NO partial PRs - ONE PR only when ALL issues 100% complete
 - If ANY issue fails, batch FAILS - no partial PRs
 - AUTO_MODE: 95% average, NO LAZINESS, all validators must pass
 - Default mode: 2 validators, >=7/10 on EACH criterion
-- No personal coding: Delegate ALL implementation
 - User approval mandatory before merge (except AUTO_MODE with 95%+)
 - Remove output/ folder before PR commit
-- UPSTREAM BRANCH SYNC: After PR merge to main, sync GitHub upstream to match merged commit
-  - Never push local upstream to GitHub main (would overwrite merged changes)
-  - After merge: push merged commit to GitHub upstream branch
-- Feature branches deleted after merge
-- Labels are optional - graceful fallback if they don't exist
-- Dynamic reconciliations: calculated per batch, adaptive extension based on progress
-  - Base: 3 + batch_size_factor + risk_factor + mode_factor
-  - Adaptive: +1 if improvement >=10%, -1 if regression >5%
-  - Hard cap: max_reconciliations + 2
-- If ANY issue fails after all reconciliations: BATCH FAILS, NO PR created
-- TRANSIENT FAILURES: Retry up to 3 times with 5s backoff for:
-  - gh api network errors
-  - cargo lock contention ("Blocking waiting for file lock")
-  - Subagent timeouts (>5min)
+- UPSTREAM BRANCH SYNC: After PR merge, sync GitHub upstream to match merged commit
+- Dynamic reconciliations: calculated per batch, adaptive extension (+1 if improvement >=10%, -1 if regression >5%)
+- TRANSIENT FAILURES: Retry up to 3 times with 5s backoff for network errors, cargo lock, timeouts
 
-RECONCILIATION FILE FORMAT (reconciliation_{n}.json):
-{
-  "round": n,
-  "issues_failed": ["118", "128"],
-  "fix_tasks": [
-    {
-      "issue": "118",
-      "task": "Fix clippy warnings in convergence_arbitrage.rs",
-      "file": "crates/arbitrage-core/src/strategies/strategy_impl/convergence_arbitrage.rs",
-      "line": 123
-    }
-  ],
-  "adaptive_reconciliations": 2,
-  "improvement_from_previous": "15%"
-}
+## Output Artifacts
+All artifacts go to `output/issue-fix-artifacts/`:
+- environment.json
+- batch_state.json
+- skipped_issues.json
+- failed_issues.json
+- validation_progress.json
+- per-issue/issue_{N}/*
+- batch_failure_report.json (if batch fails)
+- batch_summary.md (on success)
 
-PLACEHOLDER VALUES:
-- $ARGUMENTS: Issue numbers from command input
-- $ISSUES: Hyphen-separated issue numbers (e.g., "105-106-107" for range, "105 106 107" for list)
-- {title}: From gh issue view $ISSUE --json title -q '.title'
-- {summary}: First line of issue body (gh issue view $ISSUE --json body -q '.body' | head -1)
-- {avg_score}: Average of all validator scores (calculate from validation_round_*.json files)
-- $ISSUE_LIST: Formatted list:
-  ```bash
-  gh issue view $ISSUE --json title,number -q '.number, .title' | sed 's/,/#: /' | sed 's/^/- Issue #/'
-  ```
-
-OUTPUT ARTIFACTS:
-output/issue-fix-artifacts/
-├── environment.json
-├── batch_state.json (includes max_reconciliations, per-issue counts)
-├── skipped_issues.json
-├── failed_issues.json (if any failures)
-├── validation_progress.json (adaptive tracking per issue)
-├── per-issue/
-│   ├── issue_{N}/           # Per-issue artifacts (isolated to avoid conflicts)
-│   │   ├── issue_context.json
-│   │   ├── issue_comments.json
-│   │   ├── issue_timeline.json
-│   │   ├── full_issue_context.json
-│   │   ├── task_extraction.json
-│   │   ├── clusters.json
-│   │   ├── clusters.dot
-│   │   ├── discussion_summary.json
-│   │   ├── subagent_*.log
-│   │   └── validation_round_*.json
-│   └── ...
-├── batch_failure_report.json (if batch fails)
-└── batch_summary.md (on success)
+Execute the fix-issue workflow now.

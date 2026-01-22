@@ -1,0 +1,63 @@
+---
+description: Validation rules for issue resolution and finding
+---
+# Validation Rules
+
+## Fix-Issue Validation (AUTO_MODE)
+Launch 5 independent validators with unique session_ids. Each validator scores 7 criteria (0-10):
+
+### Validator Criteria
+1. **Security**: cargo clippy --all-features -D warnings | errors=10, warnings=7, major=4
+2. **Edge cases**: Manual AC review | all ACs met=10, minor gaps=7, major gaps=4
+3. **Tests**: cargo test -p arbitrage-core -- --nocapture | 100%=10, 90%=8, 75%=5, <75%=2
+4. **Performance**: cargo build --all-features --release | success<60s=10, <90s=7, success=4, fail=1
+5. **Docs**: grep -r "TODO|FIXME" docs/ | 0=10, 1-2=8, 3-5=5, 6+=2
+6. **Style**: cargo fmt -- --check && cargo clippy | perfect=10, minor=7, issues=4
+7. **Regression**: cargo test --all | baseline match=10, minor=7, regressions=2
+
+### Pass Criteria
+- AUTO_MODE: Average >= 9.5 (95%) across 5 validators - NO LAZINESS
+- Default mode: 2 validators, >=7/10 on EACH criterion (not average)
+- All validators must have unique session_ids
+
+## Find-Issues Validation
+
+### Round 1: Content Validator
+- Threshold: 7/10
+- Checks:
+  - Problem statement: Clear, specific, actionable?
+  - Impact: User-facing and measurable?
+  - Reproduction: Steps are reproducible?
+  - Acceptance criteria: Testable, complete, covers edge cases?
+  - Context: Enough background for a developer to understand?
+
+### Round 2: Structure Validator
+- Threshold: 8/10
+- Checks:
+  - Title format: `[P1-P3]` prefix, under 70 chars?
+  - Labels: Correct and consistent?
+  - Files: Accurate paths, all affected files listed?
+  - Risk: Appropriate risk level?
+  - Effort: Reasonable effort estimate?
+  - YAML: Valid frontmatter?
+  - Duplicates: Any duplicate with other findings?
+
+### Round 3: Integration Validator
+- Check combined improvements from rounds 1 & 2
+- Verify improvements were applied correctly
+- Check for new issues introduced by changes
+- Output: `can_create_issue` boolean
+
+## Dynamic Reconciliation Rules
+- Initial max_reconciliations calculated from batch characteristics
+- Adaptive extension: If score improved by >=10% from previous attempt, extend by 1
+- Regression check: If score dropped by >5%, reduce remaining attempts by 1
+- Early termination: If score >= threshold on first try, no reconciliation needed
+- Never exceed: max_reconciliations + 2 (hard cap for pathological cases)
+
+## Max Reconciliations Calculation
+- Base: 3 reconciliations
+- Add 1 per 5 issues (batch size adjustment)
+- Add 1 if any issue has risk_profile="high"
+- Add 1 if AUTO_MODE=false (more careful default mode)
+- Maximum: 10 reconciliations

@@ -1,0 +1,79 @@
+---
+description: GitHub operations and PR creation rules
+---
+# GitHub Operations Rules
+
+## Issue Operations
+- View issue: `gh issue view $ISSUE --json title,body,author,state,labels`
+- Get comments: `gh api "repos/{owner}/{repo}/issues/$ISSUE/comments"`
+- Get timeline: `gh api "repos/{owner}/{repo}/issues/$ISSUE/timeline"`
+- Close issue: `gh issue close $issue`
+- Create issue: `gh issue create` with title, body, labels
+
+## Pull Request Operations
+- Create PR from feature branch to main:
+  ```bash
+  gh pr create --head batch-fix-{ISSUES} --base main \
+    --title "Fix issues #$ISSUES: Batch resolution" \
+    --body "Batch of $COUNT issues resolved with 100% completion."
+  ```
+- Labels are optional - graceful fallback if they don't exist
+- Merge PR: `gh pr merge --admin --squash --delete-branch`
+- Auto-merge with body: `AUTO-MERGED: 100% complete ({avg_score}% avg, 5 validators)`
+
+## Repository Operations
+- Get current repo: `gh repo view`
+- Fetch upstream: `git fetch upstream`
+- Reset to upstream/main: `git reset --hard upstream/main`
+
+## Output Artifacts Structure
+```
+output/issue-fix-artifacts/
+├── environment.json
+├── batch_state.json (includes max_reconciliations, per-issue counts)
+├── skipped_issues.json
+├── failed_issues.json (if any failures)
+├── validation_progress.json (adaptive tracking per issue)
+├── per-issue/
+│   ├── issue_{N}/
+│   │   ├── issue_context.json
+│   │   ├── issue_comments.json
+│   │   ├── issue_timeline.json
+│   │   ├── full_issue_context.json
+│   │   ├── task_extraction.json
+│   │   ├── clusters.json
+│   │   ├── clusters.dot
+│   │   ├── discussion_summary.json
+│   │   ├── subagent_*.log
+│   │   └── validation_round_*.json
+│   └── ...
+├── batch_failure_report.json (if batch fails)
+└── batch_summary.md (on success)
+```
+
+## Validation Artifacts
+```
+docs/outputs/validation/
+├── round1_content_review.yaml
+├── round2_structure_review.yaml
+└── round3_integration_review.yaml
+```
+
+## PR Description Template
+```markdown
+Batch of $COUNT issues resolved with 100% completion.
+
+ISSUES RESOLVED:
+$ISSUE_LIST
+
+VALIDATION RESULTS:
+- All 5 validators passed (AUTO_MODE) OR 2 validators passed (default)
+- Average score: {avg_score}%
+- All acceptance criteria met
+- Project compiles: YES
+- All tests pass: YES
+- No regressions: YES
+- Code style compliant: YES
+
+MODE: {AUTO_MODE}
+```

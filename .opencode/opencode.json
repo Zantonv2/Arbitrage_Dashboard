@@ -1,0 +1,86 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    ".opencode/rules/*.rules",
+    ".opencode/rules/*.md",
+    "docs/coding-standards.md",
+    "AGENTS.md"
+  ],
+  "agent": {
+    "orchestrator": {
+      "description": "Orchestrates issue fixing and finding workflows - delegates to specialized subagents",
+      "mode": "primary",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true,
+        "read": true,
+        "glob": true,
+        "grep": true,
+        "task": true
+      },
+      "permission": {
+        "task": {
+          "security-*": "allow",
+          "critical-*": "allow",
+          "performance-*": "allow",
+          "reliability-*": "allow",
+          "testing-*": "allow",
+          "tech-debt-*": "allow",
+          "validator-*": "allow",
+          "fix-issue-*": "allow"
+        }
+      }
+    },
+    "security-1": {
+      "description": "Security analysis agent - finds auth bypass, injection, crypto failures, secrets",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "critical-1": {
+      "description": "Critical bug analysis agent - finds panics, unwrap on None/Error, OOB access",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "performance-1": {
+      "description": "Performance analysis agent - finds memory leaks, slow algos, missing caches",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "reliability-1": {
+      "description": "Reliability analysis agent - finds missing error handling, poor errors",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "testing-1": {
+      "description": "Testing analysis agent - finds missing tests, low coverage",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "tech-debt-1": {
+      "description": "Technical debt analysis agent - finds code duplication, dead code",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "validator-content-1": {
+      "description": "Content validation agent - reviews issue content for clarity",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "validator-structure-1": {
+      "description": "Structure validation agent - reviews issue structure",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "validator-integration-1": {
+      "description": "Integration validation agent - verifies improvements",
+      "mode": "subagent",
+      "hidden": false
+    },
+    "fix-issue-validator": {
+      "description": "Validator for fix-issue command - scores implementation",
+      "mode": "subagent",
+      "hidden": false
+    }
+  }
+}
