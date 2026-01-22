@@ -14,6 +14,8 @@ use crate::connector::{ConnectorStats, ExchangeConnector, HealthStatus};
 use crate::events::{ConnectionEvent, EventStats, MarketDataEvent};
 use crate::rate_limiter::{RateLimitConfig, UnifiedRateLimitManager};
 
+const BROADCAST_CHANNEL_CAPACITY: usize = 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeManagerConfig {
     pub enabled_exchanges: Vec<ExchangeId>,
@@ -103,11 +105,15 @@ pub struct ExchangeManager {
     subscribed_symbols: HashMap<ExchangeId, Vec<Symbol>>,
     event_stats: HashMap<ExchangeId, EventStats>,
     rate_limiters: HashMap<ExchangeId, UnifiedRateLimitManager>,
+    shutdown_sender: broadcast::Sender<()>,
+    health_monitor_handle: Option<tokio::task::JoinHandle<()>>,
+    event_processor_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ExchangeManager {
     pub fn new(config: ExchangeManagerConfig) -> Self {
         let (event_sender, event_receiver) = broadcast::channel(config.event_buffer_size);
+        let (shutdown_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         Self {
             config,
             connectors: HashMap::new(),
@@ -116,6 +122,9 @@ impl ExchangeManager {
             subscribed_symbols: HashMap::new(),
             event_stats: HashMap::new(),
             rate_limiters: HashMap::new(),
+            shutdown_sender,
+            health_monitor_handle: None,
+            event_processor_handle: None,
         }
     }
 
@@ -289,54 +298,78 @@ impl ExchangeManager {
         }
     }
 
-    async fn start_health_monitor(&self) {
+    async fn start_health_monitor(&mut self) {
         let connectors = self.connectors.clone();
         let event_sender = self.event_sender.clone();
+        let shutdown_receiver = self.shutdown_sender.subscribe();
         let interval_seconds = self.config.health_check_interval_seconds;
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(interval_seconds));
+            let mut shutdown_receiver = shutdown_receiver;
+
             loop {
-                interval.tick().await;
-                for (exchange, connector) in connectors.iter() {
-                    let exchange = *exchange;
-                    let connector = connector.read().await;
-                    let sender = event_sender.clone();
-                    if let Ok(health) = connector.health_check().await {
-                        if !health.is_connected {
-                            let _ = sender.send(ConnectionEvent::StatusChange {
-                                exchange,
-                                old_status: ConnectionStatus::Connected,
-                                new_status: ConnectionStatus::Disconnected,
-                                timestamp: chrono::Utc::now(),
-                            });
+                tokio::select! {
+                    _ = interval.tick() => {
+                        for (exchange, connector) in connectors.iter() {
+                            let exchange = *exchange;
+                            let connector = connector.read().await;
+                            let sender = event_sender.clone();
+                            if let Ok(health) = connector.health_check().await {
+                                if !health.is_connected {
+                                    let _ = sender.send(ConnectionEvent::StatusChange {
+                                        exchange,
+                                        old_status: ConnectionStatus::Connected,
+                                        new_status: ConnectionStatus::Disconnected,
+                                        timestamp: chrono::Utc::now(),
+                                    });
+                                }
+                            }
                         }
                     }
-                }
-            }
-        });
-    }
-
-    async fn start_event_processor(&self) {
-        let mut event_stats = self.event_stats.clone();
-        let mut event_receiver = self.event_receiver.resubscribe();
-        tokio::spawn(async move {
-            while let Ok(event) = event_receiver.recv().await {
-                if let ConnectionEvent::MarketData(ref market_event) = event {
-                    let exchange = match market_event {
-                        MarketDataEvent::OrderBook { exchange, .. } => *exchange,
-                        MarketDataEvent::Ticker { exchange, .. } => *exchange,
-                        MarketDataEvent::Trade { exchange, .. } => *exchange,
-                        MarketDataEvent::FundingRate { exchange, .. } => *exchange,
-                        MarketDataEvent::Statistics { exchange, .. } => *exchange,
-                        MarketDataEvent::Raw { exchange, .. } => *exchange,
-                    };
-                    if let Some(exchange_stats) = event_stats.get_mut(&exchange) {
-                        exchange_stats.update(&event);
+                    _ = shutdown_receiver.recv() => {
+                        info!("Health monitor shutting down");
+                        break;
                     }
                 }
             }
         });
+
+        self.health_monitor_handle = Some(handle);
+    }
+
+    async fn start_event_processor(&mut self) {
+        let mut event_stats = self.event_stats.clone();
+        let mut event_receiver = self.event_receiver.resubscribe();
+        let mut shutdown_receiver = self.shutdown_sender.subscribe();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Ok(event) = event_receiver.recv() => {
+                        if let ConnectionEvent::MarketData(ref market_event) = event {
+                            let exchange = match market_event {
+                                MarketDataEvent::OrderBook { exchange, .. } => *exchange,
+                                MarketDataEvent::Ticker { exchange, .. } => *exchange,
+                                MarketDataEvent::Trade { exchange, .. } => *exchange,
+                                MarketDataEvent::FundingRate { exchange, .. } => *exchange,
+                                MarketDataEvent::Statistics { exchange, .. } => *exchange,
+                                MarketDataEvent::Raw { exchange, .. } => *exchange,
+                            };
+                            if let Some(exchange_stats) = event_stats.get_mut(&exchange) {
+                                exchange_stats.update(&event);
+                            }
+                        }
+                    }
+                    _ = shutdown_receiver.recv() => {
+                        info!("Event processor shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        self.event_processor_handle = Some(handle);
     }
 
     pub async fn add_connector(&mut self, connector: Box<dyn ExchangeConnector>) -> Result<()> {
@@ -420,6 +453,48 @@ impl ExchangeManager {
                 "Exchange {} not available",
                 exchange
             )))
+        }
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        self.health_monitor_handle.is_some()
+    }
+
+    pub async fn shutdown(&mut self, timeout_secs: u64) {
+        info!("ExchangeManager shutting down with {}s timeout", timeout_secs);
+        let _ = self.shutdown_sender.send(());
+        let timeout_duration = Duration::from_secs(timeout_secs);
+        let mut all_cleaned = true;
+        if let Some(handle) = self.health_monitor_handle.take() {
+            match tokio::time::timeout(timeout_duration, handle).await {
+                Ok(Ok(())) => info!("Health monitor shut down cleanly"),
+                Ok(Err(e)) => {
+                    error!("Health monitor error during shutdown: {}", e);
+                    all_cleaned = false;
+                }
+                Err(_) => {
+                    error!("Health monitor did not shut down within {}s", timeout_secs);
+                    all_cleaned = false;
+                }
+            }
+        }
+        if let Some(handle) = self.event_processor_handle.take() {
+            match tokio::time::timeout(timeout_duration, handle).await {
+                Ok(Ok(())) => info!("Event processor shut down cleanly"),
+                Ok(Err(e)) => {
+                    error!("Event processor error during shutdown: {}", e);
+                    all_cleaned = false;
+                }
+                Err(_) => {
+                    error!("Event processor did not shut down within {}s", timeout_secs);
+                    all_cleaned = false;
+                }
+            }
+        }
+        if all_cleaned {
+            info!("ExchangeManager shut down successfully");
+        } else {
+            warn!("ExchangeManager shutdown completed with errors");
         }
     }
 }
