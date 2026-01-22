@@ -1,0 +1,119 @@
+name: Auto-Fix Issues
+on:
+  schedule:
+    - cron: "0 10 * * *" # Daily at 10 AM UTC
+  workflow_dispatch:
+
+concurrency:
+  group: auto-fix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  collect-issues:
+    name: Collect issues to fix
+    runs-on: ubuntu-latest
+    outputs:
+      issues: ${{ steps.filter.outputs.TO_FIX }}
+      count: ${{ steps.filter.outputs.COUNT }}
+    steps:
+      - name: Get open issues
+        id: issues
+        run: |
+          echo "ISSUES=$(gh issue list --state open --json number -q '.[].number' | tr -d '[]\n, ')" >> $GITHUB_OUTPUT
+
+      - name: Filter fixable issues
+        id: filter
+        run: |
+          TO_FIX=""
+          for ISSUE_NUM in ${{ steps.issues.outputs.ISSUES }}; do
+            TITLE=$(gh issue view $ISSUE_NUM --json title -q '.title')
+            LABELS=$(gh issue view $ISSUE_NUM --json labels -q '.[].name')
+            if echo "$LABELS" | grep -qE "(skip|in-progress|wontfix)"; then
+              continue
+            fi
+            if echo "$TITLE" | grep -qiE '\[(p1|p2|p3|bug|fix|crash|security|performance|ci)\]'; then
+              TO_FIX="${TO_FIX}${ISSUE_NUM},"
+            fi
+          done
+          echo "TO_FIX=${TO_FIX%,}" >> $GITHUB_OUTPUT
+          echo "COUNT=$(echo $TO_FIX | tr ',' '\n' | grep -c . || echo 0)" >> $GITHUB_OUTPUT
+
+  fix-each-issue:
+    name: Fix issue ${{ matrix.issue }}
+    runs-on: ubuntu-latest
+    needs: collect-issues
+    if: needs.collect-issues.outputs.count > 0
+    strategy:
+      matrix:
+        issue: ${{ fromJson(needs.collect-issues.outputs.issues) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Get issue context
+        id: context
+        run: |
+          ISSUE_NUM=${{ matrix.issue }}
+          echo "TITLE=$(gh issue view $ISSUE_NUM --json title -q '.title')" >> $GITHUB_OUTPUT
+          echo "BODY=$(gh issue view $ISSUE_NUM --json body -q '.body')" >> $GITHUB_OUTPUT
+          echo "LABELS=$(gh issue view $ISSUE_NUM --json labels -q '.[].name' | tr -d '[]\"')" >> $GITHUB_OUTPUT
+
+      - name: Create branch
+        run: |
+          BRANCH_NAME="fix/issue-${{ matrix.issue }}"
+          git config user.name "ZantonV2"
+          git config user.email "172037461+Zantonv2@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Run OpenCode to fix issue
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          ISSUE_NUM: ${{ matrix.issue }}
+          ISSUE_TITLE: ${{ steps.context.outputs.TITLE }}
+          ISSUE_BODY: ${{ steps.context.outputs.BODY }}
+        with:
+          model: opencode/minimax-m2.1-free
+          share: false
+          prompt: |
+            Fix issue #${{ env.ISSUE_NUM }} in the Arbitrage Dashboard project.
+
+            ## Issue Details
+            Title: ${{ env.ISSUE_TITLE }}
+            Body: ${{ env.ISSUE_BODY }}
+
+            ## Your Task
+            1. Read and understand the issue
+            2. Implement the fix in the codebase
+            3. Add/update tests if needed
+            4. Run: cargo check --all-features --all-targets
+            5. Run: cargo test --all-features --all-targets
+            6. Commit with message: "fix: resolve issue #${{ env.ISSUE_NUM }}"
+            7. Push the branch
+
+            ## Output
+            Summarize what was fixed. If you cannot fix it completely, explain why.
+
+      - name: Push and create PR
+        id: create-pr
+        run: |
+          BRANCH_NAME="fix/issue-${{ matrix.issue }}"
+          git push -u origin "$BRANCH_NAME" || true
+          
+          gh pr create \
+            --title "fix: Resolve issue #${{ matrix.issue }}" \
+            --body "Automated PR to resolve issue #${{ matrix.issue }} by OpenCode." \
+            --head "$BRANCH_NAME" \
+            --base main || true
+
+      - name: Update issue
+        run: |
+          gh issue edit ${{ matrix.issue }} --add-label "in-progress" 2>/dev/null || true
