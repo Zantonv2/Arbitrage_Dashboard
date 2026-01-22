@@ -21,8 +21,9 @@ concurrency:
 
 permissions:
   id-token: write
-  contents: read
-  pull-requests: read
+  contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   review:
