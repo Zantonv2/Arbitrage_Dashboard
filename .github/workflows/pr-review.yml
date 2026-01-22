@@ -49,9 +49,8 @@ jobs:
 
       - name: Run OpenCode PR Review
         uses: anomalyco/opencode/github@latest
-        # Use the repository token rather than passing multiple possible token inputs
         with:
-          use_github_token: true
+          token: ${{ secrets.GITHUB_TOKEN }}
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
@@ -75,7 +74,6 @@ jobs:
             If this is a scheduled review, just output a summary of the PR state and any issues found.
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add review comment
         if: github.event_name == 'pull_request'
