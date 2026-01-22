@@ -30,8 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'pull_request' && github.event.action != 'closed') ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/oc review')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '/oc'))
+      contains(github.event.comment.body, '/oc')
     steps:
       - uses: actions/checkout@v4
         with:
