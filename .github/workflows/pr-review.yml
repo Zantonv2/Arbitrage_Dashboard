@@ -19,7 +19,6 @@ concurrency:
   group: pr-review-${{ github.ref }}
   cancel-in-progress: true
 
-# Workflow-level permissions are already set; keep them
 permissions:
   id-token: write
   contents: write
@@ -29,28 +28,22 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-
-    # Explicit job-level permissions for GITHUB_TOKEN (redundant but explicit)
-    permissions:
-      id-token: write
-      contents: write
-      pull-requests: write
-      issues: write
-
     if: >
       (github.event_name == 'pull_request' && github.event.action != 'closed') ||
       contains(github.event.comment.body, '/oc review')
     steps:
       - uses: actions/checkout@v4
         with:
-          # allow actions and subsequent steps to use the repository token
           persist-credentials: true
           fetch-depth: 0
 
       - name: Run OpenCode PR Review
         uses: anomalyco/opencode/github@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          use_github_token: true
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
@@ -72,8 +65,6 @@ jobs:
             - **Overall**: APPROVE / REQUEST_CHANGES / COMMENT
 
             If this is a scheduled review, just output a summary of the PR state and any issues found.
-        env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
       - name: Add review comment
         if: github.event_name == 'pull_request'
@@ -87,17 +78,6 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -d '{"body":"OpenCode review complete. See comments for details.","event":"REQUEST_CHANGES"}' \
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUM}/reviews"
-
-      - name: Fallback - Post minimal comment via REST API if gh review fails
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          REPO="${{ github.repository }}"
-          API_URL="https://api.github.com/repos/${REPO}/issues/${PR_NUMBER}/comments"
-          BODY=$(jq -n --arg b "OpenCode review complete. See comments for details." '{body: $b}')
-          curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -d "$BODY" "$API_URL"
 
   scheduled-pr-check:
     name: Check pending PRs
