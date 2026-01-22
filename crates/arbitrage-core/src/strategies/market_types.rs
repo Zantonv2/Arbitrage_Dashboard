@@ -15,11 +15,18 @@ pub struct MarketBundle {
 }
 
 impl MarketBundle {
+    const EXPECTED_SYMBOLS_PER_EXCHANGE: usize = 256;
+    const EXPECTED_EXCHANGES: usize = 8;
+
     pub fn new() -> Self {
+        let num_exchanges = Self::EXPECTED_EXCHANGES;
+        let symbols_per_exchange = Self::EXPECTED_SYMBOLS_PER_EXCHANGE;
+        let total_capacity = num_exchanges * symbols_per_exchange;
+
         Self {
-            order_books: HashMap::new(),
-            funding_rates: HashMap::new(),
-            tickers: HashMap::new(),
+            order_books: HashMap::with_capacity(total_capacity),
+            funding_rates: HashMap::with_capacity(total_capacity),
+            tickers: HashMap::with_capacity(total_capacity),
             timestamp: Utc::now(),
         }
     }
@@ -63,15 +70,17 @@ impl MarketBundle {
     }
 
     pub fn get_exchanges_for_symbol(&self, symbol: &Symbol) -> Vec<ExchangeId> {
+        let target_symbol = Arc::new(symbol.clone());
         self.order_books
             .keys()
-            .filter(|(_, s)| *s == Arc::new(symbol.clone()))
+            .filter(|(_, s)| *s == target_symbol)
             .map(|(exchange, _)| *exchange)
             .collect()
     }
 
     pub fn get_all_symbols(&self) -> Vec<Arc<Symbol>> {
-        let mut symbols: Vec<Arc<Symbol>> = Vec::new();
+        let capacity = self.order_books.len() + self.tickers.len() + self.funding_rates.len();
+        let mut symbols: Vec<Arc<Symbol>> = Vec::with_capacity(capacity);
 
         symbols.extend(
             self.order_books
@@ -173,15 +182,18 @@ pub struct RawSignal {
 }
 
 impl RawSignal {
+    const EXPECTED_LEGS: usize = 4;
+    const EXPECTED_METADATA: usize = 8;
+
     pub fn new(strategy_id: impl Into<String>, symbol: Arc<Symbol>) -> Self {
         Self {
             strategy_id: strategy_id.into(),
             symbol,
-            legs: Vec::new(),
+            legs: Vec::with_capacity(Self::EXPECTED_LEGS),
             expected_profit_bps: 0,
             basis_bps: None,
             confidence_factors: ConfidenceFactors::default(),
-            metadata: HashMap::new(),
+            metadata: HashMap::with_capacity(Self::EXPECTED_METADATA),
             detected_at: Utc::now(),
         }
     }

@@ -16,6 +16,9 @@ pub struct FilterContext {
 }
 
 impl FilterContext {
+    const EXPECTED_FEE_SCHEDULES: usize = 8;
+    const EXPECTED_INVENTORY_LIMITS: usize = 32;
+
     pub fn new(min_profit_bps: i32) -> Self {
         Self {
             min_profit_bps,
@@ -27,10 +30,10 @@ impl FilterContext {
                 ExchangeId::GateIo,
             ],
             risk_limits: RiskLimits::default(),
-            fee_schedules: HashMap::new(),
+            fee_schedules: HashMap::with_capacity(Self::EXPECTED_FEE_SCHEDULES),
             max_latency_ms: 500,
             min_notional_usd: Decimal::from(10),
-            inventory_limits: HashMap::new(),
+            inventory_limits: HashMap::with_capacity(Self::EXPECTED_INVENTORY_LIMITS),
         }
     }
 
