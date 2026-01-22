@@ -49,16 +49,13 @@ jobs:
 
       - name: Run OpenCode PR Review
         uses: anomalyco/opencode/github@latest
-        # pass multiple common token input names as a best-effort to ensure the action uses the repo token
+        # Use the repository token rather than passing multiple possible token inputs
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          use_github_token: true
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
-            ${{ github.event_name == 'issue_comment' && 'Review the issue/PR and address the user request in the comment.' || github.event_name == 'pull_request_review_comment' && 'Review the spec in the comment and address the user request.' || github.event_name == 'pull_request' && 'Review this pull request thoroughly:' }}
+            ${{ github.event_name == 'issue_comment' && 'Review the issue/PR and address the user request in the comment.' || github.event_name == 'pull_request_review_comment' && 'Review the spec and address the reviewer comment.' || 'Review this pull request thoroughly:' }}
 
             ## Review Checklist
             1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions
