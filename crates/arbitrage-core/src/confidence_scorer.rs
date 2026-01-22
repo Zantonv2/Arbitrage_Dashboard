@@ -249,6 +249,8 @@ pub struct ConfidenceScorer {
     exchange_reliability: HashMap<ExchangeId, ExchangeReliability>,
     /// Exchange fee schedules
     fee_schedules: HashMap<ExchangeId, FeeSchedule>,
+    /// Cached total weight for confidence calculation
+    cached_total_weight: Decimal,
 }
 
 impl ConfidenceScorer {
@@ -258,10 +260,17 @@ impl ConfidenceScorer {
     ///
     /// * `config` - Scoring configuration
     pub fn new(config: ConfidenceConfig) -> Self {
+        let total_weight = config.depth_weight
+            + config.volatility_weight
+            + config.reliability_weight
+            + config.spread_stability_weight
+            + config.freshness_weight;
+
         Self {
             config,
             exchange_reliability: HashMap::new(),
             fee_schedules: Self::default_fee_schedules(),
+            cached_total_weight: total_weight,
         }
     }
 
@@ -518,11 +527,7 @@ impl ConfidenceScorer {
     ///
     /// A decimal value between 0 and 100 representing overall confidence.
     pub fn calculate_confidence(&self, factors: &ConfidenceFactors) -> Decimal {
-        let total_weight = self.config.depth_weight
-            + self.config.volatility_weight
-            + self.config.reliability_weight
-            + self.config.spread_stability_weight
-            + self.config.freshness_weight;
+        let total_weight = self.cached_total_weight;
 
         if total_weight.is_zero() {
             return Decimal::ZERO;
