@@ -2,6 +2,8 @@ name: Code Review
 on:
   schedule:
     - cron: "0 8 * * *" # Daily at 8 AM UTC
+  issue_comment:
+    types: [created]
   workflow_dispatch:
 
 concurrency:
@@ -17,6 +19,7 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
+    if: github.event_name != 'issue_comment' || contains(github.event.comment.body, '/oc scan')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +33,7 @@ jobs:
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
-            Perform a comprehensive code review of the entire codebase.
+            ${{ github.event_name == 'issue_comment' && 'Scan the entire codebase for issues immediately.' || 'Perform a comprehensive code review of the entire codebase.' }}
 
             ## Review Focus Areas
 
