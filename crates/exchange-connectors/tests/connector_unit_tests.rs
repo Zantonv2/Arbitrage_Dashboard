@@ -368,7 +368,7 @@ mod bybit_connector_tests {
     }
 
     #[test]
-    fn test_bybit_parse_order_book_empty_bids() {
+    fn test_bybit_parse_order_book_empty_bids_2() {
         let connector = BybitConnector::new();
         let symbol = Symbol::new("BTC", "USDT");
         let data = json!({
@@ -387,7 +387,7 @@ mod bybit_connector_tests {
     }
 
     #[test]
-    fn test_bybit_parse_order_book_empty_asks() {
+    fn test_bybit_parse_order_book_empty_asks_2() {
         let connector = BybitConnector::new();
         let symbol = Symbol::new("BTC", "USDT");
         let data = json!({

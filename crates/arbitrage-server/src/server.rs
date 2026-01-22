@@ -88,7 +88,13 @@ impl RateLimitState {
 
     pub fn check_rate_limit(&self, key: &str, max_requests: u64, window_secs: u64) -> bool {
         let now = Instant::now();
-        let mut requests = self.requests.lock().unwrap();
+        let mut requests = match self.requests.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::error!("Mutex poisoned for rate limiting - allowing request");
+                return true;
+            }
+        };
 
         let should_allow = match requests.get(key) {
             Some((first_request, count)) => {
@@ -128,10 +134,13 @@ fn get_client_ip(req: &Request<Body>) -> String {
 }
 
 pub fn validate_jwt(token: &str, secret: &str) -> bool {
+    let mut validation = Validation::default();
+    validation.validate_exp = true;
+    
     jsonwebtoken::decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
+        &validation,
     )
     .is_ok()
 }
@@ -161,7 +170,7 @@ fn create_error_response(status_code: StatusCode, message: &str) -> impl IntoRes
     let response = http::Response::builder()
         .status(status_code)
         .body(Body::from(message.to_string()))
-        .unwrap();
+        .expect("Failed to create HTTP response builder");
     response
 }
 
