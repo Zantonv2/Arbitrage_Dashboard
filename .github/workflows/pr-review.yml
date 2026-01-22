@@ -77,13 +77,18 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Add review comment (via gh)
+      - name: Add review comment
         if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | env -u GITHUB_TOKEN gh auth login --with-token
-          env -u GITHUB_TOKEN gh pr review ${{ github.event.pull_request.number }} \
-            --body "OpenCode review complete. See comments for details." \
-            --event REQUEST_CHANGES
+          PR_NUM=${{ github.event.pull_request.number }}
+          REPO="${{ github.repository }}"
+          curl -s -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"body":"OpenCode review complete. See comments for details.","event":"REQUEST_CHANGES"}' \
+            "https://api.github.com/repos/${REPO}/pulls/${PR_NUM}/reviews"
 
       - name: Fallback - Post minimal comment via REST API if gh review fails
         if: github.event_name == 'pull_request'
