@@ -80,10 +80,11 @@ jobs:
           git config user.email "172037461+Zantonv2@users.noreply.github.com"
           git checkout -b "$BRANCH_NAME"
 
-      - name: Run OpenCode to fix issue
+       - name: Run OpenCode to fix issue
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUM: ${{ matrix.issue }}
           ISSUE_TITLE: ${{ steps.issue-info.outputs.TITLE }}
           ISSUE_BODY: ${{ steps.issue-info.outputs.BODY }}
