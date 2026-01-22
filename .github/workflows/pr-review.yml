@@ -1,6 +1,6 @@
 name: PR Review
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '**.rs'
@@ -121,11 +121,13 @@ jobs:
         with:
           persist-credentials: true
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Run OpenCode for analysis
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         with:
