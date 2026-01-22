@@ -1,3 +1,4 @@
+use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
@@ -82,7 +83,7 @@ impl KrakenConnector {
             ..Default::default()
         };
 
-        let (event_sender, _) = broadcast::channel(1000);
+        let (event_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let client = Client::new();
         let stats = ConnectorStats {
             exchange: ExchangeId::Kraken,
@@ -392,7 +393,7 @@ impl ExchangeConnector for KrakenConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, _symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/0/private/CancelOrder", self.config.rest_url);
 
         let body = serde_json::json!({

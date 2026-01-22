@@ -1,8 +1,7 @@
 use crate::strategies::{
-    ConfidenceFactors, FeeSchedule, FilterContext, FundingRate, MarketBundle, RawSignal, Ticker,
-    TradeLeg,
+    ConfidenceFactors, FilterContext, FundingRate, MarketBundle, RawSignal, Ticker, TradeLeg,
 };
-use crate::types::{ExchangeId, OrderBook, OrderBookLevel, Symbol};
+use crate::types::{ExchangeId, FeeSchedule, OrderBook, OrderBookLevel, Symbol};
 use rust_decimal::Decimal;
 use std::sync::Arc;
 

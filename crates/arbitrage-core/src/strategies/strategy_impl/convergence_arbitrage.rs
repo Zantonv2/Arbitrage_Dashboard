@@ -1,5 +1,9 @@
 #![allow(clippy::type_complexity)]
 
+use crate::constants::{
+    BASIS_POINTS_DIVISOR, DEFAULT_CONVERGENCE_POSITION_DIVISOR, DEFAULT_CONVERGENCE_PROFIT_CAP_BPS,
+    DEFAULT_CONVERGENCE_PROFIT_MULTIPLIER, DEFAULT_RATIO_DEVIATION_MULTIPLIER,
+};
 use crate::strategies::strategies_specifics::{StrategyLimits, StrategyUtils};
 use crate::strategies::{
     FilterContext, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig, TradeLeg,
@@ -347,7 +351,8 @@ impl ConvergenceArbitrageStrategy {
 
                     for exchange in common_exchanges {
                         // Calculate position sizes
-                        let position_value = self.config.max_exposure / Decimal::from(4); // 25% of max exposure
+                        let position_value = self.config.max_exposure
+                            / Decimal::from(DEFAULT_CONVERGENCE_POSITION_DIVISOR); // 25% of max exposure
                         let long_quantity = position_value / long_price;
                         let short_quantity = position_value / short_price;
 
@@ -375,10 +380,11 @@ impl ConvergenceArbitrageStrategy {
                         signal.add_leg(short_leg);
 
                         // Estimate profit based on expected convergence
-                        let expected_convergence_bps = (z_score.abs() * Decimal::from(50))
-                            .to_i32()
-                            .unwrap_or(0)
-                            .min(500); // Cap at 5%
+                        let expected_convergence_bps = (z_score.abs()
+                            * Decimal::from(DEFAULT_CONVERGENCE_PROFIT_MULTIPLIER))
+                        .to_i32()
+                        .unwrap_or(0)
+                        .min(DEFAULT_CONVERGENCE_PROFIT_CAP_BPS); // Cap at 5%
 
                         signal.set_profit_bps(expected_convergence_bps);
 
@@ -541,7 +547,8 @@ impl Strategy for ConvergenceArbitrageStrategy {
 
                     for exchange in common_exchanges {
                         // Calculate position sizes
-                        let position_value = self.config.max_exposure / Decimal::from(4); // 25% of max exposure
+                        let position_value = self.config.max_exposure
+                            / Decimal::from(DEFAULT_CONVERGENCE_POSITION_DIVISOR); // 25% of max exposure
                         let long_quantity = position_value / long_price;
                         let short_quantity = position_value / short_price;
 
@@ -569,10 +576,11 @@ impl Strategy for ConvergenceArbitrageStrategy {
                         signal.add_leg(short_leg);
 
                         // Estimate profit based on expected convergence
-                        let expected_convergence_bps = (ratio_deviation * Decimal::from(1000))
-                            .to_i32()
-                            .unwrap_or(0)
-                            .min(500); // Cap at 5%
+                        let expected_convergence_bps = (ratio_deviation
+                            * Decimal::from(DEFAULT_RATIO_DEVIATION_MULTIPLIER))
+                        .to_i32()
+                        .unwrap_or(0)
+                        .min(DEFAULT_CONVERGENCE_PROFIT_CAP_BPS); // Cap at 5%
 
                         signal.set_profit_bps(expected_convergence_bps);
 
@@ -613,8 +621,18 @@ impl Strategy for ConvergenceArbitrageStrategy {
             return Ok(false);
         }
 
+        debug_assert!(
+            signal.legs.len() >= 2,
+            "Signal should have at least 2 legs for convergence arbitrage"
+        );
+
         let long_leg = &signal.legs[0];
         let short_leg = &signal.legs[1];
+
+        debug_assert_eq!(
+            long_leg.exchange, short_leg.exchange,
+            "Both legs should be on the same exchange for convergence arbitrage"
+        );
 
         // Both legs should be on the same exchange
         if long_leg.exchange != short_leg.exchange {
@@ -644,6 +662,14 @@ impl Strategy for ConvergenceArbitrageStrategy {
 
         // Check inventory for both legs
         let _long_base = &long_leg.symbol.base;
+        debug_assert!(
+            !long_leg.price.is_zero() && !long_leg.quantity.is_zero(),
+            "Long leg price and quantity should be non-zero"
+        );
+        debug_assert!(
+            !short_leg.price.is_zero() && !short_leg.quantity.is_zero(),
+            "Short leg price and quantity should be non-zero"
+        );
         let long_quote = &long_leg.symbol.quote;
         let short_base = &short_leg.symbol.base;
 

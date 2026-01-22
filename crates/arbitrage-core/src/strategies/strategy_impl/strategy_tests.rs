@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::strategies::base::{
-        FilterContext, MarketBundle, RawSignal, Strategy, StrategyConfig, TradeLeg,
-    };
+    use crate::strategies::config::StrategyConfig;
+    use crate::strategies::filter_context::FilterContext;
+    use crate::strategies::market_types::{MarketBundle, RawSignal, Ticker, TradeLeg};
     use crate::strategies::stablecoin_arbitrage::StablecoinArbitrageStrategy;
-    use crate::strategies::Ticker;
+    use crate::strategies::traits::Strategy;
     use crate::types::{ExchangeId, OrderBook, OrderBookLevel, Symbol};
     use rust_decimal::Decimal;
     use serde_json::json;

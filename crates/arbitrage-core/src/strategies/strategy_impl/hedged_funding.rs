@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+use crate::constants::{BASIS_POINTS_DIVISOR, SLIPPIER_TIER_1_BPS, SLIPPIER_TIER_2_BPS};
 use crate::strategies::strategies_specifics::{
     ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
@@ -34,6 +35,16 @@ use tracing::debug;
 /// - Spot prices for hedging calculations
 /// - Cross-exchange basis spreads
 /// - Volatility and correlation metrics
+///
+/// # Example
+///
+/// ```rust
+/// use arbitrage_core::strategies::StrategyConfig;
+///
+/// let strategy = HedgedFundingStrategy::new();
+/// assert_eq!(strategy.id(), "hedged_funding");
+/// assert_eq!(strategy.name(), "Hedged Funding Strategy");
+/// ```
 pub struct HedgedFundingStrategy {
     config: StrategyConfig,
     #[allow(dead_code)]
@@ -48,7 +59,21 @@ pub struct HedgedFundingStrategy {
 }
 
 impl HedgedFundingStrategy {
-    /// Create a new hedged funding strategy with default configuration
+    /// Creates a new hedged funding strategy with default configuration.
+    ///
+    /// Initializes the strategy with default limits and parameters for
+    /// hedged funding arbitrage. The strategy is enabled by default.
+    ///
+    /// # Returns
+    ///
+    /// A new HedgedFundingStrategy instance with default configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let strategy = HedgedFundingStrategy::new();
+    /// assert!(strategy.config().enabled);
+    /// ```
     pub fn new() -> Self {
         let custom_params = StrategyUtils::create_base_custom_params();
 
@@ -67,7 +92,36 @@ impl HedgedFundingStrategy {
         }
     }
 
-    /// Create with custom configuration
+    /// Creates a hedged funding strategy with custom configuration.
+    ///
+    /// Allows overriding the default configuration with custom parameters
+    /// for fine-tuned control over strategy behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Custom strategy configuration
+    ///
+    /// # Returns
+    ///
+    /// A new HedgedFundingStrategy instance with the provided configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use arbitrage_core::strategies::{StrategyConfig, RiskLimits};
+    /// use rust_decimal::Decimal;
+    ///
+    /// let config = StrategyConfig {
+    ///     enabled: true,
+    ///     min_profit_bps: 15,
+    ///     max_exposure: Decimal::from(100000),
+    ///     confidence_threshold: Decimal::new(8, 1),
+    ///     risk_limits: RiskLimits::default(),
+    ///     custom_params: serde_json::Map::new(),
+    /// };
+    ///
+    /// let strategy = HedgedFundingStrategy::with_config(config);
+    /// ```
     pub fn with_config(config: StrategyConfig) -> Self {
         let mut strategy = Self::new();
         strategy.config = config;
@@ -227,7 +281,8 @@ impl HedgedFundingStrategy {
             .get("max_basis_risk_bps")
             .and_then(|v| v.as_i64())
             .unwrap_or(50) as i32;
-        let max_basis_risk = Decimal::from(max_basis_risk_bps) / Decimal::from(10000);
+        let max_basis_risk =
+            Decimal::from(max_basis_risk_bps) / Decimal::from(BASIS_POINTS_DIVISOR);
 
         if lowest_basis_risk <= max_basis_risk {
             best_exchange
@@ -390,12 +445,12 @@ impl HedgedFundingStrategy {
             };
 
             // Calculate expected profit
-            let funding_bps = (funding_rate.rate.abs() * Decimal::from(10000))
+            let funding_bps = (funding_rate.rate.abs() * Decimal::from(BASIS_POINTS_DIVISOR))
                 .to_i32()
                 .unwrap_or(0);
 
             // Subtract estimated costs (fees, basis risk)
-            let estimated_costs_bps = 10; // 0.1% estimated costs
+            let estimated_costs_bps = SLIPPIER_TIER_1_BPS; // 0.1% estimated costs
             let net_profit_bps = funding_bps - estimated_costs_bps;
 
             if net_profit_bps < self.config.min_profit_bps {
@@ -447,7 +502,9 @@ impl HedgedFundingStrategy {
                 "basis_risk_bps",
                 json!(self
                     .calculate_basis_risk(market_data, *exchange, hedge_exchange, symbol)
-                    .map(|r| (r * Decimal::from(10000)).to_i32().unwrap_or(0))
+                    .map(|r| (r * Decimal::from(BASIS_POINTS_DIVISOR))
+                        .to_i32()
+                        .unwrap_or(0))
                     .unwrap_or(0)),
             );
 
@@ -470,14 +527,41 @@ impl Default for HedgedFundingStrategy {
 }
 
 impl Strategy for HedgedFundingStrategy {
+    /// Returns the unique identifier for this strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice identifying the strategy type.
     fn id(&self) -> &'static str {
         "hedged_funding"
     }
 
+    /// Returns the human-readable name for this strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice containing the strategy name.
     fn name(&self) -> &'static str {
         "Hedged Funding Strategy"
     }
 
+    /// Detects arbitrage opportunities in the current market data.
+    ///
+    /// Scans all available funding rates across supported exchanges to identify
+    /// hedged funding opportunities where the funding rate justifies the basis
+    /// risk between perpetual and spot markets.
+    ///
+    /// # Arguments
+    ///
+    /// * `market_data` - Bundle containing market data from all exchanges
+    ///
+    /// # Returns
+    ///
+    /// A vector of detected arbitrage signals, empty if no opportunities found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if market data processing fails.
     fn detect(&self, market_data: &MarketBundle) -> Result<Vec<RawSignal>> {
         debug!("Hedged funding scanning market data");
 
@@ -557,12 +641,12 @@ impl Strategy for HedgedFundingStrategy {
             };
 
             // Calculate expected profit
-            let funding_bps = (funding_rate.rate.abs() * Decimal::from(10000))
+            let funding_bps = (funding_rate.rate.abs() * Decimal::from(BASIS_POINTS_DIVISOR))
                 .to_i32()
                 .unwrap_or(0);
 
             // Subtract estimated costs (fees, basis risk)
-            let estimated_costs_bps = 15; // 0.15% estimated costs
+            let estimated_costs_bps = SLIPPIER_TIER_2_BPS; // 0.15% estimated costs
             let net_profit_bps = funding_bps - estimated_costs_bps;
 
             if net_profit_bps < self.config.min_profit_bps {
@@ -616,6 +700,23 @@ impl Strategy for HedgedFundingStrategy {
         Ok(signals)
     }
 
+    /// Filters a signal based on additional context and risk checks.
+    ///
+    /// Validates that a detected signal meets all requirements for execution,
+    /// including exchange permissions, inventory constraints, and exposure limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The signal to filter
+    /// * `context` - The filter context containing additional validation rules
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if the signal passes all filters, `Ok(false)` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation encounters an unexpected error.
     fn filter(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool> {
         // Basic validation
         if !signal.is_valid() {
@@ -699,10 +800,27 @@ impl Strategy for HedgedFundingStrategy {
         Ok(true)
     }
 
+    /// Returns a reference to the strategy configuration.
+    ///
+    /// # Returns
+    ///
+    /// Immutable reference to the current strategy configuration.
     fn config(&self) -> &StrategyConfig {
         &self.config
     }
 
+    /// Updates the strategy configuration.
+    ///
+    /// Allows runtime modification of strategy parameters such as
+    /// min profit threshold, max exposure, and risk limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The new strategy configuration
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on successful update.
     fn update_config(&mut self, config: StrategyConfig) -> Result<()> {
         self.config = config;
         Ok(())

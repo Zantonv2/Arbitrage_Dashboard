@@ -309,7 +309,7 @@ impl ExchangeConnector for BitstampConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, _symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/v2/cancel_order/", self.base.config.rest_url);
 
         let body = serde_json::json!({

@@ -1,3 +1,4 @@
+use crate::constants::BASIS_POINTS_DIVISOR;
 use crate::strategies::strategies_specifics::{
     CexArbitrageDefaults, ExchangeCapabilities, StrategyLimits,
 };
@@ -17,7 +18,7 @@ use tracing::{debug, warn};
 ///
 /// **Focus**:
 /// - Bid/ask spread analysis across all supported exchanges
-/// - Account for trading fees on both exchanges  
+/// - Account for trading fees on both exchanges
 /// - Validate symbol availability on both exchanges
 /// - Consider execution latency and slippage
 ///
@@ -27,12 +28,37 @@ use tracing::{debug, warn};
 /// - Order books from all 6 exchanges via WebSocket feeds
 /// - Real-time tickers for price validation
 /// - Exchange-specific fee schedules
+///
+/// # Example
+///
+/// ```rust
+/// use arbitrage_core::strategies::StrategyConfig;
+///
+/// let strategy = CexArbitrageStrategy::new();
+/// assert_eq!(strategy.id(), "cex_arbitrage");
+/// assert_eq!(strategy.name(), "CEX ↔ CEX Price Arbitrage");
+/// ```
 pub struct CexArbitrageStrategy {
     config: StrategyConfig,
 }
 
 impl CexArbitrageStrategy {
-    /// Create a new CEX arbitrage strategy with default configuration
+    /// Creates a new CEX arbitrage strategy with default configuration.
+    ///
+    /// Initializes the strategy with default limits and parameters for
+    /// CEX-to-CEX arbitrage trading. The strategy uses predefined minimum
+    /// profit thresholds and maximum exposure limits.
+    ///
+    /// # Returns
+    ///
+    /// A new CexArbitrageStrategy instance with default configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let strategy = CexArbitrageStrategy::new();
+    /// assert!(strategy.config().enabled);
+    /// ```
     pub fn new() -> Self {
         Self {
             config: StrategyConfig {
@@ -44,7 +70,37 @@ impl CexArbitrageStrategy {
         }
     }
 
-    /// Create with custom configuration
+    /// Creates a CEX arbitrage strategy with custom configuration.
+    ///
+    /// Allows overriding the default configuration with custom parameters
+    /// for fine-tuned control over strategy behavior, including custom
+    /// min profit thresholds, exposure limits, and symbol filters.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Custom strategy configuration
+    ///
+    /// # Returns
+    ///
+    /// A new CexArbitrageStrategy instance with the provided configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use arbitrage_core::strategies::{StrategyConfig, RiskLimits};
+    /// use rust_decimal::Decimal;
+    ///
+    /// let config = StrategyConfig {
+    ///     enabled: true,
+    ///     min_profit_bps: 10,
+    ///     max_exposure: Decimal::from(50000),
+    ///     confidence_threshold: Decimal::new(9, 1),
+    ///     risk_limits: RiskLimits::default(),
+    ///     custom_params: serde_json::Map::new(),
+    /// };
+    ///
+    /// let strategy = CexArbitrageStrategy::with_config(config);
+    /// ```
     pub fn with_config(config: StrategyConfig) -> Self {
         Self { config }
     }
@@ -121,7 +177,7 @@ impl CexArbitrageStrategy {
             })?;
 
         // Convert to basis points (1% = 100 bps)
-        let profit_decimal = profit_ratio * Decimal::from(10000);
+        let profit_decimal = profit_ratio * Decimal::from(BASIS_POINTS_DIVISOR);
         let profit_bps = profit_decimal.to_i32().ok_or_else(|| {
             ArbitrageError::Calculation(format!("Profit calculation overflow: {}", profit_decimal))
         })?;
@@ -219,14 +275,41 @@ impl Default for CexArbitrageStrategy {
 }
 
 impl Strategy for CexArbitrageStrategy {
+    /// Returns the unique identifier for this strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice identifying the strategy type.
     fn id(&self) -> &'static str {
         "cex_arbitrage"
     }
 
+    /// Returns the human-readable name for this strategy.
+    ///
+    /// # Returns
+    ///
+    /// A static string slice containing the strategy name.
     fn name(&self) -> &'static str {
         "CEX ↔ CEX Price Arbitrage"
     }
 
+    /// Detects arbitrage opportunities across all supported CEX exchanges.
+    ///
+    /// Scans all available symbols across connected exchanges to identify
+    /// price discrepancies where buying on one exchange and selling on
+    /// another would be profitable after accounting for fees.
+    ///
+    /// # Arguments
+    ///
+    /// * `market_data` - Bundle containing market data from all exchanges
+    ///
+    /// # Returns
+    ///
+    /// A vector of detected arbitrage signals, empty if no opportunities found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if market data processing fails.
     fn detect(&self, market_data: &MarketBundle) -> Result<Vec<RawSignal>> {
         let mut signals = Vec::new();
 
@@ -426,6 +509,24 @@ impl Strategy for CexArbitrageStrategy {
         Ok(signals)
     }
 
+    /// Filters a signal based on additional context and risk checks.
+    ///
+    /// Validates that a detected signal meets all requirements for execution,
+    /// including exchange permissions, inventory constraints, exposure limits,
+    /// and latency constraints.
+    ///
+    /// # Arguments
+    ///
+    /// * `signal` - The signal to filter
+    /// * `context` - The filter context containing additional validation rules
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if the signal passes all filters, `Ok(false)` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation encounters an unexpected error.
     fn filter(&self, signal: &RawSignal, context: &FilterContext) -> Result<bool> {
         println!(
             "Filtering signal: strategy_id={}, legs={}, profit_bps={}",
@@ -444,6 +545,11 @@ impl Strategy for CexArbitrageStrategy {
         if signal.legs.len() < 2 {
             return Ok(false);
         }
+
+        debug_assert!(
+            signal.legs.len() >= 2,
+            "Signal should have at least 2 legs for CEX arbitrage"
+        );
 
         let buy_leg = &signal.legs[0];
         let sell_leg = &signal.legs[1];
@@ -490,6 +596,15 @@ impl Strategy for CexArbitrageStrategy {
             let base_asset = &signal.symbol.base;
             let quote_asset = &signal.symbol.quote;
 
+            debug_assert!(
+                !sell_leg.quantity.is_zero(),
+                "Sell leg quantity should be non-zero for inventory check"
+            );
+            debug_assert!(
+                !(buy_leg.price * buy_leg.quantity).is_zero(),
+                "Required quote amount should be non-zero for inventory check"
+            );
+
             println!(
                 "Checking inventory for base: {}, quote: {}",
                 base_asset, quote_asset
@@ -517,6 +632,11 @@ impl Strategy for CexArbitrageStrategy {
 
         // Check maximum exposure
         let total_notional = signal.total_notional();
+        debug_assert!(
+            total_notional > Decimal::ZERO,
+            "Total notional should be positive for a valid signal"
+        );
+
         if total_notional > context.max_exposure {
             return Ok(false);
         }
@@ -541,10 +661,27 @@ impl Strategy for CexArbitrageStrategy {
         Ok(true)
     }
 
+    /// Returns a reference to the strategy configuration.
+    ///
+    /// # Returns
+    ///
+    /// Immutable reference to the current strategy configuration.
     fn config(&self) -> &StrategyConfig {
         &self.config
     }
 
+    /// Updates the strategy configuration.
+    ///
+    /// Allows runtime modification of strategy parameters such as
+    /// min profit threshold, max exposure, and symbol filters.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The new strategy configuration
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on successful update.
     fn update_config(&mut self, config: StrategyConfig) -> Result<()> {
         self.config = config;
         Ok(())

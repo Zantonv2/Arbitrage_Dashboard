@@ -54,6 +54,7 @@
 /// // service.update_market_data(market_info).await;
 /// ```
 use crate::{
+    constants::BROADCAST_CHANNEL_CAPACITY,
     types::{ExchangeId, Symbol},
     ArbitrageError, Result,
 };
@@ -238,14 +239,30 @@ impl SymbolDiscoveryService {
     ///
     /// Tuple of (service, event receiver)
     pub fn new(criteria: SymbolSelectionCriteria) -> (Self, broadcast::Receiver<DiscoveryEvent>) {
-        let (event_sender, event_receiver) = broadcast::channel(1000);
+        let (event_sender, event_receiver) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
+
+        let market_data = FxHashMap::with_capacity_and_hasher(100, Default::default());
+        let qualified_symbols = FxHashSet::with_capacity_and_hasher(50, Default::default());
+        let symbol_scores = FxHashMap::with_capacity_and_hasher(50, Default::default());
+        let mut symbol_history = FxHashMap::with_capacity_and_hasher(50, Default::default());
+
+        symbol_history.insert(Symbol::new("BTC", "USDT"), Vec::with_capacity(100));
+        symbol_history.insert(Symbol::new("ETH", "USDT"), Vec::with_capacity(100));
+        symbol_history.insert(Symbol::new("SOL", "USDT"), Vec::with_capacity(100));
+        symbol_history.insert(Symbol::new("XRP", "USDT"), Vec::with_capacity(100));
+        symbol_history.insert(Symbol::new("ADA", "USDT"), Vec::with_capacity(100));
+        symbol_history.remove(&Symbol::new("BTC", "USDT"));
+        symbol_history.remove(&Symbol::new("ETH", "USDT"));
+        symbol_history.remove(&Symbol::new("SOL", "USDT"));
+        symbol_history.remove(&Symbol::new("XRP", "USDT"));
+        symbol_history.remove(&Symbol::new("ADA", "USDT"));
 
         let service = Self {
             criteria,
-            market_data: FxHashMap::default(),
-            qualified_symbols: FxHashSet::default(),
-            symbol_scores: FxHashMap::default(),
-            symbol_history: FxHashMap::default(),
+            market_data,
+            qualified_symbols,
+            symbol_scores,
+            symbol_history,
             event_sender,
         };
 
@@ -320,12 +337,13 @@ impl SymbolDiscoveryService {
     ///
     /// Vector of qualified symbols sorted by total score.
     pub fn get_arbitrage_symbols(&self) -> Result<Vec<Symbol>> {
-        let mut scored_symbols: Vec<(Symbol, Decimal)> = self
-            .symbol_scores
-            .iter()
-            .filter(|(symbol, _)| self.qualified_symbols.contains(symbol))
-            .map(|(symbol, score)| (symbol.clone(), score.total_score))
-            .collect();
+        let capacity = std::cmp::min(self.symbol_scores.len(), self.criteria.max_symbols);
+        let mut scored_symbols: Vec<(Symbol, Decimal)> = Vec::with_capacity(capacity);
+        for (symbol, score) in self.symbol_scores.iter() {
+            if self.qualified_symbols.contains(symbol) {
+                scored_symbols.push((symbol.clone(), score.total_score));
+            }
+        }
 
         scored_symbols.sort_by(|a, b| b.1.cmp(&a.1));
         scored_symbols.truncate(self.criteria.max_symbols);
@@ -362,7 +380,10 @@ impl SymbolDiscoveryService {
             return Ok(());
         }
 
-        let prices: Vec<Decimal> = markets.iter().map(|m| m.price_usd).collect();
+        let mut prices: Vec<Decimal> = Vec::with_capacity(markets.len());
+        for m in &markets {
+            prices.push(m.price_usd);
+        }
         let min_price = prices.iter().min().copied().unwrap_or(Decimal::ZERO);
         let max_price = prices.iter().max().copied().unwrap_or(Decimal::ZERO);
 
@@ -381,7 +402,10 @@ impl SymbolDiscoveryService {
         let liquidity_score = (avg_level1_liquidity / Decimal::from(100_000) * Decimal::from(100))
             .min(Decimal::from(100));
 
-        let spreads: Vec<u32> = markets.iter().map(|m| m.spread_bps).collect();
+        let mut spreads: Vec<u32> = Vec::with_capacity(markets.len());
+        for m in &markets {
+            spreads.push(m.spread_bps);
+        }
         let avg_spread = spreads.iter().sum::<u32>() as f64 / spreads.len() as f64;
         let spread_variance: f64 = spreads
             .iter()
@@ -424,11 +448,12 @@ impl SymbolDiscoveryService {
     ///
     /// `Ok(true)` if qualified, `Ok(false)` otherwise.
     fn is_symbol_qualified(&self, symbol: &Symbol) -> Result<bool> {
-        let markets: Vec<&MarketInfo> = self
-            .market_data
-            .values()
-            .filter(|m| &m.symbol == symbol && m.is_active)
-            .collect();
+        let mut markets: Vec<&MarketInfo> = Vec::with_capacity(self.market_data.len());
+        for m in self.market_data.values() {
+            if &m.symbol == symbol && m.is_active {
+                markets.push(m);
+            }
+        }
 
         if markets.len() < self.criteria.min_exchanges {
             return Ok(false);
@@ -492,17 +517,21 @@ impl SymbolDiscoveryService {
     ///
     /// Statistics if data exists, `None` otherwise.
     pub fn get_market_stats(&self, symbol: &Symbol) -> Option<EnhancedSymbolStats> {
-        let markets: Vec<&MarketInfo> = self
-            .market_data
-            .values()
-            .filter(|m| &m.symbol == symbol)
-            .collect();
+        let mut markets: Vec<&MarketInfo> = Vec::with_capacity(20);
+        for m in self.market_data.values() {
+            if &m.symbol == symbol {
+                markets.push(m);
+            }
+        }
 
         if markets.is_empty() {
             return None;
         }
 
-        let prices: Vec<Decimal> = markets.iter().map(|m| m.price_usd).collect();
+        let mut prices: Vec<Decimal> = Vec::with_capacity(markets.len());
+        for m in &markets {
+            prices.push(m.price_usd);
+        }
         let min_price = prices.iter().min().copied()?;
         let max_price = prices.iter().max().copied()?;
 
@@ -597,13 +626,18 @@ impl SymbolDiscoveryService {
     pub async fn update_criteria(&mut self, new_criteria: SymbolSelectionCriteria) -> Result<()> {
         self.criteria = new_criteria.clone();
 
-        let symbols: Vec<Symbol> = self
+        let symbol_count = self
             .market_data
             .values()
             .map(|m| m.symbol.clone())
             .collect::<FxHashSet<_>>()
-            .into_iter()
-            .collect();
+            .len();
+        let mut symbols: Vec<Symbol> = Vec::with_capacity(symbol_count);
+        for m in self.market_data.values() {
+            symbols.push(m.symbol.clone());
+        }
+        let unique_symbols: FxHashSet<Symbol> = symbols.drain(..).collect();
+        let symbols: Vec<Symbol> = unique_symbols.into_iter().collect();
 
         self.qualified_symbols.clear();
 

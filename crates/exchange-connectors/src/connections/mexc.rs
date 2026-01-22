@@ -120,18 +120,18 @@ impl ExchangeConnector for MEXCConnector {
         );
 
         let response = self.client.get(&url).send().await?;
-        let data: Value = response.json().await?;
+        let order_book_json: Value = response.json().await?;
 
-        self.parse_order_book(&data, symbol)
+        self.parse_order_book(&order_book_json, symbol)
     }
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
         let url = format!("{}/api/v3/exchangeInfo", self.base.config.rest_url);
         let response = self.client.get(&url).send().await?;
-        let data: Value = response.json().await?;
+        let exchange_info_json: Value = response.json().await?;
 
-        let mut symbols = Vec::new();
-        if let Some(symbols_array) = data["symbols"].as_array() {
+        let mut symbols = Vec::with_capacity(512);
+        if let Some(symbols_array) = exchange_info_json["symbols"].as_array() {
             for item in symbols_array {
                 if let Some(symbol_str) = item["symbol"].as_str() {
                     let status = item["status"].as_str().unwrap_or("");
@@ -151,10 +151,10 @@ impl ExchangeConnector for MEXCConnector {
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
         let url = format!("{}/api/v3/ticker/bookTicker", self.base.config.rest_url);
         let response = self.client.get(&url).send().await?;
-        let data: Value = response.json().await?;
+        let tickers_json: Value = response.json().await?;
 
-        let mut tickers = HashMap::new();
-        if let Some(ticker_array) = data.as_array() {
+        let mut tickers = HashMap::with_capacity(symbols.len());
+        if let Some(ticker_array) = tickers_json.as_array() {
             for ticker_data in ticker_array {
                 if let Some(symbol_str) = ticker_data["symbol"].as_str() {
                     if let Ok(symbol) = self.symbol_from_mexc(symbol_str) {
@@ -174,7 +174,7 @@ impl ExchangeConnector for MEXCConnector {
         &self,
         symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
+        let mut funding_rates = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let mexc_symbol = format!("{}_USDT", symbol.base.to_uppercase());
             let url = format!(
@@ -334,7 +334,7 @@ impl ExchangeConnector for MEXCConnector {
         })
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, _symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/api/v3/order", self.base.config.rest_url);
 
         let cancel_request = serde_json::json!({
@@ -475,7 +475,7 @@ impl ExchangeConnector for MEXCConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut balances = std::collections::HashMap::new();
+        let mut balances = std::collections::HashMap::with_capacity(64);
 
         if let Some(balance_array) = response_json.get("balances").and_then(|b| b.as_array()) {
             for balance in balance_array {
@@ -542,7 +542,7 @@ impl ExchangeConnector for MEXCConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(order_array) = response_json.as_array() {
             for order_data in order_array {
@@ -713,13 +713,13 @@ impl MEXCConnector {
         _config: &ConnectorConfig,
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
+        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
         let mut last_ping = std::time::Instant::now();
 
         loop {
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_params = Vec::new();
+                let mut new_params = Vec::with_capacity(symbols.len());
 
                 for symbol in symbols.iter() {
                     let mexc_symbol = Self::symbol_to_mexc_static(symbol);
@@ -842,19 +842,19 @@ impl MEXCConnector {
         debug!("Received MEXC message: {}", text);
 
         // Try to parse as JSON
-        let data: Value = match serde_json::from_str(text) {
+        let ws_message_json: Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(_) => return Ok(()),
         };
 
         // Handle PONG response
-        if data.get("msg").and_then(|m| m.as_str()) == Some("PONG") {
+        if ws_message_json.get("msg").and_then(|m| m.as_str()) == Some("PONG") {
             debug!("MEXC PONG received");
             return Ok(());
         }
 
         // Handle subscription response
-        if let Some(code) = data.get("code").and_then(|c| c.as_i64()) {
+        if let Some(code) = ws_message_json.get("code").and_then(|c| c.as_i64()) {
             if code == 0 {
                 debug!("MEXC subscription successful");
             } else {
@@ -864,9 +864,9 @@ impl MEXCConnector {
         }
 
         // Handle market data
-        if let Some(channel) = data.get("c").and_then(|c| c.as_str()) {
+        if let Some(channel) = ws_message_json.get("c").and_then(|c| c.as_str()) {
             if channel.contains("bookTicker") {
-                if let Ok(order_book) = Self::parse_bookticker_message(&data) {
+                if let Ok(order_book) = Self::parse_bookticker_message(&ws_message_json) {
                     let event = ConnectionEvent::MarketData(MarketDataEvent::OrderBook {
                         exchange: ExchangeId::MEXC,
                         order_book,
@@ -937,14 +937,7 @@ impl MEXCConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        if asks_data.is_empty() {
-            warn!("MEXC REST API returned empty asks for {}", symbol);
-        }
-        if bids_data.is_empty() {
-            warn!("MEXC REST API returned empty bids for {}", symbol);
-        }
-
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for ask in asks_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
@@ -958,7 +951,7 @@ impl MEXCConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for bid in bids_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
@@ -970,15 +963,6 @@ impl MEXCConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "MEXC orderbook parsing resulted in empty data for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
         }
 
         Ok(OrderBook {

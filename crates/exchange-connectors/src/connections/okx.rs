@@ -13,7 +13,7 @@ use arbitrage_core::{
     Result,
 };
 use async_trait::async_trait;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,58 +26,11 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, warn};
 
-/// OKX WebSocket subscription message
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-struct OkxSubscription {
-    op: String,
-    args: Vec<OkxSubscriptionArg>,
-}
-
-/// OKX WebSocket subscription argument
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-struct OkxSubscriptionArg {
-    channel: String,
-    #[serde(rename = "instId")]
-    inst_id: String,
-}
-
-/// OKX WebSocket response message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct OkxWsResponse {
-    event: Option<String>,
-    code: Option<String>,
-    msg: Option<String>,
-    #[serde(rename = "connId")]
-    conn_id: Option<String>,
-}
-
-/// OKX WebSocket market data message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct OkxMarketData {
-    arg: OkxMarketDataArg,
-    action: Option<String>,
-    data: Vec<Value>,
-}
-
-/// OKX market data argument
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct OkxMarketDataArg {
-    channel: String,
-    #[serde(rename = "instId")]
-    inst_id: String,
-}
-
 #[derive(Clone)]
 pub struct OKXConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
 }
@@ -150,7 +103,7 @@ impl ExchangeConnector for OKXConnector {
 
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let order_book_json = parse_json_with_retry(
             &bytes,
             ExchangeId::OKX,
             "fetch_order_book",
@@ -158,7 +111,7 @@ impl ExchangeConnector for OKXConnector {
         )
         .await?;
 
-        if let Some(data_array) = data["data"].as_array() {
+        if let Some(data_array) = order_book_json["data"].as_array() {
             if let Some(book) = data_array.first() {
                 return self.parse_order_book(book, symbol);
             }
@@ -176,7 +129,7 @@ impl ExchangeConnector for OKXConnector {
         );
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let symbols_json = parse_json_with_retry(
             &bytes,
             ExchangeId::OKX,
             "fetch_symbols",
@@ -184,8 +137,8 @@ impl ExchangeConnector for OKXConnector {
         )
         .await?;
 
-        let mut symbols = Vec::new();
-        if let Some(data_array) = data["data"].as_array() {
+        let mut symbols = Vec::with_capacity(512);
+        if let Some(data_array) = symbols_json["data"].as_array() {
             for item in data_array {
                 if let Some(inst_id) = item["instId"].as_str() {
                     if let Some(state) = item["state"].as_str() {
@@ -202,7 +155,7 @@ impl ExchangeConnector for OKXConnector {
     }
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
-        let mut tickers = HashMap::new();
+        let mut tickers = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let okx_symbol = self.symbol_to_okx(symbol);
             let url = format!(
@@ -229,7 +182,7 @@ impl ExchangeConnector for OKXConnector {
         &self,
         symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
+        let mut funding_rates = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let okx_symbol = format!("{}-SWAP", self.symbol_to_okx(symbol));
             let url = format!(
@@ -409,11 +362,12 @@ impl ExchangeConnector for OKXConnector {
         }
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse> {
+    async fn cancel_order(&self, symbol: &Symbol, order_id: &str) -> Result<CancelResponse> {
         let url = format!("{}/api/v5/trade/cancel-order", self.base.config.rest_url);
 
+        let inst_id = format!("{}-{}", symbol.base, symbol.quote);
         let cancel_request = serde_json::json!({
-            "instId": "BTC-USDT",
+            "instId": inst_id,
             "ordId": order_id,
         });
 
@@ -572,7 +526,7 @@ impl ExchangeConnector for OKXConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut balances = std::collections::HashMap::new();
+        let mut balances = std::collections::HashMap::with_capacity(64);
 
         if let Some(data) = response_json
             .get("data")
@@ -645,7 +599,7 @@ impl ExchangeConnector for OKXConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(data) = response_json.get("data").and_then(|d| d.as_array()) {
             for order_data in data {
@@ -720,339 +674,7 @@ impl ExchangeConnector for OKXConnector {
     }
 }
 
-#[allow(dead_code)]
 impl OKXConnector {
-    async fn websocket_task(
-        ws_url: String,
-        event_sender: broadcast::Sender<ConnectionEvent>,
-        status: Arc<RwLock<ConnectionStatus>>,
-        stats: Arc<Mutex<ConnectorStats>>,
-        subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-        config: ConnectorConfig,
-    ) {
-        let mut backoff =
-            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
-
-        loop {
-            match Self::connect_websocket(&ws_url).await {
-                Ok((ws_stream, _)) => {
-                    info!("OKX WebSocket connected successfully");
-                    backoff.reset();
-
-                    *status.write().await = ConnectionStatus::Connected;
-
-                    let _ = event_sender.send(ConnectionEvent::StatusChange {
-                        exchange: ExchangeId::OKX,
-                        old_status: ConnectionStatus::Connecting,
-                        new_status: ConnectionStatus::Connected,
-                        timestamp: chrono::Utc::now(),
-                    });
-
-                    if let Err(e) = Self::handle_websocket_connection(
-                        ws_stream,
-                        &event_sender,
-                        &status,
-                        &stats,
-                        &subscribed_symbols,
-                        &config,
-                    )
-                    .await
-                    {
-                        error!("OKX WebSocket connection error: {}", e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to connect to OKX WebSocket: {}", e);
-                    *status.write().await =
-                        ConnectionStatus::Error("WebSocket connection failed".to_string());
-                    let _ = event_sender.send(ConnectionEvent::Error {
-                        exchange: ExchangeId::OKX,
-                        error: format!("WebSocket connection failed: {}", e),
-                        timestamp: chrono::Utc::now(),
-                    });
-                }
-            }
-
-            let current_status = status.read().await;
-            if *current_status == ConnectionStatus::Disconnected {
-                break;
-            }
-
-            let delay = backoff.next_delay();
-            warn!("OKX WebSocket reconnecting in {:?}", delay);
-            tokio::time::sleep(delay).await;
-        }
-    }
-
-    async fn connect_websocket(
-        ws_url: &str,
-    ) -> Result<(
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
-    )> {
-        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
-            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                "WebSocket connection failed: {}",
-                e
-            ))
-        })?;
-        Ok((ws_stream, response))
-    }
-
-    async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        event_sender: &broadcast::Sender<ConnectionEvent>,
-        status: &Arc<RwLock<ConnectionStatus>>,
-        stats: &Arc<Mutex<ConnectorStats>>,
-        subscribed_symbols: &Arc<RwLock<Vec<Symbol>>>,
-        _config: &ConnectorConfig,
-    ) -> Result<()> {
-        let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
-        let mut last_ping = std::time::Instant::now();
-
-        loop {
-            if last_subscription_check.elapsed() > Duration::from_secs(5) {
-                let symbols = subscribed_symbols.read().await;
-                let mut new_args = Vec::new();
-
-                for symbol in symbols.iter() {
-                    let okx_symbol = Self::symbol_to_okx_static(symbol);
-
-                    if !current_subscriptions.contains(&okx_symbol) {
-                        new_args.push(OkxSubscriptionArg {
-                            channel: "books5".to_string(),
-                            inst_id: okx_symbol.clone(),
-                        });
-                        current_subscriptions.push(okx_symbol);
-                    }
-                }
-
-                if !new_args.is_empty() {
-                    let subscription = OkxSubscription {
-                        op: "subscribe".to_string(),
-                        args: new_args,
-                    };
-
-                    let msg = serde_json::to_string(&subscription).map_err(|e| {
-                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                            "Failed to serialize: {}",
-                            e
-                        ))
-                    })?;
-
-                    debug!("Sending OKX subscription: {}", msg);
-                    ws_stream
-                        .send(Message::Text(msg.into()))
-                        .await
-                        .map_err(|e| {
-                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                                "Failed to send: {}",
-                                e
-                            ))
-                        })?;
-                }
-
-                last_subscription_check = std::time::Instant::now();
-            }
-
-            if last_ping.elapsed() > Duration::from_secs(25) {
-                ws_stream
-                    .send(Message::Text("ping".into()))
-                    .await
-                    .map_err(|e| {
-                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                            "Failed to send ping: {}",
-                            e
-                        ))
-                    })?;
-                last_ping = std::time::Instant::now();
-            }
-
-            match tokio::time::timeout(Duration::from_secs(30), ws_stream.next()).await {
-                Ok(Some(Ok(message))) => {
-                    {
-                        let mut stats_guard = stats.lock().await;
-                        stats_guard.messages_received += 1;
-                        stats_guard.last_update = chrono::Utc::now();
-                    }
-
-                    match message {
-                        Message::Text(text) => {
-                            if let Err(e) = Self::handle_text_message(&text, event_sender).await {
-                                warn!("Failed to handle OKX message: {}", e);
-                            }
-                        }
-                        Message::Ping(data) => {
-                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
-                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                                    "Failed to send pong: {}",
-                                    e
-                                ))
-                            })?;
-                        }
-                        Message::Close(_) => {
-                            info!("OKX WebSocket connection closed by server");
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(Some(Err(e))) => {
-                    error!("OKX WebSocket error: {}", e);
-                    break;
-                }
-                Ok(None) => {
-                    info!("OKX WebSocket stream ended");
-                    break;
-                }
-                Err(_) => {
-                    warn!("OKX WebSocket timeout, sending ping");
-                    ws_stream
-                        .send(Message::Text("ping".into()))
-                        .await
-                        .map_err(|e| {
-                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                                "Failed to send ping: {}",
-                                e
-                            ))
-                        })?;
-                }
-            }
-
-            let current_status = status.read().await;
-            if *current_status == ConnectionStatus::Disconnected {
-                break;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn handle_text_message(
-        text: &str,
-        event_sender: &broadcast::Sender<ConnectionEvent>,
-    ) -> Result<()> {
-        debug!("Received OKX message: {}", text);
-
-        if text == "pong" {
-            return Ok(());
-        }
-
-        if let Ok(response) = serde_json::from_str::<OkxWsResponse>(text) {
-            if let Some(event) = &response.event {
-                if event == "subscribe" {
-                    debug!("OKX subscription confirmed: {:?}", response);
-                } else if event == "error" {
-                    warn!(
-                        "OKX error: code={:?}, msg={:?}",
-                        response.code, response.msg
-                    );
-                }
-            }
-            return Ok(());
-        }
-
-        if let Ok(market_data) = serde_json::from_str::<OkxMarketData>(text) {
-            if market_data.arg.channel.starts_with("books") {
-                if let Ok(order_book) = Self::parse_orderbook_message(&market_data) {
-                    let event = ConnectionEvent::MarketData(MarketDataEvent::OrderBook {
-                        exchange: ExchangeId::OKX,
-                        order_book,
-                        timestamp: chrono::Utc::now(),
-                    });
-                    let _ = event_sender.send(event);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn parse_orderbook_message(market_data: &OkxMarketData) -> Result<OrderBook> {
-        let data = market_data.data.first().ok_or_else(|| {
-            arbitrage_core::ArbitrageError::ExchangeConnection("No data in message".to_string())
-        })?;
-
-        let symbol = Self::symbol_from_okx_static(&market_data.arg.inst_id)?;
-
-        let asks_data = data["asks"].as_array().ok_or_else(|| {
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
-        })?;
-        let bids_data = data["bids"].as_array().ok_or_else(|| {
-            arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
-        })?;
-
-        if asks_data.is_empty() {
-            warn!("OKX WebSocket received empty asks for {}", symbol);
-        }
-        if bids_data.is_empty() {
-            warn!("OKX WebSocket received empty bids for {}", symbol);
-        }
-
-        let mut asks = Vec::new();
-        for ask in asks_data.iter().take(50) {
-            if let Some(ask_array) = ask.as_array() {
-                if ask_array.len() >= 2 {
-                    let price = parse_decimal(&ask_array[0])?;
-                    let quantity = parse_decimal(&ask_array[1])?;
-                    asks.push(OrderBookLevel { price, quantity });
-                }
-            }
-        }
-
-        let mut bids = Vec::new();
-        for bid in bids_data.iter().take(50) {
-            if let Some(bid_array) = bid.as_array() {
-                if bid_array.len() >= 2 {
-                    let price = parse_decimal(&bid_array[0])?;
-                    let quantity = parse_decimal(&bid_array[1])?;
-                    bids.push(OrderBookLevel { price, quantity });
-                }
-            }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "OKX orderbook has empty side for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
-        }
-
-        let timestamp = if let Some(ts_str) = data["ts"].as_str() {
-            if let Ok(ts) = ts_str.parse::<i64>() {
-                chrono::DateTime::from_timestamp_millis(ts).unwrap_or_else(chrono::Utc::now)
-            } else {
-                chrono::Utc::now()
-            }
-        } else {
-            chrono::Utc::now()
-        };
-
-        Ok(OrderBook {
-            exchange: ExchangeId::OKX,
-            symbol,
-            bids,
-            asks,
-            timestamp,
-            sequence: data["seqId"].as_u64(),
-        })
-    }
-
-    fn symbol_to_okx_static(symbol: &Symbol) -> String {
-        format_symbol(symbol, SymbolFormat::Dash)
-    }
-
-    fn symbol_from_okx_static(okx_symbol: &str) -> Result<Symbol> {
-        parse_symbol(okx_symbol, SymbolFormat::Dash)
-    }
-
     pub fn parse_order_book(&self, data: &serde_json::Value, symbol: &Symbol) -> Result<OrderBook> {
         let asks_data = data["asks"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
@@ -1061,14 +683,7 @@ impl OKXConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        if asks_data.is_empty() {
-            warn!("OKX REST API returned empty asks for {}", symbol);
-        }
-        if bids_data.is_empty() {
-            warn!("OKX REST API returned empty bids for {}", symbol);
-        }
-
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for ask in asks_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
@@ -1082,7 +697,7 @@ impl OKXConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.base.config.order_book_depth as usize);
         for bid in bids_data
             .iter()
             .take(self.base.config.order_book_depth as usize)
@@ -1094,15 +709,6 @@ impl OKXConnector {
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "OKX orderbook parsing resulted in empty data for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
         }
 
         let timestamp = if let Some(ts_str) = data["ts"].as_str() {

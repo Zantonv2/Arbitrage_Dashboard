@@ -1,3 +1,4 @@
+use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use arbitrage_core::types::Symbol;
 use dashmap::DashMap;
 use dashmap::DashSet;
@@ -114,7 +115,7 @@ pub struct WebSocketPool {
 impl WebSocketPool {
     pub async fn connect(url: &str) -> Result<Self, String> {
         let (message_sender, mut message_receiver) = mpsc::unbounded_channel::<WebSocketMessage>();
-        let (event_sender, _) = broadcast::channel(1000);
+        let (event_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         let inner = Arc::new(WebSocketPoolInner {
             url: url.to_string(),

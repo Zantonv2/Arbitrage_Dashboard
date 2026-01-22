@@ -54,42 +54,58 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExchangeId {
     /// OKX - Spot + Futures + Options (Tier 1)
+    /// Leading exchange with excellent API reliability and liquidity
     OKX,
     /// ByBit - Spot + Futures + Options (Tier 1)
+    /// Popular derivatives exchange with fast execution
     ByBit,
     /// MEXC - Spot + Futures (Tier 1)
+    /// Global exchange with broad asset coverage
     MEXC,
     /// Gate.io - Spot + Futures (Tier 2)
+    /// Established exchange with comprehensive trading features
     GateIo,
     /// Bitstamp - Spot with fiat pairs (Tier 2)
+    /// Long-standing European exchange with fiat on/off ramps
     Bitstamp,
     /// Kraken - Spot + Futures with fiat pairs (Tier 2)
+    /// US-based exchange with strong regulatory compliance
     Kraken,
-    /// Former Huobi (Legacy)
+    /// HTX (formerly Huobi) - Legacy exchange
+    /// Maintained for backward compatibility
     HTX,
-    /// BingX (Legacy)
+    /// BingX - Legacy exchange
+    /// Maintained for backward compatibility
     BingX,
-    /// Hyperliquid (Legacy)
+    /// Hyperliquid - Legacy exchange
+    /// Maintained for backward compatibility
     Hyperliquid,
-    /// KuCoin (Legacy)
+    /// KuCoin - Legacy exchange
+    /// Maintained for backward compatibility
     KuCoin,
-    /// Bitget (Legacy)
+    /// Bitget - Legacy exchange
+    /// Maintained for backward compatibility
     Bitget,
-    /// Binance (Legacy)
+    /// Binance - Legacy exchange
+    /// Maintained for backward compatibility
     Binance,
-    /// Coinbase (Legacy)
+    /// Coinbase - Legacy exchange
+    /// Maintained for backward compatibility
     Coinbase,
 }
 
 impl std::fmt::Display for ExchangeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            // Tier 1 exchanges - primary arbitrage targets with highest liquidity
             ExchangeId::OKX => write!(f, "okx"),
             ExchangeId::ByBit => write!(f, "bybit"),
             ExchangeId::MEXC => write!(f, "mexc"),
+            // Tier 2 exchanges - secondary targets with solid liquidity
             ExchangeId::GateIo => write!(f, "gateio"),
             ExchangeId::Bitstamp => write!(f, "bitstamp"),
             ExchangeId::Kraken => write!(f, "kraken"),
+            // Legacy exchanges - maintained for backward compatibility
             ExchangeId::HTX => write!(f, "htx"),
             ExchangeId::BingX => write!(f, "bingx"),
             ExchangeId::Hyperliquid => write!(f, "hyperliquid"),
@@ -106,12 +122,15 @@ impl std::str::FromStr for ExchangeId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            // Tier 1 exchange mappings - primary arbitrage targets
             "okx" => Ok(ExchangeId::OKX),
             "bybit" => Ok(ExchangeId::ByBit),
             "mexc" => Ok(ExchangeId::MEXC),
+            // Tier 2 exchange mappings (including alternative names)
             "gateio" | "gate.io" => Ok(ExchangeId::GateIo),
             "bitstamp" => Ok(ExchangeId::Bitstamp),
             "kraken" => Ok(ExchangeId::Kraken),
+            // Legacy exchange mappings
             "htx" => Ok(ExchangeId::HTX),
             "bingx" => Ok(ExchangeId::BingX),
             "hyperliquid" => Ok(ExchangeId::Hyperliquid),
@@ -518,7 +537,10 @@ impl OrderBook {
             _ => false,
         };
 
-        bids_sorted && asks_sorted && spread_valid
+        let no_zero_quantities = self.bids.iter().all(|l| l.quantity > Decimal::ZERO)
+            && self.asks.iter().all(|l| l.quantity > Decimal::ZERO);
+
+        bids_sorted && asks_sorted && spread_valid && no_zero_quantities
     }
 
     /// Calculates Volume-Weighted Average Price (VWAP) for buying a given quantity.
@@ -1183,6 +1205,8 @@ pub mod exchange_constants {
     ];
 }
 
+use super::constants::BASIS_POINTS_DIVISOR;
+
 /// Calculates profit in basis points from buy and sell prices.
 ///
 /// # Arguments
@@ -1199,5 +1223,5 @@ pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i
         return None;
     }
     let profit_ratio = (sell_price - buy_price) / buy_price;
-    (profit_ratio * Decimal::from(10000)).to_i32()
+    (profit_ratio * Decimal::from(BASIS_POINTS_DIVISOR)).to_i32()
 }

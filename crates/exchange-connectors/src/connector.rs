@@ -134,7 +134,7 @@ pub trait ExchangeConnector: Send + Sync {
     async fn place_order(&self, order: &OrderRequest) -> Result<OrderResponse>;
 
     /// Cancel an existing order
-    async fn cancel_order(&self, order_id: &str) -> Result<CancelResponse>;
+    async fn cancel_order(&self, symbol: &Symbol, order_id: &str) -> Result<CancelResponse>;
 
     /// Get order status
     async fn get_order_status(&self, order_id: &str) -> Result<OrderStatus>;

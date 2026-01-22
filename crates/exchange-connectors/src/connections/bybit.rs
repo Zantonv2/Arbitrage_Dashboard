@@ -1,3 +1,4 @@
+use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use crate::connector::{
     ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus, TickerData,
 };
@@ -32,8 +33,7 @@ struct BybitSubscription {
 }
 
 /// ByBit WebSocket response message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct BybitWsResponse {
     success: Option<bool>,
     ret_msg: Option<String>,
@@ -45,9 +45,6 @@ struct BybitWsResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct BybitMarketData {
     topic: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    data_type: String,
     ts: u64,
     data: Value,
     cts: Option<u64>,
@@ -61,7 +58,6 @@ pub struct BybitConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
 }
@@ -83,7 +79,7 @@ impl BybitConnector {
             ..Default::default()
         };
 
-        let (event_sender, _) = broadcast::channel(1000);
+        let (event_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let client = Client::new();
         let stats = ConnectorStats {
             exchange: ExchangeId::ByBit,
@@ -141,7 +137,7 @@ impl ExchangeConnector for BybitConnector {
 
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let order_book_json = parse_json_with_retry(
             &bytes,
             ExchangeId::ByBit,
             "fetch_order_book",
@@ -149,7 +145,7 @@ impl ExchangeConnector for BybitConnector {
         )
         .await?;
 
-        if let Some(result) = data["result"].as_object() {
+        if let Some(result) = order_book_json["result"].as_object() {
             return self.parse_order_book(result, symbol);
         }
 
@@ -165,7 +161,7 @@ impl ExchangeConnector for BybitConnector {
         );
         let response = self.client.get(&url).send().await?;
         let bytes = response.bytes().await?;
-        let data = parse_json_with_retry(
+        let symbols_json = parse_json_with_retry(
             &bytes,
             ExchangeId::ByBit,
             "fetch_symbols",
@@ -173,8 +169,8 @@ impl ExchangeConnector for BybitConnector {
         )
         .await?;
 
-        let mut symbols = Vec::new();
-        if let Some(result) = data["result"].as_object() {
+        let mut symbols = Vec::with_capacity(512);
+        if let Some(result) = symbols_json["result"].as_object() {
             if let Some(list) = result["list"].as_array() {
                 for item in list {
                     if let Some(symbol_str) = item["symbol"].as_str() {
@@ -189,7 +185,7 @@ impl ExchangeConnector for BybitConnector {
     }
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
-        let mut tickers = HashMap::new();
+        let mut tickers = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let bybit_symbol = self.symbol_to_bybit(symbol);
             let url = format!(
@@ -218,7 +214,7 @@ impl ExchangeConnector for BybitConnector {
         &self,
         symbols: &[Symbol],
     ) -> Result<HashMap<Symbol, FundingRate>> {
-        let mut funding_rates = HashMap::new();
+        let mut funding_rates = HashMap::with_capacity(symbols.len());
         for symbol in symbols {
             let bybit_symbol = self.symbol_to_bybit(symbol);
             let url = format!(
@@ -466,14 +462,24 @@ impl ExchangeConnector for BybitConnector {
         }
     }
 
-    async fn cancel_order(&self, order_id: &str) -> Result<crate::connector::CancelResponse> {
+    async fn cancel_order(
+        &self,
+        symbol: &Symbol,
+        order_id: &str,
+    ) -> Result<crate::connector::CancelResponse> {
         use crate::connector::{CancelResponse, OrderStatusType};
 
         let url = format!("{}/v5/order/cancel", self.config.rest_url);
 
+        let bybit_symbol = self.symbol_to_bybit(symbol);
+        debug_assert!(
+            !bybit_symbol.is_empty(),
+            "Symbol should not be empty for cancel_order"
+        );
+
         let cancel_request = serde_json::json!({
             "category": "spot",
-            "symbol": "BTCUSDT", // This should be dynamic based on the order
+            "symbol": bybit_symbol,
             "orderId": order_id,
         });
 
@@ -646,7 +652,7 @@ impl ExchangeConnector for BybitConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut balances = std::collections::HashMap::new();
+        let mut balances = std::collections::HashMap::with_capacity(64);
 
         if let Some(result) = response_json
             .get("result")
@@ -720,7 +726,7 @@ impl ExchangeConnector for BybitConnector {
             arbitrage_core::ArbitrageError::Network(format!("Failed to parse JSON: {}", e))
         })?;
 
-        let mut orders = Vec::new();
+        let mut orders = Vec::with_capacity(64);
 
         if let Some(list) = response_json
             .get("result")
@@ -811,6 +817,8 @@ impl BybitConnector {
         let mut backoff =
             ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
 
+        debug_assert!(backoff.attempt() == 0, "Backoff should start at attempt 0");
+
         loop {
             match Self::connect_websocket(&ws_url).await {
                 Ok((ws_stream, _)) => {
@@ -821,12 +829,14 @@ impl BybitConnector {
                     *status.write().await = ConnectionStatus::Connected;
 
                     // Send status change event
-                    let _ = event_sender.send(ConnectionEvent::StatusChange {
+                    if let Err(e) = event_sender.send(ConnectionEvent::StatusChange {
                         exchange: ExchangeId::ByBit,
                         old_status: ConnectionStatus::Connecting,
                         new_status: ConnectionStatus::Connected,
                         timestamp: chrono::Utc::now(),
-                    });
+                    }) {
+                        error!("Failed to send ByBit status change event: {}", e);
+                    }
 
                     // Handle WebSocket messages
                     if let Err(e) = Self::handle_websocket_connection(
@@ -850,11 +860,13 @@ impl BybitConnector {
                         ConnectionStatus::Error("WebSocket connection failed".to_string());
 
                     // Send error event
-                    let _ = event_sender.send(ConnectionEvent::Error {
+                    if let Err(e) = event_sender.send(ConnectionEvent::Error {
                         exchange: ExchangeId::ByBit,
                         error: format!("WebSocket connection failed: {}", e),
                         timestamp: chrono::Utc::now(),
-                    });
+                    }) {
+                        error!("Failed to send ByBit error event: {}", e);
+                    }
                 }
             }
 
@@ -902,13 +914,13 @@ impl BybitConnector {
         _config: &ConnectorConfig,
     ) -> Result<()> {
         let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::new();
+        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
 
         loop {
             // Check for new subscriptions every 5 seconds
             if last_subscription_check.elapsed() > Duration::from_secs(5) {
                 let symbols = subscribed_symbols.read().await;
-                let mut new_topics = Vec::new();
+                let mut new_topics = Vec::with_capacity(symbols.len());
 
                 for symbol in symbols.iter() {
                     let bybit_symbol = Self::symbol_to_bybit_static(symbol);
@@ -1043,7 +1055,9 @@ impl BybitConnector {
                         timestamp: chrono::Utc::now(),
                     });
 
-                    let _ = event_sender.send(event);
+                    if let Err(e) = event_sender.send(event) {
+                        error!("Failed to send ByBit market data event: {}", e);
+                    }
                 }
             }
         }
@@ -1055,17 +1069,14 @@ impl BybitConnector {
     fn parse_orderbook_message(market_data: &BybitMarketData) -> Result<OrderBook> {
         let data = &market_data.data;
 
+        // Extract symbol from topic (e.g., "orderbook.50.BTCUSDT" -> "BTCUSDT")
         let topic_parts: Vec<&str> = market_data.topic.split('.').collect();
         if topic_parts.len() < 3 {
             return Err(arbitrage_core::ArbitrageError::ExchangeConnection(
                 "Invalid topic format".to_string(),
             ));
         }
-        let bybit_symbol = topic_parts.get(2).copied().ok_or_else(|| {
-            arbitrage_core::ArbitrageError::ExchangeConnection(
-                "Missing symbol in topic".to_string(),
-            )
-        })?;
+        let bybit_symbol = topic_parts[2];
         let symbol = Self::symbol_from_bybit_static(bybit_symbol)?;
 
         let asks_data = data["a"].as_array().ok_or_else(|| {
@@ -1075,16 +1086,13 @@ impl BybitConnector {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        if asks_data.is_empty() {
-            warn!("ByBit WebSocket received empty asks for {}", symbol);
-        }
-        if bids_data.is_empty() {
-            warn!("ByBit WebSocket received empty bids for {}", symbol);
-        }
-
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(50);
         for ask in asks_data.iter().take(50) {
             if let Some(ask_array) = ask.as_array() {
+                debug_assert!(
+                    ask_array.len() >= 2,
+                    "Ask array should have at least 2 elements"
+                );
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
                     let quantity = parse_decimal(&ask_array[1])?;
@@ -1093,24 +1101,19 @@ impl BybitConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(50);
         for bid in bids_data.iter().take(50) {
             if let Some(bid_array) = bid.as_array() {
+                debug_assert!(
+                    bid_array.len() >= 2,
+                    "Bid array should have at least 2 elements"
+                );
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;
                     let quantity = parse_decimal(&bid_array[1])?;
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "ByBit orderbook has empty side for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
         }
 
         let timestamp = if let Some(cts) = market_data.cts {
@@ -1120,15 +1123,13 @@ impl BybitConnector {
                 .unwrap_or_else(chrono::Utc::now)
         };
 
-        let sequence = data.get("u").and_then(|v| v.as_u64());
-
         Ok(OrderBook {
             exchange: ExchangeId::ByBit,
             symbol,
             bids,
             asks,
             timestamp,
-            sequence,
+            sequence: data["u"].as_u64(),
         })
     }
 
@@ -1147,23 +1148,20 @@ impl BybitConnector {
         data: &serde_json::Map<String, serde_json::Value>,
         symbol: &Symbol,
     ) -> Result<OrderBook> {
-        let asks_data = data.get("a").and_then(|v| v.as_array()).ok_or_else(|| {
+        let asks_data = data["a"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing asks data".to_string())
         })?;
-        let bids_data = data.get("b").and_then(|v| v.as_array()).ok_or_else(|| {
+        let bids_data = data["b"].as_array().ok_or_else(|| {
             arbitrage_core::ArbitrageError::ExchangeConnection("Missing bids data".to_string())
         })?;
 
-        if asks_data.is_empty() {
-            warn!("ByBit REST API returned empty asks for {}", symbol);
-        }
-        if bids_data.is_empty() {
-            warn!("ByBit REST API returned empty bids for {}", symbol);
-        }
-
-        let mut asks = Vec::new();
+        let mut asks = Vec::with_capacity(self.config.order_book_depth as usize);
         for ask in asks_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(ask_array) = ask.as_array() {
+                debug_assert!(
+                    ask_array.len() >= 2,
+                    "Ask array should have at least 2 elements"
+                );
                 if ask_array.len() >= 2 {
                     let price = parse_decimal(&ask_array[0])?;
                     let quantity = parse_decimal(&ask_array[1])?;
@@ -1172,24 +1170,19 @@ impl BybitConnector {
             }
         }
 
-        let mut bids = Vec::new();
+        let mut bids = Vec::with_capacity(self.config.order_book_depth as usize);
         for bid in bids_data.iter().take(self.config.order_book_depth as usize) {
             if let Some(bid_array) = bid.as_array() {
+                debug_assert!(
+                    bid_array.len() >= 2,
+                    "Bid array should have at least 2 elements"
+                );
                 if bid_array.len() >= 2 {
                     let price = parse_decimal(&bid_array[0])?;
                     let quantity = parse_decimal(&bid_array[1])?;
                     bids.push(OrderBookLevel { price, quantity });
                 }
             }
-        }
-
-        if asks.is_empty() || bids.is_empty() {
-            warn!(
-                "ByBit orderbook parsing resulted in empty data for {}: bids={}, asks={}",
-                symbol,
-                bids.len(),
-                asks.len()
-            );
         }
 
         Ok(OrderBook {

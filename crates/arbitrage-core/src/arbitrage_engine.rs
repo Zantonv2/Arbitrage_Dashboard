@@ -19,6 +19,7 @@
 use crate::{
     confidence_scorer::{ConfidenceScorer, NetSpreadResult},
     config::Config,
+    constants::BROADCAST_CHANNEL_CAPACITY,
     execution_preparer::ExecutionPreparer,
     normalizer::Normalizer,
     size_calculator::SizeCalculator,
@@ -146,7 +147,7 @@ impl ArbitrageEngine {
         execution_preparer: Arc<ExecutionPreparer>,
         storage: Arc<StorageService>,
     ) -> Result<(Self, broadcast::Receiver<Signal>)> {
-        let (signal_sender, signal_receiver) = broadcast::channel(1000);
+        let (signal_sender, signal_receiver) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         let engine = Self {
             order_books: Arc::new(DashMap::new()),
@@ -258,6 +259,23 @@ impl ArbitrageEngine {
     /// 2. Run each enabled strategy's detect() method
     /// 3. Process each raw signal through the validation pipeline
     /// 4. Emit validated signals
+    ///
+    /// # Pipeline Flow
+    /// ```text
+    /// Market Data → Cache → Strategy Detection → Deduplicate → Fee Calculation →
+    /// Risk Validation → Size Calculation → Confidence Scoring → Threshold Check →
+    /// Store → Emit Signal
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Run detection across all enabled strategies
+    /// let signals = engine.detect_opportunities(&registry).await?;
+    /// for signal in signals {
+    ///     println!("Found opportunity: {:?}", signal);
+    /// }
+    /// ```
     pub async fn detect_opportunities(&self, registry: &StrategyRegistry) -> Result<Vec<Signal>> {
         let start_time = std::time::Instant::now();
 
@@ -347,6 +365,21 @@ impl ArbitrageEngine {
     /// 7. Confidence scoring (multi-factor scoring)
     /// 8. Threshold check (min profit, min confidence)
     /// 9. Storage and emission
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // A simplified pipeline flow:
+    /// // 1. Filter signal based on strategy rules
+    /// // 2. Check if we've recently seen this opportunity
+    /// // 3. Validate exchanges are healthy
+    /// // 4. Calculate fees and net spread
+    /// // 5. Check risk limits
+    /// // 6. Calculate order size from order books
+    /// // 7. Score confidence based on market conditions
+    /// // 8. Check against thresholds
+    /// // 9. Store and emit the signal
+    /// ```
     async fn process_signal_pipeline(
         &self,
         raw_signal: RawSignal,
@@ -494,6 +527,20 @@ impl ArbitrageEngine {
     // ========================================================================
 
     /// Build market bundle from cached data
+    ///
+    /// Collects all cached market data (order books, tickers, funding rates)
+    /// into a single [`MarketBundle`] for strategy detection.
+    ///
+    /// # Returns
+    /// A new [`MarketBundle`] containing all cached market data
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Build market bundle before running detection
+    /// let market_bundle = engine.build_market_bundle();
+    /// let order_books_count = market_bundle.order_books.len();
+    /// ```
     fn build_market_bundle(&self) -> MarketBundle {
         let mut bundle = MarketBundle::new();
 
@@ -797,5 +844,843 @@ impl ArbitrageEngine {
         self.funding_rates
             .get(&(exchange, symbol))
             .map(|v| Arc::clone(&v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::confidence_scorer::{ConfidenceConfig, ConfidenceScorer};
+    use crate::config::Config;
+    use crate::execution_preparer::{ExecutionConfig, ExecutionPreparer};
+    use crate::normalizer::Normalizer;
+    use crate::size_calculator::SizeCalculator;
+    use crate::size_calculator::SizeConfig;
+    use crate::storage::{StorageConfig, StorageService};
+    use crate::strategies::{FilterContext, MarketBundle, RawSignal, Ticker, TradeLeg};
+    use crate::types::{ExchangeId, OrderBook, OrderBookLevel, Side, Symbol};
+    use rust_decimal::Decimal;
+    use std::sync::Arc;
+
+    fn create_test_config() -> Config {
+        Config::default()
+    }
+
+    fn create_test_symbol() -> Symbol {
+        Symbol::new("BTC", "USDT")
+    }
+
+    fn create_test_order_book(exchange: ExchangeId, symbol: &Symbol) -> OrderBook {
+        OrderBook::new(
+            exchange,
+            symbol.clone(),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        )
+    }
+
+    fn create_test_ticker(
+        exchange: ExchangeId,
+        symbol: &Symbol,
+        bid: Decimal,
+        ask: Decimal,
+    ) -> Ticker {
+        Ticker::new(
+            exchange,
+            symbol.clone(),
+            bid,
+            ask,
+            (bid + ask) / Decimal::from(2),
+        )
+    }
+
+    fn create_test_raw_signal(
+        strategy_id: &str,
+        symbol: Arc<Symbol>,
+        buy_exchange: ExchangeId,
+        sell_exchange: ExchangeId,
+        profit_bps: i32,
+    ) -> RawSignal {
+        let mut signal = RawSignal::new(strategy_id, symbol.clone());
+        signal.legs.push(TradeLeg::new(
+            buy_exchange,
+            symbol.clone(),
+            Side::Buy,
+            Decimal::from(50000),
+            Decimal::from(1),
+        ));
+        signal.legs.push(TradeLeg::new(
+            sell_exchange,
+            symbol,
+            Side::Sell,
+            Decimal::from(50010),
+            Decimal::from(1),
+        ));
+        signal.set_profit_bps(profit_bps);
+        signal
+    }
+
+    async fn create_test_engine() -> (ArbitrageEngine, broadcast::Receiver<Signal>) {
+        let config = create_test_config();
+        let normalizer = Arc::new(Normalizer::new());
+        let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
+        let size_calculator = Arc::new(SizeCalculator::new(SizeConfig::default()));
+        let execution_preparer = Arc::new(ExecutionPreparer::new(ExecutionConfig::default()));
+
+        let storage_config = StorageConfig {
+            database_path: ":memory:".to_string(),
+            ..Default::default()
+        };
+        let storage = Arc::new(StorageService::new(storage_config).await.unwrap());
+
+        ArbitrageEngine::new(
+            config,
+            normalizer,
+            confidence_scorer,
+            size_calculator,
+            execution_preparer,
+            storage,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_engine_creation() {
+        let (engine, _) = create_test_engine().await;
+        let stats = engine.get_stats();
+
+        assert_eq!(stats.order_books_count, 0);
+        assert_eq!(stats.tickers_count, 0);
+        assert_eq!(stats.funding_rates_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_order_book() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let order_book = OrderBook::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+
+        let result = engine.update_order_book(order_book).await;
+        assert!(result.is_ok());
+
+        let stored_book = engine.get_order_book(ExchangeId::ByBit, Arc::clone(&symbol));
+        assert!(stored_book.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_order_book_invalid() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = create_test_symbol();
+
+        let order_book = OrderBook::new(
+            ExchangeId::ByBit,
+            symbol,
+            vec![],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+
+        let result = engine.update_order_book(order_book).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_ticker() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let ticker = Ticker::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            Decimal::from(50000),
+            Decimal::from(50010),
+            Decimal::from(50005),
+        );
+
+        let result = engine.update_ticker(ticker).await;
+        assert!(result.is_ok());
+
+        let stored_ticker = engine.get_ticker(ExchangeId::ByBit, Arc::clone(&symbol));
+        assert!(stored_ticker.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_funding_rate() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+        let now = Utc::now();
+
+        let funding_rate = FundingRate {
+            exchange: ExchangeId::ByBit,
+            symbol: (*symbol).clone(),
+            rate: Decimal::from(100), // 0.01% per 8h
+            next_funding: now + Duration::hours(8),
+            predicted_rate: Some(Decimal::from(110)),
+            timestamp: now,
+        };
+
+        let result = engine.update_funding_rate(funding_rate).await;
+        assert!(result.is_ok());
+
+        let stored_rate = engine.get_funding_rate(ExchangeId::ByBit, Arc::clone(&symbol));
+        assert!(stored_rate.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_order_book_not_found() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let result = engine.get_order_book(ExchangeId::ByBit, symbol);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_ticker_not_found() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let result = engine.get_ticker(ExchangeId::ByBit, symbol);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_funding_rate_not_found() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let result = engine.get_funding_rate(ExchangeId::ByBit, symbol);
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_subscribe() {
+        let (engine, _) = create_test_engine().await;
+        let mut receiver = engine.subscribe();
+
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_set_execution_mode_manual() {
+        let (mut engine, _) = create_test_engine().await;
+        engine.set_execution_mode(ExecutionMode::Manual);
+
+        assert_eq!(engine.get_execution_mode(), ExecutionMode::Manual);
+    }
+
+    #[tokio::test]
+    async fn test_set_execution_mode_auto() {
+        let (mut engine, _) = create_test_engine().await;
+        let threshold = Decimal::from(80);
+        engine.set_execution_mode(ExecutionMode::Auto {
+            confidence_threshold: threshold,
+        });
+
+        match engine.get_execution_mode() {
+            ExecutionMode::Auto {
+                confidence_threshold,
+            } => {
+                assert_eq!(confidence_threshold, threshold);
+            }
+            _ => panic!("Expected Auto mode"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_stale_data() {
+        let (engine, _) = create_test_engine().await;
+
+        engine.cleanup_stale_data();
+
+        let stats = engine.get_stats();
+        assert!(stats.order_books_count == 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_all_order_books_empty() {
+        let (engine, _) = create_test_engine().await;
+
+        let books = engine.get_all_order_books();
+        assert!(books.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_all_order_books_with_data() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let order_book = OrderBook::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        engine.update_order_book(order_book).await.unwrap();
+
+        let books = engine.get_all_order_books();
+        assert_eq!(books.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_detect_opportunities_no_market_data() {
+        let (engine, _) = create_test_engine().await;
+        let registry = StrategyRegistry::new();
+
+        let result = engine.detect_opportunities(&registry).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_detect_opportunities_with_tickers() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let ticker = Ticker::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            Decimal::from(50000),
+            Decimal::from(50010),
+            Decimal::from(50005),
+        );
+        engine.update_ticker(ticker).await.unwrap();
+
+        let registry = StrategyRegistry::new();
+        let result = engine.detect_opportunities(&registry).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_build_market_bundle_empty() {
+        let (engine, _) = create_test_engine().await;
+
+        let bundle = engine.build_market_bundle();
+        assert!(bundle.order_books.is_empty());
+        assert!(bundle.tickers.is_empty());
+        assert!(bundle.funding_rates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_build_market_bundle_with_data() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let order_book = OrderBook::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        engine.update_order_book(order_book).await.unwrap();
+
+        let ticker = Ticker::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            Decimal::from(50000),
+            Decimal::from(50010),
+            Decimal::from(50005),
+        );
+        engine.update_ticker(ticker).await.unwrap();
+
+        let bundle = engine.build_market_bundle();
+        assert_eq!(bundle.order_books.len(), 1);
+        assert_eq!(bundle.tickers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_build_filter_context() {
+        let (engine, _) = create_test_engine().await;
+
+        let context = engine.build_filter_context().unwrap();
+        assert!(context.allowed_exchanges.contains(&ExchangeId::OKX));
+        assert!(context.allowed_exchanges.contains(&ExchangeId::ByBit));
+    }
+
+    #[tokio::test]
+    async fn test_engine_stats_default() {
+        let (engine, _) = create_test_engine().await;
+
+        let stats = engine.get_stats();
+        assert_eq!(stats.signals_detected, 0);
+        assert_eq!(stats.signals_filtered, 0);
+        assert_eq!(stats.signals_emitted, 0);
+        assert!(stats.last_detection_time.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_opportunity_key_equality() {
+        let symbol = Symbol::new("BTC", "USDT");
+        let key1 = OpportunityKey {
+            symbol: symbol.clone(),
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+        let key2 = OpportunityKey {
+            symbol,
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+
+        assert_eq!(key1, key2);
+    }
+
+    #[tokio::test]
+    async fn test_cached_signal_structure() {
+        let cached = CachedSignal {
+            last_updated: Utc::now(),
+            profit_bps: 15,
+        };
+
+        assert_eq!(cached.profit_bps, 15);
+    }
+
+    #[tokio::test]
+    async fn test_execution_mode_default() {
+        assert_eq!(ExecutionMode::default(), ExecutionMode::Manual);
+    }
+
+    #[tokio::test]
+    async fn test_should_emit_signal_first_time() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Symbol::new("BTC", "USDT");
+
+        let key = OpportunityKey {
+            symbol,
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+
+        let result = engine.should_emit_signal(&key, 15);
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_should_emit_signal_within_threshold() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Symbol::new("BTC", "USDT");
+
+        let key = OpportunityKey {
+            symbol: symbol.clone(),
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+
+        let signal = Signal::new(
+            symbol,
+            ExchangeId::ByBit,
+            ExchangeId::OKX,
+            Decimal::from(50000),
+            Decimal::from(50015),
+            Utc::now(),
+        );
+
+        engine.update_signal_cache(&key, &signal, 15);
+        let result = engine.should_emit_signal(&key, 16);
+
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_should_emit_signal_exceeds_threshold() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Symbol::new("BTC", "USDT");
+
+        let key = OpportunityKey {
+            symbol: symbol.clone(),
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+
+        let signal = Signal::new(
+            symbol.clone(),
+            ExchangeId::ByBit,
+            ExchangeId::OKX,
+            Decimal::from(50000),
+            Decimal::from(50015),
+            Utc::now(),
+        );
+
+        engine.update_signal_cache(&key, &signal, 15);
+        let result = engine.should_emit_signal(&key, 25);
+
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_engine_with_different_configs() {
+        let mut config = create_test_config();
+        config.trading.min_profit_threshold_percent = Decimal::new(2, 2); // 0.02
+
+        let normalizer = Arc::new(Normalizer::new());
+        let confidence_scorer = Arc::new(ConfidenceScorer::new(ConfidenceConfig::default()));
+        let size_calculator = Arc::new(SizeCalculator::new(SizeConfig::default()));
+        let execution_preparer = Arc::new(ExecutionPreparer::new(ExecutionConfig::default()));
+
+        let storage_config = StorageConfig {
+            database_path: ":memory:".to_string(),
+            ..Default::default()
+        };
+        let storage = Arc::new(StorageService::new(storage_config).await.unwrap());
+
+        let (engine, _) = ArbitrageEngine::new(
+            config,
+            normalizer,
+            confidence_scorer,
+            size_calculator,
+            execution_preparer,
+            storage,
+        )
+        .unwrap();
+
+        let stats = engine.get_stats();
+        assert_eq!(stats.order_books_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_signal_cache_behavior() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Symbol::new("BTC", "USDT");
+
+        let key = OpportunityKey {
+            symbol: symbol.clone(),
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test_strategy".to_string(),
+        };
+
+        let signal = Signal::new(
+            symbol,
+            ExchangeId::ByBit,
+            ExchangeId::OKX,
+            Decimal::from(50000),
+            Decimal::from(50010),
+            Utc::now(),
+        );
+
+        assert!(engine.should_emit_signal(&key, 10));
+        engine.update_signal_cache(&key, &signal, 10);
+        assert!(!engine.should_emit_signal(&key, 12));
+        assert!(!engine.should_emit_signal(&key, 14));
+        assert!(engine.should_emit_signal(&key, 20));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_ticker_updates() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let ticker1 = create_test_ticker(
+            ExchangeId::ByBit,
+            &symbol,
+            Decimal::from(50000),
+            Decimal::from(50010),
+        );
+        let ticker2 = create_test_ticker(
+            ExchangeId::OKX,
+            &symbol,
+            Decimal::from(50005),
+            Decimal::from(50015),
+        );
+
+        engine.update_ticker(ticker1).await.unwrap();
+        engine.update_ticker(ticker2).await.unwrap();
+
+        let stored_ticker1 = engine.get_ticker(ExchangeId::ByBit, Arc::clone(&symbol));
+        let stored_ticker2 = engine.get_ticker(ExchangeId::OKX, Arc::clone(&symbol));
+
+        assert!(stored_ticker1.is_some());
+        assert!(stored_ticker2.is_some());
+        assert_eq!(stored_ticker1.unwrap().bid, Decimal::from(50000));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_order_book_updates() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let order_book1 = create_test_order_book(ExchangeId::ByBit, &symbol);
+        let order_book2 = create_test_order_book(ExchangeId::OKX, &symbol);
+
+        engine.update_order_book(order_book1).await.unwrap();
+        engine.update_order_book(order_book2).await.unwrap();
+
+        let stored_book1 = engine.get_order_book(ExchangeId::ByBit, Arc::clone(&symbol));
+        let stored_book2 = engine.get_order_book(ExchangeId::OKX, Arc::clone(&symbol));
+
+        assert!(stored_book1.is_some());
+        assert!(stored_book2.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_funding_rate_update_and_retrieval() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+        let now = Utc::now();
+
+        let funding_rate1 = FundingRate {
+            exchange: ExchangeId::ByBit,
+            symbol: (*symbol).clone(),
+            rate: Decimal::from(100),
+            next_funding: now + Duration::hours(8),
+            predicted_rate: Some(Decimal::from(110)),
+            timestamp: now,
+        };
+        let funding_rate2 = FundingRate {
+            exchange: ExchangeId::OKX,
+            symbol: (*symbol).clone(),
+            rate: Decimal::from(150),
+            next_funding: now + Duration::hours(8),
+            predicted_rate: Some(Decimal::from(160)),
+            timestamp: now,
+        };
+
+        engine.update_funding_rate(funding_rate1).await.unwrap();
+        engine.update_funding_rate(funding_rate2).await.unwrap();
+
+        let stored_rate1 = engine.get_funding_rate(ExchangeId::ByBit, Arc::clone(&symbol));
+        let stored_rate2 = engine.get_funding_rate(ExchangeId::OKX, Arc::clone(&symbol));
+
+        assert!(stored_rate1.is_some());
+        assert!(stored_rate2.is_some());
+        assert_eq!(stored_rate1.unwrap().rate, Decimal::from(100));
+    }
+
+    #[tokio::test]
+    async fn test_engine_stats_increment() {
+        let (engine, _) = create_test_engine().await;
+
+        engine.increment_stat("test_stat");
+        engine.increment_stat("test_stat");
+        engine.increment_stat("another_stat");
+
+        let stats = engine.get_stats();
+        assert_eq!(stats.signals_detected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_execution_mode_transitions() {
+        let (mut engine, _) = create_test_engine().await;
+
+        assert_eq!(engine.get_execution_mode(), ExecutionMode::Manual);
+
+        engine.set_execution_mode(ExecutionMode::Auto {
+            confidence_threshold: Decimal::from(75),
+        });
+        assert_eq!(
+            engine.get_execution_mode(),
+            ExecutionMode::Auto {
+                confidence_threshold: Decimal::from(75)
+            }
+        );
+
+        engine.set_execution_mode(ExecutionMode::Manual);
+        assert_eq!(engine.get_execution_mode(), ExecutionMode::Manual);
+
+        engine.set_execution_mode(ExecutionMode::Auto {
+            confidence_threshold: Decimal::from(90),
+        });
+        assert_eq!(
+            engine.get_execution_mode(),
+            ExecutionMode::Auto {
+                confidence_threshold: Decimal::from(90)
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_order_book_rejection() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = create_test_symbol();
+
+        let invalid_order_book = OrderBook::new(
+            ExchangeId::ByBit,
+            symbol,
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(0))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+
+        let result = engine.update_order_book(invalid_order_book).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_order_book_update_overwrites_existing() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let order_book1 = OrderBook::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        engine.update_order_book(order_book1).await.unwrap();
+
+        let order_book2 = OrderBook::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            vec![OrderBookLevel::new(Decimal::from(50100), Decimal::from(2))],
+            vec![OrderBookLevel::new(Decimal::from(50110), Decimal::from(2))],
+        );
+        engine.update_order_book(order_book2).await.unwrap();
+
+        let stored_book = engine.get_order_book(ExchangeId::ByBit, Arc::clone(&symbol));
+        assert!(stored_book.is_some());
+        assert_eq!(stored_book.unwrap().bids[0].price, Decimal::from(50100));
+    }
+
+    #[tokio::test]
+    async fn test_ticker_update_overwrites_existing() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let ticker1 = create_test_ticker(
+            ExchangeId::ByBit,
+            &symbol,
+            Decimal::from(50000),
+            Decimal::from(50010),
+        );
+        engine.update_ticker(ticker1).await.unwrap();
+
+        let ticker2 = create_test_ticker(
+            ExchangeId::ByBit,
+            &symbol,
+            Decimal::from(50100),
+            Decimal::from(50110),
+        );
+        engine.update_ticker(ticker2).await.unwrap();
+
+        let stored_ticker = engine.get_ticker(ExchangeId::ByBit, Arc::clone(&symbol));
+        assert!(stored_ticker.is_some());
+        assert_eq!(stored_ticker.unwrap().bid, Decimal::from(50100));
+    }
+
+    #[tokio::test]
+    async fn test_market_bundle_construction_with_all_data_types() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let order_book = OrderBook::new(
+            ExchangeId::ByBit,
+            (*symbol).clone(),
+            vec![OrderBookLevel::new(Decimal::from(50000), Decimal::from(1))],
+            vec![OrderBookLevel::new(Decimal::from(50010), Decimal::from(1))],
+        );
+        engine.update_order_book(order_book).await.unwrap();
+
+        let ticker = create_test_ticker(
+            ExchangeId::ByBit,
+            &symbol,
+            Decimal::from(50000),
+            Decimal::from(50010),
+        );
+        engine.update_ticker(ticker).await.unwrap();
+
+        let funding_rate = FundingRate {
+            exchange: ExchangeId::ByBit,
+            symbol: (*symbol).clone(),
+            rate: Decimal::from(100),
+            next_funding: Utc::now() + Duration::hours(8),
+            predicted_rate: Some(Decimal::from(110)),
+            timestamp: Utc::now(),
+        };
+        engine.update_funding_rate(funding_rate).await.unwrap();
+
+        let bundle = engine.build_market_bundle();
+        assert_eq!(bundle.order_books.len(), 1);
+        assert_eq!(bundle.tickers.len(), 1);
+        assert_eq!(bundle.funding_rates.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_filter_context_with_risk_config() {
+        let (engine, _) = create_test_engine().await;
+
+        let context = engine.build_filter_context().unwrap();
+        assert!(!context.allowed_exchanges.is_empty());
+        assert!(context.max_exposure > Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_opportunity_key_hash() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let symbol = Symbol::new("BTC", "USDT");
+        let key1 = OpportunityKey {
+            symbol: symbol.clone(),
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+        let key2 = OpportunityKey {
+            symbol: symbol.clone(),
+            buy_exchange: ExchangeId::ByBit,
+            sell_exchange: ExchangeId::OKX,
+            strategy_id: "test".to_string(),
+        };
+
+        let mut hasher1 = DefaultHasher::new();
+        key1.hash(&mut hasher1);
+        let hash1 = hasher1.finish();
+
+        let mut hasher2 = DefaultHasher::new();
+        key2.hash(&mut hasher2);
+        let hash2 = hasher2.finish();
+
+        assert_eq!(hash1, hash2);
+        assert_eq!(key1, key2);
+    }
+
+    #[tokio::test]
+    async fn test_engine_cleanup_with_empty_caches() {
+        let (engine, _) = create_test_engine().await;
+
+        engine.cleanup_stale_data();
+
+        let stats = engine.get_stats();
+        assert_eq!(stats.order_books_count, 0);
+        assert_eq!(stats.tickers_count, 0);
+        assert_eq!(stats.funding_rates_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_ticker_updates() {
+        let (engine, _) = create_test_engine().await;
+        let symbol = Arc::new(create_test_symbol());
+
+        let updates: Vec<_> = (0..10)
+            .map(|i| {
+                let exchange = if i % 2 == 0 {
+                    ExchangeId::ByBit
+                } else {
+                    ExchangeId::OKX
+                };
+                create_test_ticker(
+                    exchange,
+                    &symbol,
+                    Decimal::from(50000 + i * 10),
+                    Decimal::from(50010 + i * 10),
+                )
+            })
+            .collect();
+
+        for ticker in updates {
+            engine.update_ticker(ticker).await.unwrap();
+        }
+
+        let stats = engine.get_stats();
+        assert!(stats.tickers_count > 0);
     }
 }
