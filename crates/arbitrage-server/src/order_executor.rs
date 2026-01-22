@@ -72,7 +72,7 @@ impl OrderExecutor {
         }
     }
 
-    /// Execute an arbitrage opportunity
+    /// Execute an arbitrage opportunity using two-phase commit pattern
     pub async fn execute_arbitrage(
         &self,
         instruction: &ExecutionInstruction,
@@ -90,8 +90,24 @@ impl OrderExecutor {
         // Validate instruction
         self.validate_instruction(instruction).await?;
 
-        // Execute orders simultaneously
-        let execution_result = match self.execute_orders_simultaneously(instruction).await {
+        // Phase 1: Prepare - check if both exchanges are ready
+        let prepare_result = self.prepare_execution(instruction).await;
+        if let Err(e) = prepare_result {
+            error!("Execution preparation failed: {}", e);
+            return Ok(ExecutionResult {
+                signal_id: instruction.signal_id,
+                success: false,
+                buy_order: None,
+                sell_order: None,
+                actual_profit: None,
+                execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
+                error_message: Some(format!("Preparation failed: {}", e)),
+                rollback_performed: false,
+            });
+        }
+
+        // Phase 2: Commit - execute both orders simultaneously
+        let execution_result = match self.execute_orders_2pc(instruction).await {
             Ok(result) => result,
             Err(e) => {
                 error!("Execution failed: {}", e);
@@ -129,61 +145,51 @@ impl OrderExecutor {
         Ok(execution_result)
     }
 
-    /// Validate execution instruction
-    async fn validate_instruction(&self, instruction: &ExecutionInstruction) -> Result<()> {
-        // Check minimum profit threshold
-        if instruction.expected_profit < self.config.min_profit_threshold {
-            return Err(ArbitrageError::Execution(format!(
-                "Profit {:.4}% below threshold {:.4}%",
-                instruction.expected_profit * Decimal::from(100),
-                self.config.min_profit_threshold * Decimal::from(100)
-            )));
-        }
-
-        // Check position size limits
-        let position_value =
-            instruction.buy_order.quantity * instruction.buy_order.price.unwrap_or_default();
-        if position_value > self.config.max_position_size {
-            return Err(ArbitrageError::Execution(format!(
-                "Position size ${:.2} exceeds limit ${:.2}",
-                position_value, self.config.max_position_size
-            )));
-        }
-
-        // Validate exchanges are available
-        if !self
+    /// Phase 1: Prepare - Check if both exchanges are ready for execution
+    async fn prepare_execution(&self, instruction: &ExecutionInstruction) -> Result<()> {
+        // Check both exchanges are connected
+        let buy_connected = self
             .exchange_manager
             .is_exchange_connected(&instruction.buy_order.exchange)
-            .await
-        {
+            .await;
+            
+        let sell_connected = self
+            .exchange_manager
+            .is_exchange_connected(&instruction.sell_order.exchange)
+            .await;
+
+        if !buy_connected {
             return Err(ArbitrageError::Execution(format!(
                 "Buy exchange {} not connected",
                 instruction.buy_order.exchange
             )));
         }
 
-        if !self
-            .exchange_manager
-            .is_exchange_connected(&instruction.sell_order.exchange)
-            .await
-        {
+        if !sell_connected {
             return Err(ArbitrageError::Execution(format!(
                 "Sell exchange {} not connected",
                 instruction.sell_order.exchange
             )));
         }
 
+        // Check balance/allowance for both orders (if available)
+        // This is a placeholder - in production, would check actual balances
+        debug!("Preparation complete for {} → {}", 
+            instruction.buy_order.exchange, 
+            instruction.sell_order.exchange
+        );
+
         Ok(())
     }
 
-    /// Execute buy and sell orders simultaneously
-    async fn execute_orders_simultaneously(
+    /// Phase 2: Commit - Execute both orders with two-phase commit pattern
+    async fn execute_orders_2pc(
         &self,
         instruction: &ExecutionInstruction,
     ) -> Result<ExecutionResult> {
         let start_time = std::time::Instant::now();
 
-        // Prepare orders
+        // Prepare orders for execution
         let buy_request = OrderRequest {
             symbol: instruction.buy_order.symbol.clone(),
             side: OrderSide::Buy,
@@ -204,7 +210,7 @@ impl OrderExecutor {
             client_order_id: Some(format!("arb_sell_{}", instruction.signal_id)),
         };
 
-        // Execute orders with timeout
+        // Execute orders with timeout and rollback on partial failure
         let execution_timeout = Duration::from_millis(self.config.execution_timeout_ms);
 
         let (buy_result, sell_result) = timeout(execution_timeout, async {
@@ -218,10 +224,10 @@ impl OrderExecutor {
 
         let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
-        // Handle results
+        // Two-phase commit outcome handling
         match (buy_result, sell_result) {
             (Ok(buy_order), Ok(sell_order)) => {
-                // Both orders successful
+                // Both orders successful - commit complete
                 let actual_profit = self.calculate_actual_profit(&buy_order, &sell_order);
 
                 Ok(ExecutionResult {
@@ -230,13 +236,13 @@ impl OrderExecutor {
                     buy_order: Some(buy_order),
                     sell_order: Some(sell_order),
                     actual_profit: Some(actual_profit),
-                    execution_time_ms: execution_time_ms.max(1), // Ensure it's at least 1ms
+                    execution_time_ms: execution_time_ms.max(1),
                     error_message: None,
                     rollback_performed: false,
                 })
             }
             (Ok(buy_order), Err(sell_error)) => {
-                // Buy succeeded, sell failed - need rollback
+                // Buy succeeded, sell failed - rollback buy
                 let rollback_performed = if self.config.enable_rollback {
                     self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order)
                         .await
@@ -256,7 +262,7 @@ impl OrderExecutor {
                 })
             }
             (Err(buy_error), Ok(sell_order)) => {
-                // Sell succeeded, buy failed - need rollback
+                // Sell succeeded, buy failed - rollback sell
                 let rollback_performed = if self.config.enable_rollback {
                     self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order)
                         .await
@@ -292,6 +298,30 @@ impl OrderExecutor {
                 })
             }
         }
+    }
+
+    /// Validate execution instruction
+    async fn validate_instruction(&self, instruction: &ExecutionInstruction) -> Result<()> {
+        // Check minimum profit threshold
+        if instruction.expected_profit < self.config.min_profit_threshold {
+            return Err(ArbitrageError::Execution(format!(
+                "Profit {:.4}% below threshold {:.4}%",
+                instruction.expected_profit * Decimal::from(100),
+                self.config.min_profit_threshold * Decimal::from(100)
+            )));
+        }
+
+        // Check position size limits
+        let position_value =
+            instruction.buy_order.quantity * instruction.buy_order.price.unwrap_or_default();
+        if position_value > self.config.max_position_size {
+            return Err(ArbitrageError::Execution(format!(
+                "Position size ${:.2} exceeds limit ${:.2}",
+                position_value, self.config.max_position_size
+            )));
+        }
+
+        Ok(())
     }
 
     /// Place order on specific exchange

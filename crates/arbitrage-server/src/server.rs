@@ -128,10 +128,13 @@ fn get_client_ip(req: &Request<Body>) -> String {
 }
 
 pub fn validate_jwt(token: &str, secret: &str) -> bool {
+    let mut validation = Validation::default();
+    validation.validate_exp = true;
+    
     jsonwebtoken::decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
+        &validation,
     )
     .is_ok()
 }
