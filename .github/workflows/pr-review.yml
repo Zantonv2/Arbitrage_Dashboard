@@ -26,28 +26,43 @@ permissions:
   issues: write
 
 jobs:
-  review:
+  review-pr:
+    name: Review PR #${{ matrix.pr }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pr: ${{ fromJson(steps.list-prs.outputs.PRS) }}
     if: >
       (github.event_name == 'pull_request' && github.event.action != 'closed') ||
-      contains(github.event.comment.body, '/oc review')
+      contains(github.event.comment.body, '/oc review') ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: true
           fetch-depth: 0
 
+      - name: Get PR details
+        id: pr-details
+        run: |
+          PR_NUM=${{ matrix.pr }}
+          echo "NUMBER=$PR_NUM" >> $GITHUB_OUTPUT
+          echo "TITLE=$(gh pr view $PR_NUM --json title -q '.title')" >> $GITHUB_OUTPUT
+
       - name: Run OpenCode PR Review
         uses: anomalyco/opencode/github@latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          PR_NUMBER: ${{ steps.pr-details.outputs.NUMBER }}
+          PR_TITLE: ${{ steps.pr-details.outputs.TITLE }}
         with:
           use_github_token: true
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
-            ${{ github.event_name == 'issue_comment' && 'Review the issue/PR and address the user request in the comment.' || github.event_name == 'pull_request_review_comment' && 'Review the spec and address the reviewer comment.' || 'Review this pull request thoroughly:' }}
+            Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
 
             ## Review Checklist
             1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions
@@ -58,20 +73,17 @@ jobs:
             6. **Rust Specific**: Proper error types, async/await correctness, Decimal for financial calcs
 
             ## Output Format
-            Provide:
+            Provide review as a comment on the PR with:
             - **Critical Issues**: Must fix before merge
             - **Suggestions**: Should consider
             - **Nitpicks**: Nice to have
             - **Overall**: APPROVE / REQUEST_CHANGES / COMMENT
 
-            If this is a scheduled review, just output a summary of the PR state and any issues found.
-
-      - name: Add review comment
-        if: github.event_name == 'pull_request'
+      - name: Add review status
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUM=${{ github.event.pull_request.number }}
+          PR_NUM=${{ steps.pr-details.outputs.NUMBER }}
           REPO="${{ github.repository }}"
           curl -s -X POST \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
@@ -79,16 +91,15 @@ jobs:
             -d '{"body":"OpenCode review complete. See comments for details.","event":"REQUEST_CHANGES"}' \
             "https://api.github.com/repos/${REPO}/pulls/${PR_NUM}/reviews"
 
-  scheduled-pr-check:
-    name: Check pending PRs
+  list-prs:
+    name: List open PRs
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    outputs:
+      PRS: ${{ steps.list.outputs.PRS }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
       - name: List open PRs
+        id: list
         run: |
-          export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
-          echo "## Pending PRs for Review"
-          gh pr list --state open --json number,title,author,url -q '.[] | "- #\(.number): \(.title) by \(.author.login) - \(.url)"'
+          PRS=$(gh pr list --state open --json number -q '.[].number' | tr -d '[]\n, ')
+          echo "PRS=[${PRS}]" >> $GITHUB_OUTPUT
