@@ -21,45 +21,36 @@ jobs:
     name: Collect issues to fix
     runs-on: ubuntu-latest
     outputs:
-      issues: ${{ steps.context.outputs.ISSUES }}
-      count: ${{ steps.context.outputs.COUNT }}
+      issues: ${{ steps.collect.outputs.ISSUES }}
+      count: ${{ steps.collect.outputs.COUNT }}
     steps:
-      - name: Get issue context (manual /oc fix)
-        id: context
-        if: github.event_name == 'issue_comment'
+      - id: collect
+        name: Collect issues
         run: |
-          ISSUE_NUM=$(echo "${{ github.event.issue.html_url }}" | grep -oE '[0-9]+$' || echo "")
-          if [ -n "$ISSUE_NUM" ]; then
-            echo "ISSUES=$ISSUE_NUM" >> $GITHUB_OUTPUT
-            echo "COUNT=1" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            ISSUE_NUM=$(echo "${{ github.event.issue.html_url }}" | grep -oE '[0-9]+$' || echo "")
+            if [ -n "$ISSUE_NUM" ]; then
+              echo "ISSUES=$ISSUE_NUM" >> $GITHUB_OUTPUT
+              echo "COUNT=1" >> $GITHUB_OUTPUT
+            else
+              echo "ISSUES=" >> $GITHUB_OUTPUT
+              echo "COUNT=0" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "ISSUES=" >> $GITHUB_OUTPUT
-            echo "COUNT=0" >> $GITHUB_OUTPUT
+            ISSUES=""
+            for ISSUE_NUM in $(gh issue list --state open --json number -q '.[].number'); do
+              TITLE=$(gh issue view $ISSUE_NUM --json title -q '.title')
+              LABELS=$(gh issue view $ISSUE_NUM --json labels -q '.[].name')
+              if echo "$LABELS" | grep -qE "(skip|in-progress|wontfix)"; then
+                continue
+              fi
+              if echo "$TITLE" | grep -qiE '\[(p1|p2|p3|bug|fix|crash|security|performance|ci)\]'; then
+                ISSUES="${ISSUES}${ISSUE_NUM},"
+              fi
+            done
+            echo "ISSUES=${ISSUES%,}" >> $GITHUB_OUTPUT
+            echo "COUNT=$(echo ${ISSUES%,} | tr ',' '\n' | grep -c . || echo 0)" >> $GITHUB_OUTPUT
           fi
-
-      - name: Get open issues (scheduled)
-        if: github.event_name != 'issue_comment'
-        id: issues
-        run: |
-          echo "ISSUES=$(gh issue list --state open --json number -q '.[].number' | tr -d '[]\n, ')" >> $GITHUB_OUTPUT
-
-      - name: Filter fixable issues (scheduled)
-        if: github.event_name != 'issue_comment'
-        id: filter
-        run: |
-          TO_FIX=""
-          for ISSUE_NUM in ${{ steps.issues.outputs.ISSUES }}; do
-            TITLE=$(gh issue view $ISSUE_NUM --json title -q '.title')
-            LABELS=$(gh issue view $ISSUE_NUM --json labels -q '.[].name')
-            if echo "$LABELS" | grep -qE "(skip|in-progress|wontfix)"; then
-              continue
-            fi
-            if echo "$TITLE" | grep -qiE '\[(p1|p2|p3|bug|fix|crash|security|performance|ci)\]'; then
-              TO_FIX="${TO_FIX}${ISSUE_NUM},"
-            fi
-          done
-          echo "TO_FIX=${TO_FIX%,}" >> $GITHUB_OUTPUT
-          echo "COUNT=$(echo $TO_FIX | tr ',' '\n' | grep -c . || echo 0)" >> $GITHUB_OUTPUT
 
   fix-each-issue:
     name: Fix issue ${{ matrix.issue }}
