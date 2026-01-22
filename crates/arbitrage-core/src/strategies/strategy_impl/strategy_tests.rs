@@ -307,4 +307,133 @@ mod tests {
         );
         assert_eq!(bundle.tickers.len(), 1);
     }
+
+    // === Fee BPS Calculation Tests (Issue #133) ===
+
+    #[test]
+    fn test_cex_arbitrage_estimate_net_profit_standard_fees() {
+        use crate::strategies::cex_arbitrage::CexArbitrageStrategy;
+        use crate::strategies::traits::Strategy;
+
+        let strategy = CexArbitrageStrategy::new();
+
+        // Standard case: 0.10% + 0.10% = 0.20% = 20 bps, gross profit 100 bps, net should be 80
+        let result = strategy.estimate_net_profit_bps(
+            100,               // gross_profit_bps
+            ExchangeId::OKX,   // buy exchange
+            ExchangeId::ByBit, // sell exchange
+        );
+
+        assert!(result.is_ok());
+        let net_profit = result.unwrap();
+        assert_eq!(net_profit, 80); // 100 - 20 bps fees
+    }
+
+    #[test]
+    fn test_cex_arbitrage_estimate_net_profit_high_fees() {
+        use crate::strategies::cex_arbitrage::CexArbitrageStrategy;
+
+        let strategy = CexArbitrageStrategy::new();
+
+        // Higher fees: 0.50% + 0.50% = 1.0% = 100 bps, gross profit 100 bps, net should be 0
+        let result = strategy.estimate_net_profit_bps(
+            100,                  // gross_profit_bps
+            ExchangeId::Bitstamp, // buy exchange (0.50% taker)
+            ExchangeId::Bitstamp, // sell exchange (0.50% taker)
+        );
+
+        assert!(result.is_ok());
+        let net_profit = result.unwrap();
+        assert_eq!(net_profit, 0); // 100 - 100 bps fees
+    }
+
+    #[test]
+    fn test_cex_arbitrage_estimate_net_profit_low_gross_profit() {
+        use crate::strategies::cex_arbitrage::CexArbitrageStrategy;
+
+        let strategy = CexArbitrageStrategy::new();
+
+        // Standard fees: 0.10% + 0.10% = 0.20% = 20 bps, gross profit 10 bps, should error
+        let result = strategy.estimate_net_profit_bps(
+            10, // gross_profit_bps
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+        );
+
+        assert!(result.is_err()); // Should error due to underflow
+    }
+
+    #[test]
+    fn test_cross_exchange_estimate_net_profit_standard_fees() {
+        use crate::strategies::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy;
+
+        let strategy = CrossExchangeArbitrageStrategy::new();
+
+        // Standard case: 0.10% + 0.10% = 0.20% = 20 bps, no rebalancing
+        let result = strategy.estimate_net_profit_bps(
+            100, // gross_profit_bps
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            false, // needs_rebalancing
+        );
+
+        assert!(result.is_ok());
+        let net_profit = result.unwrap();
+        assert_eq!(net_profit, 80); // 100 - 20 bps fees
+    }
+
+    #[test]
+    fn test_cross_exchange_estimate_net_profit_with_rebalancing() {
+        use crate::strategies::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy;
+
+        let strategy = CrossExchangeArbitrageStrategy::new();
+
+        // Standard fees: 0.10% + 0.10% = 20 bps + 10 bps transfer = 30 bps
+        let result = strategy.estimate_net_profit_bps(
+            100, // gross_profit_bps
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            true, // needs_rebalancing (adds 10 bps transfer cost)
+        );
+
+        assert!(result.is_ok());
+        let net_profit = result.unwrap();
+        assert_eq!(net_profit, 70); // 100 - 20 bps fees - 10 bps transfer
+    }
+
+    #[test]
+    fn test_cross_exchange_estimate_net_profit_high_fees() {
+        use crate::strategies::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy;
+
+        let strategy = CrossExchangeArbitrageStrategy::new();
+
+        // Higher fees: 0.50% + 0.50% = 1.0% = 100 bps
+        let result = strategy.estimate_net_profit_bps(
+            100, // gross_profit_bps
+            ExchangeId::Bitstamp,
+            ExchangeId::Bitstamp,
+            false,
+        );
+
+        assert!(result.is_ok());
+        let net_profit = result.unwrap();
+        assert_eq!(net_profit, 0); // 100 - 100 bps fees
+    }
+
+    #[test]
+    fn test_cross_exchange_estimate_net_profit_underflow() {
+        use crate::strategies::cross_exchange_arbitrage::CrossExchangeArbitrageStrategy;
+
+        let strategy = CrossExchangeArbitrageStrategy::new();
+
+        // Standard fees: 0.10% + 0.10% = 20 bps, gross profit 10 bps, should error
+        let result = strategy.estimate_net_profit_bps(
+            10, // gross_profit_bps
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            false,
+        );
+
+        assert!(result.is_err()); // Should error due to underflow
+    }
 }
