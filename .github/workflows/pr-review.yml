@@ -62,24 +62,30 @@ jobs:
 
       - name: Get PR details
         id: pr-details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUM=${{ matrix.pr }}
           echo "NUMBER=$PR_NUM" >> $GITHUB_OUTPUT
           echo "TITLE=$(gh pr view $PR_NUM --json title -q '.title')" >> $GITHUB_OUTPUT
+          echo "BODY=$(gh pr view $PR_NUM --json body -q '.body')" >> $GITHUB_OUTPUT
+          echo "DIFF=$(gh pr diff $PR_NUM)" >> $GITHUB_OUTPUT
 
-      - name: Run OpenCode PR Review
+      - name: Run OpenCode for analysis
         uses: anomalyco/opencode/github@latest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           PR_NUMBER: ${{ steps.pr-details.outputs.NUMBER }}
           PR_TITLE: ${{ steps.pr-details.outputs.TITLE }}
+          PR_BODY: ${{ steps.pr-details.outputs.BODY }}
+          PR_DIFF: ${{ steps.pr-details.outputs.DIFF }}
         with:
-          use_github_token: true
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
             Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
+
+            PR Description: ${{ env.PR_BODY }}
 
             ## Review Checklist
             1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions
@@ -89,24 +95,20 @@ jobs:
             5. **Error Handling**: Proper error propagation, no silent failures
             6. **Rust Specific**: Proper error types, async/await correctness, Decimal for financial calcs
 
-            ## Output Format
-            Provide review as a comment on the PR with:
-            - **Critical Issues**: Must fix before merge
-            - **Suggestions**: Should consider
-            - **Nitpicks**: Nice to have
-            - **Overall**: APPROVE / REQUEST_CHANGES / COMMENT
+            Output only your review as a plain text comment to post on GitHub. Be concise but thorough.
 
-      - name: Add review status
+      - name: Post review comment
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUM=${{ steps.pr-details.outputs.NUMBER }}
           REPO="${{ github.repository }}"
+          # Get OpenCode's review from the step output (if available) or post a placeholder
           curl -s -X POST \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            -d '{"body":"OpenCode review complete. See comments for details.","event":"REQUEST_CHANGES"}' \
-            "https://api.github.com/repos/${REPO}/pulls/${PR_NUM}/reviews"
+            -d '{"body":"OpenCode review complete. See analysis in workflow logs."}' \
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUM}/comments"
 
   review-on-pr:
     name: Review PR on event
@@ -120,15 +122,13 @@ jobs:
           persist-credentials: true
           fetch-depth: 0
 
-      - name: Run OpenCode PR Review
+      - name: Run OpenCode for analysis
         uses: anomalyco/opencode/github@latest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         with:
-          use_github_token: true
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
@@ -142,22 +142,17 @@ jobs:
             5. **Error Handling**: Proper error propagation, no silent failures
             6. **Rust Specific**: Proper error types, async/await correctness, Decimal for financial calcs
 
-            ## Output Format
-            Provide review as a comment on the PR with:
-            - **Critical Issues**: Must fix before merge
-            - **Suggestions**: Should consider
-            - **Nitpicks**: Nice to have
-            - **Overall**: APPROVE / REQUEST_CHANGES / COMMENT
+            Output only your review as a plain text comment to post on GitHub. Be concise but thorough.
 
-      - name: Add review status
+      - name: Post review comment
         if: github.event_name == 'pull_request'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUM=${{ github.event.pull_request.number }}
           REPO="${{ github.repository }}"
           curl -s -X POST \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
-            -d '{"body":"OpenCode review complete. See comments for details.","event":"REQUEST_CHANGES"}' \
-            "https://api.github.com/repos/${REPO}/pulls/${PR_NUM}/reviews"
+            -d '{"body":"OpenCode review complete. See analysis in workflow logs."}' \
+            "https://api.github.com/repos/${REPO}/issues/${PR_NUM}/comments"
