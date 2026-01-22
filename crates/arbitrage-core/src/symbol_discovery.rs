@@ -54,6 +54,7 @@
 /// // service.update_market_data(market_info).await;
 /// ```
 use crate::{
+    constants::BROADCAST_CHANNEL_CAPACITY,
     types::{ExchangeId, Symbol},
     ArbitrageError, Result,
 };
@@ -238,7 +239,7 @@ impl SymbolDiscoveryService {
     ///
     /// Tuple of (service, event receiver)
     pub fn new(criteria: SymbolSelectionCriteria) -> (Self, broadcast::Receiver<DiscoveryEvent>) {
-        let (event_sender, event_receiver) = broadcast::channel(1000);
+        let (event_sender, event_receiver) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         let market_data = FxHashMap::with_capacity_and_hasher(100, Default::default());
         let qualified_symbols = FxHashSet::with_capacity_and_hasher(50, Default::default());

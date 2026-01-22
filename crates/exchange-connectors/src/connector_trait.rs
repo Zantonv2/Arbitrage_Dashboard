@@ -9,6 +9,7 @@ use arbitrage_core::{
     ArbitrageError, Result,
 };
 
+use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use crate::connector::{
     Balance, ConnectorConfig, ConnectorStats, FundingRate, HealthStatus, OrderRequest,
     OrderResponse, OrderStatus, TickerData,
@@ -25,7 +26,7 @@ pub struct ConnectorBase {
 
 impl ConnectorBase {
     pub fn new(config: ConnectorConfig) -> Self {
-        let (event_sender, _) = broadcast::channel(1000);
+        let (event_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let stats = ConnectorStats {
             exchange: config.exchange_id,
             ..Default::default()

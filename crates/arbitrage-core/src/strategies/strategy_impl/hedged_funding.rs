@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+use crate::constants::{BASIS_POINTS_DIVISOR, SLIPPIER_TIER_1_BPS, SLIPPIER_TIER_2_BPS};
 use crate::strategies::strategies_specifics::{
     ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
@@ -7,11 +8,12 @@ use crate::strategies::{
     FilterContext, FundingRate, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig,
     TradeLeg,
 };
-use crate::{ExchangeId, Result, Side, Symbol};
-use chrono::Utc;
+use crate::{ArbitrageError, ExchangeId, Result, Side, Symbol};
+use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::collections::HashMap;
 use tracing::debug;
 
 /// Hedged Funding Strategy
@@ -35,6 +37,15 @@ use tracing::debug;
 /// - Volatility and correlation metrics
 pub struct HedgedFundingStrategy {
     config: StrategyConfig,
+    #[allow(dead_code)]
+    /// Track funding rate history for prediction
+    funding_history: HashMap<(ExchangeId, Symbol), Vec<(DateTime<Utc>, Decimal)>>,
+    #[allow(dead_code)]
+    /// Track hedge effectiveness metrics
+    hedge_ratios: HashMap<Symbol, Decimal>,
+    #[allow(dead_code)]
+    /// Position tracking for risk management
+    current_positions: HashMap<(ExchangeId, Symbol), Decimal>,
 }
 
 impl HedgedFundingStrategy {
@@ -51,6 +62,9 @@ impl HedgedFundingStrategy {
                 risk_limits: RiskLimits::default(),
                 custom_params,
             },
+            funding_history: HashMap::new(),
+            hedge_ratios: HashMap::new(),
+            current_positions: HashMap::new(),
         }
     }
 
@@ -59,6 +73,218 @@ impl HedgedFundingStrategy {
         let mut strategy = Self::new();
         strategy.config = config;
         strategy
+    }
+
+    #[allow(dead_code)]
+    /// Update funding rate history for prediction
+    fn update_funding_history(&mut self, market_data: &MarketBundle) {
+        let current_time = market_data.timestamp;
+
+        for ((exchange, symbol), funding_rate) in &market_data.funding_rates {
+            let key = (*exchange, (**symbol).clone());
+            let history = self.funding_history.entry(key).or_default();
+
+            // Keep only recent history (last 7 days)
+            let cutoff = current_time - Duration::days(7);
+            history.retain(|(ts, _)| *ts > cutoff);
+
+            // Add new funding rate
+            history.push((current_time, funding_rate.rate));
+
+            // Keep sorted by timestamp
+            history.sort_by_key(|(ts, _)| *ts);
+        }
+    }
+
+    #[allow(dead_code)]
+    /// Predict next funding rate based on history
+    fn predict_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Decimal> {
+        let key = (exchange, symbol.clone());
+        let history = self.funding_history.get(&key)?;
+
+        if history.len() < 3 {
+            return None;
+        }
+
+        // Simple moving average of last 3 funding rates
+        let recent_rates: Vec<Decimal> = history
+            .iter()
+            .rev()
+            .take(3)
+            .map(|(_, rate)| *rate)
+            .collect();
+
+        let avg_rate = recent_rates.iter().sum::<Decimal>() / Decimal::from(recent_rates.len());
+
+        // Apply prediction weight
+        let prediction_weight = self
+            .config
+            .custom_params
+            .get("funding_prediction_weight")
+            .and_then(|v| v.as_f64())
+            .and_then(|f| Decimal::try_from(f).ok())
+            .unwrap_or_else(|| Decimal::new(3, 1)); // 0.3
+
+        let current_rate = recent_rates.first().copied().unwrap_or(Decimal::ZERO);
+        let predicted_rate =
+            current_rate * (Decimal::ONE - prediction_weight) + avg_rate * prediction_weight;
+
+        Some(predicted_rate)
+    }
+
+    #[allow(dead_code)]
+    /// Calculate optimal hedge ratio for a symbol
+    fn calculate_hedge_ratio(&mut self, symbol: &Symbol, _market_data: &MarketBundle) -> Decimal {
+        // Check if we have a cached ratio
+        if let Some(cached_ratio) = self.hedge_ratios.get(symbol) {
+            return *cached_ratio;
+        }
+
+        // For basic implementation, use 1:1 hedge ratio
+        // Advanced implementation would calculate based on:
+        // - Beta between perpetual and spot
+        // - Volatility ratios
+        // - Correlation coefficients
+        let target_ratio = self
+            .config
+            .custom_params
+            .get("hedge_ratio_target")
+            .and_then(|v| v.as_f64())
+            .and_then(|f| Decimal::try_from(f).ok())
+            .unwrap_or(Decimal::ONE);
+
+        // Cache the ratio
+        self.hedge_ratios.insert(symbol.clone(), target_ratio);
+
+        target_ratio
+    }
+
+    #[allow(dead_code)]
+    /// Calculate basis risk between perpetual and spot
+    fn calculate_basis_risk(
+        &self,
+        market_data: &MarketBundle,
+        perp_exchange: ExchangeId,
+        spot_exchange: ExchangeId,
+        symbol: &Symbol,
+    ) -> Option<Decimal> {
+        // Get perpetual price (use ticker mid price as approximation)
+        let perp_price = market_data
+            .get_ticker(perp_exchange, symbol)
+            .map(|t| (t.bid + t.ask) / Decimal::from(2))?;
+
+        // Get spot price
+        let spot_price = market_data
+            .get_ticker(spot_exchange, symbol)
+            .map(|t| (t.bid + t.ask) / Decimal::from(2))?;
+
+        if spot_price.is_zero() {
+            return None;
+        }
+
+        // Calculate basis (perpetual - spot) / spot
+        let basis = (perp_price - spot_price) / spot_price;
+        Some(basis.abs())
+    }
+
+    #[allow(dead_code)]
+    /// Find optimal hedge exchange for a perpetual position
+    fn find_optimal_hedge_exchange(
+        &self,
+        market_data: &MarketBundle,
+        perp_exchange: ExchangeId,
+        symbol: &Symbol,
+    ) -> Option<ExchangeId> {
+        let mut best_exchange = None;
+        let mut lowest_basis_risk = Decimal::from(1); // 100%
+
+        // Check all exchanges for spot hedging
+        for exchange in [
+            ExchangeId::OKX,
+            ExchangeId::ByBit,
+            ExchangeId::MEXC,
+            ExchangeId::GateIo,
+            ExchangeId::Kraken,
+            ExchangeId::Bitstamp,
+        ] {
+            if exchange == perp_exchange {
+                continue; // Don't hedge on same exchange
+            }
+
+            if let Some(basis_risk) =
+                self.calculate_basis_risk(market_data, perp_exchange, exchange, symbol)
+            {
+                if basis_risk < lowest_basis_risk {
+                    lowest_basis_risk = basis_risk;
+                    best_exchange = Some(exchange);
+                }
+            }
+        }
+
+        // Check if basis risk is acceptable
+        let max_basis_risk_bps = self
+            .config
+            .custom_params
+            .get("max_basis_risk_bps")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(50) as i32;
+        let max_basis_risk =
+            Decimal::from(max_basis_risk_bps) / Decimal::from(BASIS_POINTS_DIVISOR);
+
+        if lowest_basis_risk <= max_basis_risk {
+            best_exchange
+        } else {
+            None
+        }
+    }
+
+    #[allow(dead_code)]
+    /// Calculate position size based on risk limits
+    fn calculate_position_size(
+        &self,
+        funding_rate: &FundingRate,
+        market_data: &MarketBundle,
+    ) -> Result<Decimal> {
+        // Get current price for notional calculation
+        let current_price = market_data
+            .get_ticker(funding_rate.exchange, &funding_rate.symbol)
+            .map(|t| (t.bid + t.ask) / Decimal::from(2))
+            .ok_or_else(|| {
+                ArbitrageError::Validation("No price data for funding rate symbol".to_string())
+            })?;
+
+        // Calculate maximum position based on concentration limits
+        let max_concentration = self
+            .config
+            .custom_params
+            .get("max_position_concentration")
+            .and_then(|v| v.as_f64())
+            .and_then(|f| Decimal::try_from(f).ok())
+            .unwrap_or_else(|| Decimal::new(4, 1)); // 0.4
+
+        let max_position_value = self.config.max_exposure * max_concentration;
+        let max_quantity = max_position_value / current_price;
+
+        // Consider current positions for risk management
+        let current_exposure = self.get_current_exposure(&funding_rate.symbol);
+        let available_capacity = max_position_value - current_exposure;
+
+        if available_capacity <= Decimal::ZERO {
+            return Ok(Decimal::ZERO);
+        }
+
+        let available_quantity = available_capacity / current_price;
+        Ok(max_quantity.min(available_quantity))
+    }
+
+    #[allow(dead_code)]
+    /// Get current exposure for a symbol across all exchanges
+    fn get_current_exposure(&self, symbol: &Symbol) -> Decimal {
+        self.current_positions
+            .iter()
+            .filter(|((_, sym), _)| sym == symbol)
+            .map(|(_, position)| position.abs())
+            .sum()
     }
 
     /// Check if funding rate meets strategy criteria
@@ -94,6 +320,150 @@ impl HedgedFundingStrategy {
         let time_to_funding =
             (funding_rate.next_funding - Utc::now()).num_seconds() as f64 / 3600.0;
         time_to_funding >= min_time_hours
+    }
+
+    #[allow(dead_code)]
+    /// Find hedged funding opportunities
+    fn find_hedged_funding_opportunities(&mut self, market_data: &MarketBundle) -> Vec<RawSignal> {
+        let mut signals = Vec::new();
+
+        // Update funding history
+        self.update_funding_history(market_data);
+
+        for ((exchange, symbol), funding_rate) in &market_data.funding_rates {
+            // Skip if exchange doesn't support funding rates
+            if !ExchangeCapabilities::supports_funding_rates(*exchange) {
+                continue;
+            }
+
+            // Check if funding rate is attractive
+            if !self.is_funding_rate_attractive(funding_rate) {
+                continue;
+            }
+
+            // Check timing
+            if !self.has_sufficient_time_to_funding(funding_rate) {
+                continue;
+            }
+
+            // Find optimal hedge exchange
+            let hedge_exchange =
+                match self.find_optimal_hedge_exchange(market_data, *exchange, symbol) {
+                    Some(ex) => ex,
+                    None => continue,
+                };
+
+            // Calculate position size
+            let position_size = match self.calculate_position_size(funding_rate, market_data) {
+                Ok(size) => size,
+                Err(_) => continue,
+            };
+
+            if position_size <= Decimal::ZERO {
+                continue;
+            }
+
+            // Calculate hedge ratio
+            let hedge_ratio = self.calculate_hedge_ratio(symbol, market_data);
+            let hedge_size = position_size * hedge_ratio;
+
+            // Get prices
+            let perp_price = market_data
+                .get_ticker(*exchange, symbol)
+                .map(|t| (t.bid + t.ask) / Decimal::from(2));
+            let spot_price = market_data
+                .get_ticker(hedge_exchange, symbol)
+                .map(|t| (t.bid + t.ask) / Decimal::from(2));
+
+            let (perp_price, spot_price) = match (perp_price, spot_price) {
+                (Some(p1), Some(p2)) => (p1, p2),
+                _ => continue,
+            };
+
+            // Determine position sides based on funding rate sign
+            let (perp_side, spot_side) = if funding_rate.rate > Decimal::ZERO {
+                // Positive funding: shorts pay longs
+                // Go long perpetual (receive funding), short spot (hedge)
+                (Side::Buy, Side::Sell)
+            } else {
+                // Negative funding: longs pay shorts
+                // Go short perpetual (receive funding), long spot (hedge)
+                (Side::Sell, Side::Buy)
+            };
+
+            // Calculate expected profit
+            let funding_bps = (funding_rate.rate.abs() * Decimal::from(BASIS_POINTS_DIVISOR))
+                .to_i32()
+                .unwrap_or(0);
+
+            // Subtract estimated costs (fees, basis risk)
+            let estimated_costs_bps = SLIPPIER_TIER_1_BPS; // 0.1% estimated costs
+            let net_profit_bps = funding_bps - estimated_costs_bps;
+
+            if net_profit_bps < self.config.min_profit_bps {
+                continue;
+            }
+
+            // Create hedged funding signal
+            let mut signal = RawSignal::new(self.id(), symbol.clone());
+
+            // Perpetual leg
+            let perp_leg = TradeLeg::new(
+                *exchange,
+                symbol.clone(),
+                perp_side,
+                perp_price,
+                position_size,
+            );
+            signal.add_leg(perp_leg);
+
+            // Spot hedge leg
+            let spot_leg = TradeLeg::new(
+                hedge_exchange,
+                symbol.clone(),
+                spot_side,
+                spot_price,
+                hedge_size,
+            );
+            signal.add_leg(spot_leg);
+
+            signal.set_profit_bps(net_profit_bps);
+
+            // Add metadata
+            signal.add_metadata("funding_rate", json!(funding_rate.rate.to_string()));
+            signal.add_metadata("perp_exchange", json!(exchange.to_string()));
+            signal.add_metadata("hedge_exchange", json!(hedge_exchange.to_string()));
+            signal.add_metadata("hedge_ratio", json!(hedge_ratio.to_string()));
+            signal.add_metadata(
+                "time_to_funding_hours",
+                json!((funding_rate.next_funding - Utc::now()).num_seconds() as f64 / 3600.0),
+            );
+            signal.add_metadata(
+                "predicted_funding",
+                json!(self
+                    .predict_funding_rate(*exchange, symbol)
+                    .map(|r| r.to_string())
+                    .unwrap_or_else(|| "N/A".to_string())),
+            );
+            signal.add_metadata(
+                "basis_risk_bps",
+                json!(self
+                    .calculate_basis_risk(market_data, *exchange, hedge_exchange, symbol)
+                    .map(|r| (r * Decimal::from(BASIS_POINTS_DIVISOR))
+                        .to_i32()
+                        .unwrap_or(0))
+                    .unwrap_or(0)),
+            );
+
+            signals.push(signal);
+
+            debug!(
+                "Hedged funding opportunity: {} perp@{} hedge@{} rate={} profit={}bps",
+                symbol, exchange, hedge_exchange, funding_rate.rate, net_profit_bps
+            );
+        }
+
+        signals
     }
 }
 
@@ -191,12 +561,12 @@ impl Strategy for HedgedFundingStrategy {
             };
 
             // Calculate expected profit
-            let funding_bps = (funding_rate.rate.abs() * Decimal::from(10000))
+            let funding_bps = (funding_rate.rate.abs() * Decimal::from(BASIS_POINTS_DIVISOR))
                 .to_i32()
                 .unwrap_or(0);
 
             // Subtract estimated costs (fees, basis risk)
-            let estimated_costs_bps = 15; // 0.15% estimated costs
+            let estimated_costs_bps = SLIPPIER_TIER_2_BPS; // 0.15% estimated costs
             let net_profit_bps = funding_bps - estimated_costs_bps;
 
             if net_profit_bps < self.config.min_profit_bps {

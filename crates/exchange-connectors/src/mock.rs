@@ -1,3 +1,4 @@
+use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use arbitrage_core::types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -27,7 +28,7 @@ pub struct MockConnector {
 
 impl MockConnector {
     pub fn new(exchange_id: ExchangeId) -> Self {
-        let (event_sender, _) = broadcast::channel(1000);
+        let (event_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let stats = ConnectorStats::default();
         let config = ConnectorConfig {
             exchange_id,

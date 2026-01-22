@@ -1,3 +1,4 @@
+use crate::constants::BASIS_POINTS_DIVISOR;
 use crate::strategies::strategies_specifics::{
     CexArbitrageDefaults, ExchangeCapabilities, StrategyLimits,
 };
@@ -121,7 +122,7 @@ impl CexArbitrageStrategy {
             })?;
 
         // Convert to basis points (1% = 100 bps)
-        let profit_decimal = profit_ratio * Decimal::from(10000);
+        let profit_decimal = profit_ratio * Decimal::from(BASIS_POINTS_DIVISOR);
         let profit_bps = profit_decimal.to_i32().ok_or_else(|| {
             ArbitrageError::Calculation(format!("Profit calculation overflow: {}", profit_decimal))
         })?;

@@ -1,5 +1,6 @@
 pub mod bitstamp;
 pub mod bybit;
+pub mod constants;
 pub mod gateio;
 pub mod kraken;
 pub mod mexc;

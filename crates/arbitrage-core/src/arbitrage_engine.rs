@@ -19,6 +19,7 @@
 use crate::{
     confidence_scorer::{ConfidenceScorer, NetSpreadResult},
     config::Config,
+    constants::BROADCAST_CHANNEL_CAPACITY,
     execution_preparer::ExecutionPreparer,
     normalizer::Normalizer,
     size_calculator::SizeCalculator,
@@ -146,7 +147,7 @@ impl ArbitrageEngine {
         execution_preparer: Arc<ExecutionPreparer>,
         storage: Arc<StorageService>,
     ) -> Result<(Self, broadcast::Receiver<Signal>)> {
-        let (signal_sender, signal_receiver) = broadcast::channel(1000);
+        let (signal_sender, signal_receiver) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         let engine = Self {
             order_books: Arc::new(DashMap::new()),

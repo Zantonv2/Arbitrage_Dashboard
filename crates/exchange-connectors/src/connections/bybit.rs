@@ -1,3 +1,4 @@
+use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use crate::connector::{
     ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus, TickerData,
 };
@@ -78,7 +79,7 @@ impl BybitConnector {
             ..Default::default()
         };
 
-        let (event_sender, _) = broadcast::channel(1000);
+        let (event_sender, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         let client = Client::new();
         let stats = ConnectorStats {
             exchange: ExchangeId::ByBit,

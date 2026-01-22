@@ -1186,6 +1186,8 @@ pub mod exchange_constants {
     ];
 }
 
+use super::constants::BASIS_POINTS_DIVISOR;
+
 /// Calculates profit in basis points from buy and sell prices.
 ///
 /// # Arguments
@@ -1202,5 +1204,5 @@ pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i
         return None;
     }
     let profit_ratio = (sell_price - buy_price) / buy_price;
-    (profit_ratio * Decimal::from(10000)).to_i32()
+    (profit_ratio * Decimal::from(BASIS_POINTS_DIVISOR)).to_i32()
 }
