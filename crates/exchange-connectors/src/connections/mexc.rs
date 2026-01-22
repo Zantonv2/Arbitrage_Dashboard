@@ -223,13 +223,31 @@ impl ExchangeConnector for MEXCConnector {
 
             let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
                 Ok(Ok(resp)) => resp,
-                Ok(Err(_)) => continue,
-                Err(_) => continue,
+                Ok(Err(e)) => {
+                    warn!("MEXC funding rate request failed for {}: {}", mexc_symbol, e);
+                    continue;
+                }
+                Err(_) => {
+                    warn!("MEXC funding rate request timed out for {}", mexc_symbol);
+                    continue;
+                }
             };
 
-            if let Ok(data) = response.json::<Value>().await {
-                if let Ok(funding_rate) = self.parse_funding_rate(&data, symbol) {
+            let data = match response.json::<Value>().await {
+                Ok(data) => data,
+                Err(e) => {
+                    warn!("Failed to parse funding rate response for {}: {}", mexc_symbol, e);
+                    continue;
+                }
+            };
+
+            match self.parse_funding_rate(&data, symbol) {
+                Ok(funding_rate) => {
                     funding_rates.insert(symbol.clone(), funding_rate);
+                }
+                Err(e) => {
+                    warn!("Failed to parse funding rate for {}: {}", mexc_symbol, e);
+                    continue;
                 }
             }
         }
