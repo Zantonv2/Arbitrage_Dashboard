@@ -609,9 +609,8 @@ pub async fn login(
         }));
     }
 
-    let admin_username = std::env::var("ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
-    let admin_password =
-        std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "change_me_in_production".to_string());
+    let admin_username = std::env::var("ADMIN_USERNAME").expect("ADMIN_USERNAME environment variable must be set");
+    let admin_password = std::env::var("ADMIN_PASSWORD").expect("ADMIN_PASSWORD environment variable must be set");
 
     if request.username == admin_username && request.password == admin_password {
         let secret = state.jwt_secret.as_str();

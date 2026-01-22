@@ -127,7 +127,7 @@ fn get_client_ip(req: &Request<Body>) -> String {
         .to_string()
 }
 
-fn validate_jwt(token: &str, secret: &str) -> bool {
+pub fn validate_jwt(token: &str, secret: &str) -> bool {
     jsonwebtoken::decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -356,6 +356,9 @@ impl ArbitrageServer {
             .allow_methods(tower_http::cors::Any)
             .allow_headers(tower_http::cors::Any);
 
+        let rate_limit_state_for_api = rate_limit_state.clone();
+        let rate_limit_state_for_public = rate_limit_state.clone();
+
         // Protected API routes
         let api_routes = Router::new()
             // Signals
@@ -377,7 +380,7 @@ impl ArbitrageServer {
             .layer(axum::middleware::from_fn(
                 move |req: Request<Body>, next: axum::middleware::Next| {
                     let jwt_secret = jwt_secret.clone();
-                    let rate_limit_state = rate_limit_state.clone();
+                    let rate_limit_state = rate_limit_state_for_api.clone();
                     async move {
                         // Rate limiting
                         let client_ip = get_client_ip(&req);
@@ -431,11 +434,31 @@ impl ArbitrageServer {
             .route("/ws", get(websocket::websocket_handler))
             .with_state(state.clone());
 
-        // Public routes
+        // Public routes with rate limiting
         let public_routes = Router::new()
             .route("/health", get(|| async { "OK" }))
             .route("/api/auth/login", post(routes::login))
-            .with_state(state.clone());
+            .with_state(state.clone())
+            .layer(axum::middleware::from_fn(
+                move |req: Request<Body>, next: axum::middleware::Next| {
+                    let rate_limit_state = rate_limit_state_for_public.clone();
+                    async move {
+                        let client_ip = get_client_ip(&req);
+                        if !rate_limit_state.check_rate_limit(
+                            &client_ip,
+                            RATE_LIMIT_MAX_REQUESTS,
+                            RATE_LIMIT_WINDOW_SECS,
+                        ) {
+                            warn!("Rate limit exceeded for IP: {}", client_ip);
+                            return Err(create_error_response(
+                                StatusCode::TOO_MANY_REQUESTS,
+                                "Rate limit exceeded",
+                            ));
+                        }
+                        Ok(next.run(req).await)
+                    }
+                },
+            ));
 
         // Static file serving for frontend
         let sanitized_static_path =
