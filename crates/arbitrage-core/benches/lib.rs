@@ -1036,6 +1036,81 @@ mod additional_strategy_benchmarks {
         group.finish();
     }
 
+    pub fn benchmark_convergence_100_symbols(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/convergence_100_symbols");
+        let strategy = ConvergenceArbitrageStrategy::new();
+
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let mut bundle = arbitrage_core::strategies::MarketBundle::new();
+                for i in 0..100 {
+                    let symbol = Symbol::new(&format!("SYM{}", i), "USDT");
+                    let price = Decimal::from(100 + i % 50);
+                    let ticker = arbitrage_core::strategies::Ticker::new(
+                        ExchangeId::OKX,
+                        symbol.clone(),
+                        price - Decimal::from(1),
+                        price + Decimal::from(1),
+                        price,
+                    );
+                    bundle.add_ticker(Arc::new(ticker));
+                }
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_convergence_500_symbols(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/convergence_500_symbols");
+        let strategy = ConvergenceArbitrageStrategy::new();
+
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let mut bundle = arbitrage_core::strategies::MarketBundle::new();
+                for i in 0..500 {
+                    let symbol = Symbol::new(&format!("SYM{}", i), "USDT");
+                    let price = Decimal::from(100 + i % 100);
+                    let ticker = arbitrage_core::strategies::Ticker::new(
+                        ExchangeId::OKX,
+                        symbol.clone(),
+                        price - Decimal::from(1),
+                        price + Decimal::from(1),
+                        price,
+                    );
+                    bundle.add_ticker(Arc::new(ticker));
+                }
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+
+    pub fn benchmark_convergence_1000_symbols(c: &mut Criterion) {
+        let mut group = c.benchmark_group("strategies/convergence_1000_symbols");
+        let strategy = ConvergenceArbitrageStrategy::new();
+
+        group.bench_function("detect", |b| {
+            b.iter(|| {
+                let mut bundle = arbitrage_core::strategies::MarketBundle::new();
+                for i in 0..1000 {
+                    let symbol = Symbol::new(&format!("SYM{}", i), "USDT");
+                    let price = Decimal::from(100 + i % 200);
+                    let ticker = arbitrage_core::strategies::Ticker::new(
+                        ExchangeId::OKX,
+                        symbol.clone(),
+                        price - Decimal::from(1),
+                        price + Decimal::from(1),
+                        price,
+                    );
+                    bundle.add_ticker(Arc::new(ticker));
+                }
+                black_box(strategy.detect(black_box(&bundle)))
+            })
+        });
+        group.finish();
+    }
+
     pub fn benchmark_hedged_funding_detect(c: &mut Criterion) {
         let mut group = c.benchmark_group("strategies/hedged_funding_detect");
         let strategy = HedgedFundingStrategy::new();
@@ -1721,6 +1796,9 @@ mod exchange_rate_benchmarks {
 criterion_group!(
     additional_benches,
     additional_strategy_benchmarks::benchmark_convergence_detect,
+    additional_strategy_benchmarks::benchmark_convergence_100_symbols,
+    additional_strategy_benchmarks::benchmark_convergence_500_symbols,
+    additional_strategy_benchmarks::benchmark_convergence_1000_symbols,
     additional_strategy_benchmarks::benchmark_hedged_funding_detect,
     additional_strategy_benchmarks::benchmark_latency_detect,
     additional_strategy_benchmarks::benchmark_funding_rate_detect,

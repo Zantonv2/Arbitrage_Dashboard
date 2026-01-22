@@ -415,3 +415,123 @@ async fn test_convergence_arbitrage_multiple_exchanges() -> Result<()> {
 
     Ok(())
 }
+
+/// Performance test: 100 symbols
+#[tokio::test]
+async fn test_convergence_arbitrage_performance_100_symbols() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    for i in 0..100 {
+        let base = format!("SYM{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        let price = Decimal::from(100 + i % 50);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(1),
+            price + Decimal::from(1),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "100 symbols: detected {} signals in {:?}ms",
+        signals.len(),
+        elapsed.as_millis()
+    );
+
+    assert!(
+        elapsed.as_millis() < 100,
+        "100 symbols should complete in < 100ms, took {}ms",
+        elapsed.as_millis()
+    );
+
+    Ok(())
+}
+
+/// Performance test: 500 symbols
+#[tokio::test]
+async fn test_convergence_arbitrage_performance_500_symbols() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    for i in 0..500 {
+        let base = format!("SYM{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        let price = Decimal::from(100 + i % 100);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(1),
+            price + Decimal::from(1),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "500 symbols: detected {} signals in {:?}ms",
+        signals.len(),
+        elapsed.as_millis()
+    );
+
+    assert!(
+        elapsed.as_millis() < 200,
+        "500 symbols should complete in < 200ms, took {}ms",
+        elapsed.as_millis()
+    );
+
+    Ok(())
+}
+
+/// Performance test: 1000 symbols
+#[tokio::test]
+async fn test_convergence_arbitrage_performance_1000_symbols() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    for i in 0..1000 {
+        let base = format!("SYM{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        let price = Decimal::from(100 + i % 200);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(1),
+            price + Decimal::from(1),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "1000 symbols: detected {} signals in {:?}ms",
+        signals.len(),
+        elapsed.as_millis()
+    );
+
+    assert!(
+        elapsed.as_millis() < 300,
+        "1000 symbols should complete in < 300ms, took {}ms",
+        elapsed.as_millis()
+    );
+
+    Ok(())
+}
