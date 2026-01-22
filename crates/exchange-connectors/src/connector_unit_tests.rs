@@ -1117,3 +1117,178 @@ mod bitstamp_connector_tests {
         assert!(parsed.is_ok());
     }
 }
+
+#[cfg(test)]
+mod reconnection_tests {
+    use super::*;
+    use crate::utils::ExponentialBackoff;
+    use std::time::Duration;
+
+    #[test]
+    fn test_exponential_backoff_initial_delay() {
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
+
+        let delay = backoff.next_delay();
+        assert_eq!(delay, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_exponential_backoff_increases() {
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
+
+        let delays: Vec<Duration> = (0..5).map(|_| backoff.next_delay()).collect();
+
+        for i in 1..delays.len() {
+            assert!(
+                delays[i] >= delays[i - 1],
+                "Delay should increase or stay same"
+            );
+        }
+    }
+
+    #[test]
+    fn test_exponential_backoff_max_cap() {
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(5000));
+
+        for _ in 0..20 {
+            let delay = backoff.next_delay();
+            assert!(
+                delay <= Duration::from_millis(5000),
+                "Delay should not exceed max"
+            );
+        }
+    }
+
+    #[test]
+    fn test_exponential_backoff_reset() {
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
+
+        // Advance through several attempts
+        for _ in 0..5 {
+            backoff.next_delay();
+        }
+
+        backoff.reset();
+
+        let delay = backoff.next_delay();
+        assert_eq!(delay, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_exponential_backoff_attempt_count() {
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
+
+        assert_eq!(backoff.attempt(), 0);
+
+        backoff.next_delay();
+        assert_eq!(backoff.attempt(), 1);
+
+        backoff.next_delay();
+        assert_eq!(backoff.attempt(), 2);
+
+        backoff.reset();
+        assert_eq!(backoff.attempt(), 0);
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+    use crate::rate_limiter::{RateLimitConfig, RateLimiter};
+
+    #[test]
+    fn test_rate_limiter_initial_state() {
+        let config = RateLimitConfig {
+            requests_per_second: 10,
+            burst_capacity: 20,
+            window_seconds: 60,
+        };
+
+        let limiter = RateLimiter::new(config);
+        let status = limiter.get_status();
+
+        assert_eq!(status.available_tokens, 20);
+        assert_eq!(status.max_tokens, 20);
+        assert_eq!(status.max_rate, 10);
+    }
+
+    #[test]
+    fn test_rate_limiter_can_proceed() {
+        let config = RateLimitConfig {
+            requests_per_second: 10,
+            burst_capacity: 5,
+            window_seconds: 60,
+        };
+
+        let limiter = RateLimiter::new(config);
+
+        // Should be able to proceed initially
+        assert!(limiter.can_proceed());
+    }
+
+    #[test]
+    fn test_rate_limiter_try_acquire_success() {
+        let config = RateLimitConfig {
+            requests_per_second: 10,
+            burst_capacity: 5,
+            window_seconds: 60,
+        };
+
+        let limiter = RateLimiter::new(config);
+        let result = limiter.try_acquire();
+
+        assert!(result.is_ok());
+        let status = limiter.get_status();
+        assert_eq!(status.available_tokens, 4);
+    }
+
+    #[test]
+    fn test_rate_limiter_try_acquire_exhausted() {
+        let config = RateLimitConfig {
+            requests_per_second: 10,
+            burst_capacity: 2,
+            window_seconds: 60,
+        };
+
+        let limiter = RateLimiter::new(config);
+
+        // Exhaust the tokens
+        assert!(limiter.try_acquire().is_ok());
+        assert!(limiter.try_acquire().is_ok());
+
+        // Should fail now
+        let result = limiter.try_acquire();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rate_limiter_status_tracking() {
+        let config = RateLimitConfig {
+            requests_per_second: 10,
+            burst_capacity: 10,
+            window_seconds: 60,
+        };
+
+        let limiter = RateLimiter::new(config);
+
+        limiter.try_acquire().unwrap();
+        limiter.try_acquire().unwrap();
+
+        let status = limiter.get_status();
+        assert_eq!(status.available_tokens, 8);
+    }
+
+    #[test]
+    fn test_rate_limiter_config_defaults() {
+        let config = RateLimitConfig::default();
+
+        assert_eq!(config.requests_per_second, 10);
+        assert_eq!(config.burst_capacity, 20);
+        assert_eq!(config.window_seconds, 60);
+    }
+}

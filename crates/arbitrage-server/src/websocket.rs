@@ -1,10 +1,11 @@
-use crate::server::AppState;
+use crate::server::{validate_jwt, AppState};
 use axum::{
     extract::{
+        Query,
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use jsonwebtoken::{DecodingKey, Validation};
@@ -27,6 +28,11 @@ struct ClientMessage {
     msg_type: String,
     #[serde(default)]
     r#type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WsQueryParams {
+    pub token: Option<String>,
 }
 
 #[derive(Debug)]
@@ -73,9 +79,32 @@ async fn authenticate_websocket(
     Ok(false)
 }
 
-/// Handle WebSocket upgrade
-pub async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+/// Handle WebSocket upgrade with token validation at HTTP level
+pub async fn websocket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(params): Query<WsQueryParams>,
+) -> Response {
     debug!("WebSocket connection requested");
+
+    // Validate token from query parameter first
+    let prevalidated = if let Some(token) = &params.token {
+        validate_jwt(token, state.jwt_secret.as_str())
+    } else {
+        // Check Authorization header by extracting it from state (would need modification)
+        // For now, require token in query for WebSocket
+        false
+    };
+
+    if !prevalidated {
+        warn!("WebSocket authentication failed: missing or invalid token");
+        return json!({
+            "type": "auth_error",
+            "message": "Authentication required. Please provide a valid JWT token via ?token= query parameter."
+        }).to_string().into_response();
+    }
+
+    debug!("WebSocket token validated successfully");
     ws.on_upgrade(|socket| handle_websocket(socket, state))
 }
 
@@ -86,27 +115,8 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
 
     info!("WebSocket client connected: {}", client_id);
 
-    let auth_result = tokio::time::timeout(
-        std::time::Duration::from_secs(WS_AUTH_TIMEOUT_SECS),
-        authenticate_websocket(&mut receiver, &state),
-    )
-    .await;
-
-    let authenticated = match auth_result {
-        Ok(Ok(true)) => true,
-        Ok(Ok(false)) => {
-            warn!("WebSocket authentication failed for client: {}", client_id);
-            false
-        }
-        Ok(Err(e)) => {
-            warn!("WebSocket authentication error for {}: {}", client_id, e);
-            false
-        }
-        Err(_) => {
-            warn!("WebSocket authentication timeout for client: {}", client_id);
-            false
-        }
-    };
+    // Skip in-handler authentication since we validated at HTTP level
+    let authenticated = true;
 
     if !authenticated {
         let error_msg = json!({

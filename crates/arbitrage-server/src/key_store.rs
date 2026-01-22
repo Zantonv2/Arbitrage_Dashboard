@@ -5,6 +5,7 @@
 
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
 use arbitrage_core::types::ExchangeId;
+use chrono::{DateTime, Utc};
 use pbkdf2::pbkdf2_hmac_array;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -267,13 +268,140 @@ impl KeyStore {
             .collect()
     }
 
-    /// Load credentials from configuration file (placeholder)
-    pub fn load_from_config(&mut self, _config_path: &str) -> Result<(), KeyStoreError> {
+    /// Load credentials from configuration file (encrypted JSON)
+    pub fn load_from_config(&mut self, config_path: &str) -> Result<(), KeyStoreError> {
+        let path = std::path::Path::new(config_path);
+
+        if !path.exists() {
+            tracing::info!("Keystore file not found at {}, starting empty", config_path);
+            return Ok(());
+        }
+
+        if path.is_dir() {
+            return Err(KeyStoreError::Storage(
+                "Config path is a directory, expected file".to_string(),
+            ));
+        }
+
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| KeyStoreError::Storage(format!("Failed to read keystore: {}", e)))?;
+
+        #[derive(Debug, Deserialize)]
+        struct StoredCredentialFile {
+            exchange: String,
+            encrypted_api_key: EncryptedCredential,
+            encrypted_api_secret: EncryptedCredential,
+            encrypted_passphrase: Option<EncryptedCredential>,
+            sandbox: bool,
+            enabled: bool,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct KeystoreFile {
+            version: u32,
+            credentials: Vec<StoredCredentialFile>,
+        }
+
+        let keystore: KeystoreFile = serde_json::from_str(&content)
+            .map_err(|e| KeyStoreError::Storage(format!("Failed to parse keystore: {}", e)))?;
+
+        if keystore.version != 1 {
+            return Err(KeyStoreError::Storage(format!(
+                "Unsupported keystore version: {}",
+                keystore.version
+            )));
+        }
+
+        for cred in keystore.credentials {
+            let exchange_id: ExchangeId = cred
+                .exchange
+                .parse()
+                .map_err(|e| KeyStoreError::Storage(format!("Invalid exchange ID: {}", e)))?;
+
+            let stored = StoredCredential {
+                exchange: exchange_id,
+                encrypted_api_key: cred.encrypted_api_key,
+                encrypted_api_secret: cred.encrypted_api_secret,
+                encrypted_passphrase: cred.encrypted_passphrase,
+                sandbox: cred.sandbox,
+                enabled: cred.enabled,
+            };
+
+            self.credentials.insert(exchange_id, stored);
+        }
+
+        tracing::info!(
+            "Loaded {} credentials from keystore",
+            self.credentials.len()
+        );
+
         Ok(())
     }
 
-    /// Save credentials to configuration file (placeholder)
-    pub fn save_to_config(&self, _config_path: &str) -> Result<(), KeyStoreError> {
+    /// Save credentials to configuration file (encrypted JSON)
+    pub fn save_to_config(&self, config_path: &str) -> Result<(), KeyStoreError> {
+        let path = std::path::Path::new(config_path);
+
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    KeyStoreError::Storage(format!("Failed to create directory: {}", e))
+                })?;
+            }
+        }
+
+        #[derive(Debug, Serialize)]
+        struct StoredCredentialFile {
+            exchange: String,
+            encrypted_api_key: EncryptedCredential,
+            encrypted_api_secret: EncryptedCredential,
+            encrypted_passphrase: Option<EncryptedCredential>,
+            sandbox: bool,
+            enabled: bool,
+        }
+
+        #[derive(Debug, Serialize)]
+        struct KeystoreFile {
+            version: u32,
+            created_at: chrono::DateTime<chrono::Utc>,
+            updated_at: chrono::DateTime<chrono::Utc>,
+            credentials: Vec<StoredCredentialFile>,
+        }
+
+        let now = chrono::Utc::now();
+
+        let credentials: Vec<StoredCredentialFile> = self
+            .credentials
+            .values()
+            .map(|stored| StoredCredentialFile {
+                exchange: stored.exchange.to_string(),
+                encrypted_api_key: stored.encrypted_api_key.clone(),
+                encrypted_api_secret: stored.encrypted_api_secret.clone(),
+                encrypted_passphrase: stored.encrypted_passphrase.clone(),
+                sandbox: stored.sandbox,
+                enabled: stored.enabled,
+            })
+            .collect();
+
+        let keystore = KeystoreFile {
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            credentials,
+        };
+
+        let content = serde_json::to_string_pretty(&keystore)
+            .map_err(|e| KeyStoreError::Storage(format!("Failed to serialize keystore: {}", e)))?;
+
+        let temp_path = format!("{}.tmp", config_path);
+        std::fs::write(&temp_path, &content)
+            .map_err(|e| KeyStoreError::Storage(format!("Failed to write temp file: {}", e)))?;
+
+        std::fs::rename(&temp_path, path)
+            .map_err(|e| KeyStoreError::Storage(format!("Failed to rename temp file: {}", e)))?;
+
+        tracing::info!("Saved {} credentials to keystore", self.credentials.len());
+
         Ok(())
     }
 

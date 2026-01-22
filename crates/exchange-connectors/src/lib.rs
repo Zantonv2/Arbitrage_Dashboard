@@ -5,6 +5,7 @@ pub mod connector_unit_tests;
 pub mod errors;
 pub mod events;
 pub mod exchange_manager;
+pub mod exchange_manager_tests;
 pub mod mock;
 pub mod rate_limiter;
 pub mod rest_client;

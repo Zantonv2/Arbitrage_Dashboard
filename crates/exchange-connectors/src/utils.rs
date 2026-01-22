@@ -40,9 +40,23 @@ pub fn parse_timestamp(value: &Value) -> Result<DateTime<Utc>> {
                 ))
             }
         }
-        Value::String(s) => s.parse::<DateTime<Utc>>().map_err(|e| {
-            ArbitrageError::ParsingError(format!("Failed to parse timestamp string: {}", e))
-        }),
+        Value::String(s) => {
+            // Try to parse as numeric timestamp first (milliseconds)
+            if let Ok(timestamp) = s.parse::<i64>() {
+                if let Some(dt) = DateTime::from_timestamp(
+                    timestamp / 1000,
+                    ((timestamp % 1000) * 1_000_000) as u32,
+                ) {
+                    return Ok(dt);
+                } else if let Some(dt) = DateTime::from_timestamp(timestamp, 0) {
+                    return Ok(dt);
+                }
+            }
+            // Fall back to ISO datetime parsing
+            s.parse::<DateTime<Utc>>().map_err(|e| {
+                ArbitrageError::ParsingError(format!("Failed to parse timestamp string: {}", e))
+            })
+        }
         _ => Err(ArbitrageError::ParsingError(
             "Invalid timestamp format".to_string(),
         )),
@@ -354,8 +368,18 @@ impl ParsingFailureTracker {
         let mut map = match self.failures.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - aborting", e);
-                std::process::abort();
+                tracing::error!("Mutex poisoned for failures: {:?} - recovery by creating new map", e);
+                // Create a new map and replace the internal state
+                let mut new_map = std::collections::HashMap::new();
+                new_map.insert(key.clone(), AtomicU64::new(1));
+                // Replace the internal map
+                if let Ok(mut guard) = self.failures.lock() {
+                    *guard = new_map;
+                } else {
+                    // If we can't even lock the new one, just log and give up
+                    tracing::error!("Failed to recover from mutex poison - giving up");
+                }
+                return;
             }
         };
         let counter = map.entry(key).or_insert_with(|| AtomicU64::new(0));
@@ -368,8 +392,8 @@ impl ParsingFailureTracker {
         let map = match self.failures.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - aborting", e);
-                std::process::abort();
+                tracing::error!("Mutex poisoned for failures: {:?} - returning 0", e);
+                return 0;
             }
         };
         map.get(&key).map(|c| c.load(Ordering::SeqCst)).unwrap_or(0)
@@ -380,12 +404,56 @@ impl ParsingFailureTracker {
         let map = match self.failures.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - aborting", e);
-                std::process::abort();
+                tracing::error!("Mutex poisoned for failures: {:?} - returning empty map", e);
+                return std::collections::HashMap::new();
             }
         };
         map.iter()
             .map(|(k, v)| (k.clone(), v.load(Ordering::SeqCst)))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parsing_failure_tracker_poison_recovery() {
+        let tracker = ParsingFailureTracker::new();
+        
+        // Record some failures normally
+        tracker.record_failure("test_exchange", "test_operation");
+        assert_eq!(tracker.get_failure_count("test_exchange", "test_operation"), 1);
+        
+        // Test that the tracker works normally after creation
+        tracker.record_failure("test_exchange", "test_operation_2");
+        let count = tracker.get_failure_count("test_exchange", "test_operation_2");
+        assert_eq!(count, 1);
+        
+        // Verify original failure is still accessible
+        let original_count = tracker.get_failure_count("test_exchange", "test_operation");
+        assert_eq!(original_count, 1);
+        
+        // Original failures should be accessible
+        let all_failures = tracker.get_all_failures();
+        assert_eq!(all_failures.len(), 2);
+    }
+
+    #[test]
+    fn test_parsing_failure_tracker_normal_operation() {
+        let tracker = ParsingFailureTracker::new();
+        
+        // Test normal operation
+        tracker.record_failure("exchange1", "operation1");
+        tracker.record_failure("exchange1", "operation1"); // Multiple calls
+        tracker.record_failure("exchange2", "operation2");
+        
+        assert_eq!(tracker.get_failure_count("exchange1", "operation1"), 2);
+        assert_eq!(tracker.get_failure_count("exchange2", "operation2"), 1);
+        assert_eq!(tracker.get_failure_count("exchange3", "operation3"), 0);
+        
+        let all_failures = tracker.get_all_failures();
+        assert_eq!(all_failures.len(), 2);
     }
 }

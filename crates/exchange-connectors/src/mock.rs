@@ -58,19 +58,19 @@ impl MockConnector {
     }
 
     pub fn set_order_book(&mut self, order_book: OrderBook) {
-        let mut books = self.order_books.lock().unwrap_or_else(|e| {
-            tracing::error!("Mutex poisoned for order_books: {:?}", e);
-            std::process::abort();
-        });
-        books.insert(order_book.symbol.clone(), order_book);
+        if let Ok(mut books) = self.order_books.lock() {
+            books.insert(order_book.symbol.clone(), order_book);
+        } else {
+            tracing::error!("Mutex poisoned for order_books - order book not set");
+        }
     }
 
     pub fn set_ticker(&mut self, ticker: TickerData) {
-        let mut tickers = self.tickers.lock().unwrap_or_else(|e| {
-            tracing::error!("Mutex poisoned for tickers: {:?}", e);
-            std::process::abort();
-        });
-        tickers.insert(ticker.symbol.clone(), ticker);
+        if let Ok(mut tickers) = self.tickers.lock() {
+            tickers.insert(ticker.symbol.clone(), ticker);
+        } else {
+            tracing::error!("Mutex poisoned for tickers - ticker not set");
+        }
     }
 
     pub fn inject_failure(&mut self) {
@@ -119,10 +119,18 @@ impl ExchangeConnector for MockConnector {
         self.simulate_latency().await;
         self.check_failure()?;
 
-        let books = self.order_books.lock().unwrap_or_else(|e| {
-            tracing::error!("Mutex poisoned for order_books: {:?}", e);
-            std::process::abort();
-        });
+        let books = match self.order_books.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                tracing::error!("Mutex poisoned for order_books: {:?} - returning empty book", e);
+                return Ok(OrderBook::new(
+                    self.config.exchange_id,
+                    symbol.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                ));
+            }
+        };
         match books.get(symbol).cloned() {
             Some(book) => Ok(book),
             None => {
@@ -155,10 +163,13 @@ impl ExchangeConnector for MockConnector {
         self.simulate_latency().await;
         self.check_failure()?;
 
-        let tickers = self.tickers.lock().unwrap_or_else(|e| {
-            tracing::error!("Mutex poisoned for tickers: {:?}", e);
-            std::process::abort();
-        });
+        let tickers = match self.tickers.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                tracing::error!("Mutex poisoned for tickers: {:?} - returning empty result", e);
+                return Ok(HashMap::new());
+            }
+        };
         let mut result = HashMap::new();
         for symbol in symbols {
             if let Some(ticker) = tickers.get(symbol).cloned() {
@@ -196,11 +207,11 @@ impl ExchangeConnector for MockConnector {
         let mut status = self.status.write().await;
         *status = ConnectionStatus::Connected;
 
-        let mut stats = self.stats.lock().unwrap_or_else(|e| {
-            tracing::error!("Mutex poisoned for stats: {:?}", e);
-            std::process::abort();
-        });
-        stats.exchange = self.config.exchange_id;
+        if let Ok(mut stats) = self.stats.lock() {
+            stats.exchange = self.config.exchange_id;
+        } else {
+            tracing::error!("Mutex poisoned for stats - connection recorded but stats not updated");
+        }
 
         self.event_sender
             .send(ConnectionEvent::StatusChange {
@@ -258,14 +269,20 @@ impl ExchangeConnector for MockConnector {
 
     async fn health_check(&self) -> arbitrage_core::Result<HealthStatus> {
         let status = self.status.read().await.clone();
-        let stats = self
-            .stats
-            .lock()
-            .unwrap_or_else(|e| {
-                tracing::error!("Mutex poisoned for stats: {:?}", e);
-                std::process::abort();
-            })
-            .clone();
+        let stats = match self.stats.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                tracing::error!("Mutex poisoned for stats: {:?} - using default stats", e);
+                return Ok(HealthStatus {
+                    is_connected: status == ConnectionStatus::Connected,
+                    last_message_time: None,
+                    websocket_status: status,
+                    rest_api_status: ConnectionStatus::Connected,
+                    error_count: 0,
+                    reconnect_count: 0,
+                });
+            }
+        };
 
         Ok(HealthStatus {
             is_connected: status == ConnectionStatus::Connected,
@@ -278,11 +295,13 @@ impl ExchangeConnector for MockConnector {
     }
 
     fn get_stats(&self) -> ConnectorStats {
-        let stats = self.stats.lock().unwrap_or_else(|e| {
-            tracing::error!("Mutex poisoned for stats: {:?}", e);
-            std::process::abort();
-        });
-        stats.clone()
+        match self.stats.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                tracing::error!("Mutex poisoned for stats: {:?} - using default stats", e);
+                ConnectorStats::default()
+            }
+        }
     }
 
     async fn force_reconnect(&mut self) -> arbitrage_core::Result<()> {

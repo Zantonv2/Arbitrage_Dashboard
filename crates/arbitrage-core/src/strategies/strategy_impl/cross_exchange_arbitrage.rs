@@ -147,21 +147,56 @@ impl CrossExchangeArbitrageStrategy {
     }
 
     /// Estimate net profit after fees and transfer costs
-    fn estimate_net_profit_bps(
+    ///
+    /// Calculates net profit by subtracting combined taker fees and optional
+    /// transfer costs from gross profit. Uses checked arithmetic to prevent
+    /// overflow for unusual fee values.
+    ///
+    /// # Arguments
+    ///
+    /// * `gross_profit_bps` - Gross profit in basis points
+    /// * `buy_exchange` - Exchange for buy leg
+    /// * `sell_exchange` - Exchange for sell leg
+    /// * `needs_rebalancing` - Whether transfer costs should be deducted
+    ///
+    /// # Returns
+    ///
+    /// Net profit in basis points after fees, or an error if calculation overflows.
+    pub(crate) fn estimate_net_profit_bps(
         &self,
         gross_profit_bps: i32,
         buy_exchange: ExchangeId,
         sell_exchange: ExchangeId,
         needs_rebalancing: bool,
-    ) -> i32 {
+    ) -> Result<i32> {
         let (_, buy_taker_fee) = ExchangeCapabilities::get_typical_fees(buy_exchange);
         let (_, sell_taker_fee) = ExchangeCapabilities::get_typical_fees(sell_exchange);
 
-        let total_fee_bps = ((buy_taker_fee + sell_taker_fee) * 100.0) as i32;
+        let combined_fee_pct = buy_taker_fee + sell_taker_fee;
 
-        let mut net_profit = gross_profit_bps - total_fee_bps;
+        if combined_fee_pct > 1.0 {
+            return Err(ArbitrageError::Calculation(format!(
+                "Combined fee rate {} exceeds 100%, cannot calculate fee BPS",
+                combined_fee_pct
+            )));
+        }
 
-        // Subtract transfer costs if rebalancing is needed
+        let total_fee_bps = (combined_fee_pct * 100.0).floor() as i32;
+
+        let mut net_profit = gross_profit_bps.checked_sub(total_fee_bps).ok_or_else(|| {
+            ArbitrageError::Calculation(format!(
+                "Net profit calculation underflow: {} - {}",
+                gross_profit_bps, total_fee_bps
+            ))
+        })?;
+
+        if net_profit < 0 {
+            return Err(ArbitrageError::Calculation(format!(
+                "Net profit would be negative: {} - {} = {}",
+                gross_profit_bps, total_fee_bps, net_profit
+            )));
+        }
+
         if needs_rebalancing {
             let transfer_cost_bps = self
                 .config
@@ -169,10 +204,24 @@ impl CrossExchangeArbitrageStrategy {
                 .get("transfer_cost_bps")
                 .and_then(|v| v.as_i64())
                 .unwrap_or(10) as i32;
-            net_profit -= transfer_cost_bps;
+            net_profit = net_profit.checked_sub(transfer_cost_bps).ok_or_else(|| {
+                ArbitrageError::Calculation(format!(
+                    "Net profit underflow after transfer costs: {} - {}",
+                    net_profit, transfer_cost_bps
+                ))
+            })?;
+
+            if net_profit < 0 {
+                return Err(ArbitrageError::Calculation(format!(
+                    "Net profit would be negative after transfer costs: {} - {} = {}",
+                    net_profit + transfer_cost_bps,
+                    transfer_cost_bps,
+                    net_profit
+                )));
+            }
         }
 
-        net_profit
+        Ok(net_profit)
     }
 
     /// Check if exchanges need rebalancing based on current balances
@@ -468,12 +517,18 @@ impl Strategy for CrossExchangeArbitrageStrategy {
 
         // Calculate net profit considering rebalancing costs
         let gross_profit_bps = signal.expected_profit_bps;
-        let net_profit_bps = self.estimate_net_profit_bps(
+        let net_profit_bps = match self.estimate_net_profit_bps(
             gross_profit_bps,
             buy_leg.exchange,
             sell_leg.exchange,
             needs_rebalancing,
-        );
+        ) {
+            Ok(net) => net,
+            Err(e) => {
+                warn!("Failed to calculate net profit: {}", e);
+                return Ok(false);
+            }
+        };
 
         // Check minimum profit threshold
         if net_profit_bps < context.min_profit_bps {

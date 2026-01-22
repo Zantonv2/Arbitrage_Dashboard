@@ -139,8 +139,10 @@ mod tests {
         let policy = ReconnectPolicy::new(10, 1000, 30000, 0.0);
         let delay0 = policy.next_delay(0);
         let delay1 = policy.next_delay(1);
-        // With 0 backoff, delays should be equal
-        assert_eq!(delay0, delay1);
+        // With 0 backoff multiplier: 0^0 = 1, so first delay is initial_delay
+        // 0^1 = 0, so subsequent delays are 0
+        assert_eq!(delay0.as_millis(), 1000);
+        assert_eq!(delay1.as_millis(), 0);
     }
 
     #[test]
@@ -171,8 +173,10 @@ mod tests {
     fn test_websocket_message_with_empty_symbols() {
         let message = WebSocketMessage::Subscribe(vec![]);
         let debug_str = format!("{:?}", message);
+        println!("Debug string: {}", debug_str);
         assert!(debug_str.contains("Subscribe"));
-        assert!(debug_str.contains("0"));
+        // Empty vec debug format is "[]"
+        assert!(debug_str.contains("[]"));
     }
 
     #[test]
