@@ -30,10 +30,10 @@ jobs:
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             ISSUE_NUM=$(echo "${{ github.event.issue.html_url }}" | grep -oE '[0-9]+$' || echo "")
             if [ -n "$ISSUE_NUM" ]; then
-              echo "ISSUES=$ISSUE_NUM" >> $GITHUB_OUTPUT
+              echo "ISSUES=[$ISSUE_NUM]" >> $GITHUB_OUTPUT
               echo "COUNT=1" >> $GITHUB_OUTPUT
             else
-              echo "ISSUES=" >> $GITHUB_OUTPUT
+              echo "ISSUES=[]" >> $GITHUB_OUTPUT
               echo "COUNT=0" >> $GITHUB_OUTPUT
             fi
           else
@@ -48,7 +48,7 @@ jobs:
                 ISSUES="${ISSUES}${ISSUE_NUM},"
               fi
             done
-            echo "ISSUES=${ISSUES%,}" >> $GITHUB_OUTPUT
+            echo "ISSUES=[${ISSUES%,}]" >> $GITHUB_OUTPUT
             echo "COUNT=$(echo ${ISSUES%,} | tr ',' '\n' | grep -c . || echo 0)" >> $GITHUB_OUTPUT
           fi
 
