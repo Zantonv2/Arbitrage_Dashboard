@@ -246,6 +246,7 @@ impl OrderExecutor {
                 let rollback_performed = if self.config.enable_rollback {
                     self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order)
                         .await
+                        .unwrap_or(false)
                 } else {
                     false
                 };
@@ -266,6 +267,7 @@ impl OrderExecutor {
                 let rollback_performed = if self.config.enable_rollback {
                     self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order)
                         .await
+                        .unwrap_or(false)
                 } else {
                     false
                 };
@@ -363,7 +365,7 @@ impl OrderExecutor {
     }
 
     /// Rollback buy order by placing offsetting sell
-    async fn rollback_buy_order(&self, exchange: &ExchangeId, buy_order: &OrderResponse) -> bool {
+    async fn rollback_buy_order(&self, exchange: &ExchangeId, buy_order: &OrderResponse) -> Result<bool> {
         warn!("🔄 Rolling back buy order: {}", buy_order.order_id);
 
         let rollback_request = OrderRequest {
@@ -379,17 +381,17 @@ impl OrderExecutor {
         match self.place_order(exchange, &rollback_request).await {
             Ok(_) => {
                 info!("✅ Buy order rollback successful");
-                true
+                Ok(true)
             }
             Err(e) => {
                 error!("❌ Buy order rollback failed: {}", e);
-                false
+                Ok(false)
             }
         }
     }
 
     /// Rollback sell order by placing offsetting buy
-    async fn rollback_sell_order(&self, exchange: &ExchangeId, sell_order: &OrderResponse) -> bool {
+    async fn rollback_sell_order(&self, exchange: &ExchangeId, sell_order: &OrderResponse) -> Result<bool> {
         warn!("🔄 Rolling back sell order: {}", sell_order.order_id);
 
         let rollback_request = OrderRequest {
@@ -405,11 +407,11 @@ impl OrderExecutor {
         match self.place_order(exchange, &rollback_request).await {
             Ok(_) => {
                 info!("✅ Sell order rollback successful");
-                true
+                Ok(true)
             }
             Err(e) => {
                 error!("❌ Sell order rollback failed: {}", e);
-                false
+                Ok(false)
             }
         }
     }

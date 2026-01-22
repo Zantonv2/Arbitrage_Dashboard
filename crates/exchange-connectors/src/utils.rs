@@ -357,13 +357,14 @@ impl ParsingFailureTracker {
                 tracing::error!("Mutex poisoned for failures: {:?} - recovery by creating new map", e);
                 // Create a new map and replace the internal state
                 let mut new_map = std::collections::HashMap::new();
-                let counter = new_map.insert(key.clone(), AtomicU64::new(1));
+                new_map.insert(key.clone(), AtomicU64::new(1));
                 // Replace the internal map
-                *self.failures.lock().unwrap_or_else(|_| {
+                if let Ok(mut guard) = self.failures.lock() {
+                    *guard = new_map;
+                } else {
                     // If we can't even lock the new one, just log and give up
                     tracing::error!("Failed to recover from mutex poison - giving up");
-                    panic!("Cannot recover from mutex poison");
-                }) = new_map;
+                }
                 return;
             }
         };
