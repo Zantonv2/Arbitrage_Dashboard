@@ -63,7 +63,7 @@ jobs:
       - name: Get PR details
         id: pr-details
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUM=${{ matrix.pr }}
           echo "NUMBER=$PR_NUM" >> $GITHUB_OUTPUT
@@ -99,7 +99,7 @@ jobs:
 
       - name: Post review comment
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUM=${{ steps.pr-details.outputs.NUMBER }}
           REPO="${{ github.repository }}"
@@ -147,7 +147,7 @@ jobs:
       - name: Post review comment
         if: github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUM=${{ github.event.pull_request.number }}
           REPO="${{ github.repository }}"
