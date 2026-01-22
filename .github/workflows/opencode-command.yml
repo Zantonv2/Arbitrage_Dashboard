@@ -1,0 +1,70 @@
+name: OpenCode Command Handler
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: opencode-command-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  handle-command:
+    runs-on: ubuntu-latest
+    if: >
+      contains(github.event.comment.body, '/oc') ||
+      contains(github.event.comment.body, '/opencode')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Detect context
+        id: context
+        run: |
+          if [[ "${{ github.event.issue.html_url }}" == *"pull_request"* ]]; then
+            echo "TYPE=pr-comment" >> $GITHUB_OUTPUT
+            echo "URL=${{ github.event.pull_request.html_url }}" >> $GITHUB_OUTPUT
+          else
+            echo "TYPE=issue-comment" >> $GITHUB_OUTPUT
+            echo "URL=${{ github.event.issue.html_url }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CONTEXT_URL: ${{ steps.context.outputs.URL }}
+        with:
+          model: opencode/minimax-m2.1-free
+          share: false
+          prompt: |
+            ${{ github.event.issue.html_url != '' && 'Handle this issue' || 'Handle this PR comment' }} with the following user request:
+
+            "${{ env.COMMENT_BODY }}"
+
+            ## Context
+            ${{ env.CONTEXT_URL }}
+
+            ## Your Task
+            1. Read the issue/PR description and all comments
+            2. Understand what the user is asking
+            3. Take appropriate action:
+               - If asking to fix: Implement the fix, commit, push, create PR
+               - If asking to explain: Provide clear explanation
+               - If asking to review: Review the code and provide feedback
+            4. Reply with what you did
+
+            ## Important
+            - Be concise but helpful
+            - If creating commits/PRs, use: ZantonV2 <172037461+Zantonv2@users.noreply.github.com>
+            - Output a summary of actions taken
