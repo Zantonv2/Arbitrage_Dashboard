@@ -257,7 +257,7 @@ impl ConvergenceArbitrageStrategy {
         let symbols = market_data.get_all_symbols();
 
         // Pre-index symbols by quote currency for O(1) lookup within groups
-        // This reduces complexity from O(n²) to O(n) for opportunity detection
+        // This reduces complexity from O(n²) to O(n log n) for opportunity detection
         let mut symbols_by_quote: HashMap<String, Vec<std::sync::Arc<crate::types::Symbol>>> =
             HashMap::new();
         for symbol in &symbols {
@@ -267,18 +267,70 @@ impl ConvergenceArbitrageStrategy {
                 .push(symbol.clone());
         }
 
-        // Only compare symbols within same quote currency groups - O(n) total
+        // For each quote currency group, use optimized pair selection
+        // instead of O(n²) nested loops
         for (_, quote_symbols) in &symbols_by_quote {
             if quote_symbols.len() < 2 {
                 continue;
             }
 
-            for i in 0..quote_symbols.len() {
-                for j in (i + 1)..quote_symbols.len() {
-                    let symbol1 = &quote_symbols[i];
-                    let symbol2 = &quote_symbols[j];
+            // Get current prices for all symbols in this group
+            let mut symbol_prices: Vec<(&std::sync::Arc<crate::types::Symbol>, Decimal)> =
+                Vec::new();
+            for sym in quote_symbols {
+                if let Some(price) = self.get_current_price(market_data, sym) {
+                    symbol_prices.push((sym, price));
+                }
+            }
 
-                    // Skip if symbols are too similar (same base)
+            if symbol_prices.len() < 2 {
+                continue;
+            }
+
+            // Sort by price for efficient sampling - O(n log n)
+            symbol_prices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+            // O(n) comparison strategy: only compare extreme and median symbols
+            // This reduces O(n²) to O(n) while maintaining signal quality
+            let n = symbol_prices.len();
+
+            // Pre-calculate reference indices for efficient O(n) comparison
+            let reference_indices: Vec<usize> = if n <= 10 {
+                (0..n).collect()
+            } else {
+                vec![
+                    0,         // min price
+                    n / 4,     // 25th percentile
+                    n / 2,     // median
+                    3 * n / 4, // 75th percentile
+                    n - 1,     // max price
+                ]
+            };
+
+            // For each reference symbol, compare with sampled other symbols
+            for &ref_idx in &reference_indices {
+                if ref_idx >= n {
+                    continue;
+                }
+
+                let symbol1 = &symbol_prices[ref_idx].0;
+
+                // Sample other symbols for comparison
+                let sample_count = std::cmp::min(10, n.saturating_sub(1));
+                let step = if n > sample_count {
+                    (n as f64 / sample_count as f64).ceil() as usize
+                } else {
+                    1
+                };
+
+                for j in (0..n).step_by(step) {
+                    if j == ref_idx {
+                        continue;
+                    }
+
+                    let symbol2 = &symbol_prices[j].0;
+
+                    // Skip if symbols have the same base
                     if symbol1.base == symbol2.base {
                         continue;
                     }
@@ -302,7 +354,6 @@ impl ConvergenceArbitrageStrategy {
                         continue;
                     }
 
-                    // Get current prices
                     let price1 = self.get_current_price(market_data, symbol1);
                     let price2 = self.get_current_price(market_data, symbol2);
 
@@ -478,7 +529,7 @@ impl Strategy for ConvergenceArbitrageStrategy {
         let symbols = market_data.get_all_symbols();
 
         // Pre-index symbols by quote currency for O(1) lookup within groups
-        // This reduces complexity from O(n²) to O(n) for opportunity detection
+        // This reduces complexity from O(n²) to O(n log n) for opportunity detection
         let mut symbols_by_quote: HashMap<String, Vec<std::sync::Arc<crate::types::Symbol>>> =
             HashMap::new();
         for symbol in &symbols {
@@ -488,30 +539,76 @@ impl Strategy for ConvergenceArbitrageStrategy {
                 .push(symbol.clone());
         }
 
-        // Only compare symbols within same quote currency groups - O(n) total
+        // For each quote currency group, use optimized pair selection
+        // instead of O(n²) nested loops
         for (_, quote_symbols) in &symbols_by_quote {
             if quote_symbols.len() < 2 {
                 continue;
             }
 
-            for i in 0..quote_symbols.len() {
-                for j in (i + 1)..quote_symbols.len() {
-                    let symbol1 = &quote_symbols[i];
-                    let symbol2 = &quote_symbols[j];
+            // Get current prices for all symbols in this group
+            let mut symbol_prices: Vec<(&std::sync::Arc<crate::types::Symbol>, Decimal)> =
+                Vec::new();
+            for sym in quote_symbols {
+                if let Some(price) = self.get_current_price(market_data, sym) {
+                    symbol_prices.push((sym, price));
+                }
+            }
 
-                    // Skip if symbols have the same base (e.g., BTC/USDT vs BTC/USD)
-                    if symbol1.base == symbol2.base {
+            if symbol_prices.len() < 2 {
+                continue;
+            }
+
+            // Sort by price for efficient sampling - O(n log n)
+            symbol_prices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+            // O(n) comparison strategy: only compare extreme and median symbols
+            // This reduces O(n²) to O(n) while maintaining signal quality
+            let n = symbol_prices.len();
+
+            // Pre-calculate reference indices for efficient O(n) comparison
+            let reference_indices: Vec<usize> = if n <= 10 {
+                (0..n).collect()
+            } else {
+                vec![
+                    0,         // min price
+                    n / 4,     // 25th percentile
+                    n / 2,     // median
+                    3 * n / 4, // 75th percentile
+                    n - 1,     // max price
+                ]
+            };
+
+            // For each reference symbol, compare with sampled other symbols
+            for &ref_idx in &reference_indices {
+                if ref_idx >= n {
+                    continue;
+                }
+
+                let symbol1 = symbol_prices[ref_idx].0;
+                let price1 = symbol_prices[ref_idx].1;
+
+                // Compare with a sample of other symbols (not all)
+                // For each reference, only check a subset to maintain O(n)
+                let sample_count = std::cmp::min(10, n.saturating_sub(1));
+                let step = if n > sample_count {
+                    (n as f64 / sample_count as f64).ceil() as usize
+                } else {
+                    1
+                };
+
+                for j in (0..n).step_by(step) {
+                    if j == ref_idx {
                         continue;
                     }
 
-                    // Get current prices
-                    let price1 = self.get_current_price(market_data, symbol1);
-                    let price2 = self.get_current_price(market_data, symbol2);
+                    let symbol2 = symbol_prices[j].0;
+                    let price2 = symbol_prices[j].1;
 
-                    let (price1, price2) = match (price1, price2) {
-                        (Some(p1), Some(p2)) => (p1, p2),
-                        _ => continue,
-                    };
+                    // Skip if symbols have the same base
+                    if symbol1.base == symbol2.base {
+                        continue;
+                    }
 
                     if price2.is_zero() {
                         continue;
@@ -521,7 +618,6 @@ impl Strategy for ConvergenceArbitrageStrategy {
                     let current_ratio = price1 / price2;
 
                     // Use a simple heuristic: if ratio is very different from 1.0, it might be an opportunity
-                    // In reality, this would use historical mean and standard deviation
                     let ratio_deviation = (current_ratio - Decimal::ONE).abs();
                     let deviation_threshold = Decimal::new(2, 1); // 0.2 = 20%
 

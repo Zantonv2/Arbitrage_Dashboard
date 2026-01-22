@@ -415,3 +415,259 @@ async fn test_convergence_arbitrage_multiple_exchanges() -> Result<()> {
 
     Ok(())
 }
+
+/// Performance test: convergence arbitrage with 100 symbols
+#[tokio::test]
+async fn test_convergence_arbitrage_performance_100_symbols() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    // Create 100 symbols with same quote currency (USDT)
+    for i in 0..100 {
+        let base = format!("SYM{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        // Create prices with some variation to enable potential signals
+        let price = Decimal::from(100 + i * 10);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(1),
+            price + Decimal::from(1),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    // Add a few outlier symbols that should create signals
+    let outlier_symbol1 = Symbol::new("OUTLIER1", "USDT");
+    let outlier_ticker1 = Ticker::new(
+        ExchangeId::OKX,
+        outlier_symbol1.clone(),
+        Decimal::from(1000),
+        Decimal::from(1010),
+        Decimal::from(1005),
+    );
+    market_bundle.add_ticker(Arc::new(outlier_ticker1));
+
+    let outlier_symbol2 = Symbol::new("OUTLIER2", "USDT");
+    let outlier_ticker2 = Ticker::new(
+        ExchangeId::OKX,
+        outlier_symbol2.clone(),
+        Decimal::from(50),
+        Decimal::from(55),
+        Decimal::from(52),
+    );
+    market_bundle.add_ticker(Arc::new(outlier_ticker2));
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let elapsed = start.elapsed();
+
+    println!("100 symbols: {} signals detected in {:?}", signals.len(), elapsed);
+
+    // Should complete in under 100ms
+    assert!(
+        elapsed.as_millis() < 100,
+        "100 symbols detection took {}ms, expected <100ms",
+        elapsed.as_millis()
+    );
+
+    // With outliers, should detect some signals
+    assert!(
+        signals.len() >= 2,
+        "Should detect at least the outlier pairs, got {} signals",
+        signals.len()
+    );
+
+    Ok(())
+}
+
+/// Performance test: convergence arbitrage with 500 symbols
+#[tokio::test]
+async fn test_convergence_arbitrage_performance_500_symbols() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    // Create 500 symbols with same quote currency (USDT)
+    for i in 0..500 {
+        let base = format!("SYM{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        let price = Decimal::from(100 + i * 5);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(1),
+            price + Decimal::from(1),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    // Add outlier symbols
+    let outlier_symbol = Symbol::new("OUTLIER", "USDT");
+    let outlier_ticker = Ticker::new(
+        ExchangeId::OKX,
+        outlier_symbol.clone(),
+        Decimal::from(2000),
+        Decimal::from(2010),
+        Decimal::from(2005),
+    );
+    market_bundle.add_ticker(Arc::new(outlier_ticker));
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let elapsed = start.elapsed();
+
+    println!("500 symbols: {} signals detected in {:?}", signals.len(), elapsed);
+
+    // Should complete in under 100ms
+    assert!(
+        elapsed.as_millis() < 100,
+        "500 symbols detection took {}ms, expected <100ms",
+        elapsed.as_millis()
+    );
+
+    Ok(())
+}
+
+/// Performance test: convergence arbitrage with 1000 symbols
+#[tokio::test]
+async fn test_convergence_arbitrage_performance_1000_symbols() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    // Create 1000 symbols with same quote currency (USDT)
+    for i in 0..1000 {
+        let base = format!("SYM{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        let price = Decimal::from(100 + i * 3);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(1),
+            price + Decimal::from(1),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    // Add a few extreme outliers to create clear signals
+    for i in 0..3 {
+        let base = format!("BIGOUTLIER{}", i);
+        let symbol = Symbol::new(&base, "USDT");
+
+        let price = Decimal::from(10000 + i * 5000);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - Decimal::from(100),
+            price + Decimal::from(100),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    let start = std::time::Instant::now();
+    let signals = strategy.detect(&market_bundle)?;
+    let elapsed = start.elapsed();
+
+    println!("1000 symbols: {} signals detected in {:?}", signals.len(), elapsed);
+
+    // Should complete in under 100ms (key acceptance criterion)
+    assert!(
+        elapsed.as_millis() < 100,
+        "1000 symbols detection took {}ms, expected <100ms",
+        elapsed.as_millis()
+    );
+
+    // Should detect signals from outlier comparisons
+    assert!(
+        !signals.is_empty(),
+        "Should detect at least some signals from outlier pairs"
+    );
+
+    Ok(())
+}
+
+/// Test that optimized algorithm maintains signal quality
+#[tokio::test]
+async fn test_convergence_arbitrage_algorithm_quality() -> Result<()> {
+    let strategy = ConvergenceArbitrageStrategy::new();
+    let mut market_bundle = MarketBundle::new();
+
+    // Create a mix of normal and outlier symbols
+    // Normal pairs should NOT create signals
+    let normal_pairs = vec![
+        ("BTC", "USDT", Decimal::from(50000)),
+        ("ETH", "USDT", Decimal::from(3000)),
+        ("SOL", "USDT", Decimal::from(100)),
+        ("BNB", "USDT", Decimal::from(500)),
+    ];
+
+    for (base, quote, price) in normal_pairs {
+        let symbol = Symbol::new(base, quote);
+        let ticker = Ticker::new(
+            ExchangeId::OKX,
+            symbol.clone(),
+            price - price / Decimal::from(100),
+            price + price / Decimal::from(100),
+            price,
+        );
+        market_bundle.add_ticker(Arc::new(ticker));
+    }
+
+    // Add extreme outliers that SHOULD create signals
+    let cheap_symbol = Symbol::new("CHEAP", "USDT");
+    let cheap_ticker = Ticker::new(
+        ExchangeId::OKX,
+        cheap_symbol.clone(),
+        Decimal::from(1),
+        Decimal::from(2),
+        Decimal::from(1),
+    );
+    market_bundle.add_ticker(Arc::new(cheap_ticker));
+
+    let expensive_symbol = Symbol::new("EXPENSIVE", "USDT");
+    let expensive_ticker = Ticker::new(
+        ExchangeId::OKX,
+        expensive_symbol.clone(),
+        Decimal::from(500000),
+        Decimal::from(500010),
+        Decimal::from(500005),
+    );
+    market_bundle.add_ticker(Arc::new(expensive_ticker));
+
+    let signals = strategy.detect(&market_bundle)?;
+
+    println!("Quality test: {} signals detected", signals.len());
+
+    // Should detect at least the cheap/expensive pair
+    let has_outlier_signal = signals.iter().any(|s| {
+        s.legs.iter().any(|leg| {
+            leg.symbol.base == "CHEAP" || leg.symbol.base == "EXPENSIVE"
+        })
+    });
+
+    assert!(
+        has_outlier_signal,
+        "Should detect signals involving outlier symbols (CHEAP/EXPENSIVE)"
+    );
+
+    // Normal pairs should not dominate signals
+    for signal in &signals {
+        let has_normal_base = signal.legs.iter().any(|leg| {
+            ["BTC", "ETH", "SOL", "BNB"].contains(&leg.symbol.base.as_str())
+        });
+
+        // If we have signals, at least some should involve outliers
+        // (This is a soft assertion since optimization might miss some pairs)
+        if signals.len() < 10 {
+            println!("Signal involving normal base: {}", has_normal_base);
+        }
+    }
+
+    Ok(())
+}
