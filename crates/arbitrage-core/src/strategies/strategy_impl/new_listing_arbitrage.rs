@@ -2,10 +2,9 @@ use crate::strategies::strategies_specifics::{
     ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
 use crate::strategies::{
-    FilterContext, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig, Ticker, TradeLeg,
+    FilterContext, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig, TradeLeg,
 };
 use crate::{ExchangeId, Result, Side, Symbol};
-use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -34,11 +33,6 @@ use tracing::debug;
 /// - Liquidity depth analysis for new markets
 pub struct NewListingArbitrageStrategy {
     config: StrategyConfig,
-    #[allow(dead_code)]
-    /// Track symbols we've seen before to detect new ones
-    known_symbols: FxHashSet<Symbol>,
-    /// Track when symbols were first seen
-    symbol_first_seen: FxHashMap<Symbol, DateTime<Utc>>,
 }
 
 impl NewListingArbitrageStrategy {
@@ -55,8 +49,6 @@ impl NewListingArbitrageStrategy {
                 risk_limits: RiskLimits::default(),
                 custom_params,
             },
-            known_symbols: FxHashSet::default(),
-            symbol_first_seen: FxHashMap::default(),
         }
     }
 
@@ -65,264 +57,6 @@ impl NewListingArbitrageStrategy {
         let mut strategy = Self::new();
         strategy.config = config;
         strategy
-    }
-
-    #[allow(dead_code)]
-    /// Get supported exchanges prioritized for new listings
-    fn get_supported_exchanges(&self) -> Vec<ExchangeId> {
-        // Prioritize exchanges known for early listings
-        vec![
-            ExchangeId::MEXC,     // Often first to list new tokens
-            ExchangeId::GateIo,   // Also early adopter
-            ExchangeId::OKX,      // Major exchange
-            ExchangeId::ByBit,    // Major exchange
-            ExchangeId::Bitstamp, // Conservative exchange (later listings)
-            ExchangeId::Kraken,   // Conservative exchange (later listings)
-        ]
-    }
-
-    /// Check if a symbol is newly listed (within the configured window)
-    fn is_newly_listed(&self, symbol: &Symbol) -> bool {
-        let window_hours = self
-            .config
-            .custom_params
-            .get("new_listing_window_hours")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(24);
-
-        if let Some(first_seen) = self.symbol_first_seen.get(symbol) {
-            let now = Utc::now();
-            let elapsed = now - *first_seen;
-            elapsed < Duration::hours(window_hours)
-        } else {
-            // If we haven't seen it before, it's new
-            true
-        }
-    }
-
-    #[allow(dead_code)]
-    /// Update symbol tracking
-    fn update_symbol_tracking(&mut self, symbols: &[Symbol]) {
-        let now = Utc::now();
-
-        for symbol in symbols {
-            if !self.known_symbols.contains(symbol) {
-                self.known_symbols.insert(symbol.clone());
-                self.symbol_first_seen.insert(symbol.clone(), now);
-                debug!("New symbol detected: {}", symbol);
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    /// Check if symbol meets basic criteria for new listing arbitrage
-    fn is_valid_new_listing(&self, symbol: &Symbol, ticker: &Ticker) -> bool {
-        // Relax validation for better test compatibility
-
-        // Check minimum volume (lower threshold for new listings)
-        let min_volume_usd = self
-            .config
-            .custom_params
-            .get("min_volume_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1000.0); // Reduced from 10000 to 1000
-
-        let volume_usd = ticker.volume_24h.to_f64().unwrap_or(0.0);
-        if volume_usd > 0.0 && volume_usd < min_volume_usd {
-            return false;
-        }
-
-        // Check price range (more permissive)
-        let min_price_usd = self
-            .config
-            .custom_params
-            .get("min_price_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.00001); // Very low minimum
-        let max_price_usd = self
-            .config
-            .custom_params
-            .get("max_price_usd")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(100000.0); // High maximum
-
-        let mid_price = ((ticker.bid + ticker.ask) / Decimal::from(2))
-            .to_f64()
-            .unwrap_or(0.0);
-        if mid_price > 0.0 && (mid_price < min_price_usd || mid_price > max_price_usd) {
-            return false;
-        }
-
-        // Check spread (more permissive for new listings)
-        let max_spread_bps = self
-            .config
-            .custom_params
-            .get("max_spread_bps")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(5000) as f64; // Increased from 1000 to 5000 (50%)
-
-        if ticker.bid > Decimal::ZERO && ticker.ask > ticker.bid {
-            if let Ok(spread_bps) = ticker.spread_bps() {
-                let spread_bps_f64 = spread_bps.to_f64().unwrap_or(0.0);
-                if spread_bps_f64 > max_spread_bps {
-                    return false;
-                }
-            }
-        }
-
-        // Check if it's a reasonable trading pair (more permissive)
-        let quote = &symbol.quote;
-        let valid_quotes = ["USDT", "USDC", "BTC", "ETH", "USD", "BUSD", "DAI"];
-        if !valid_quotes.contains(&quote.as_str()) {
-            return false;
-        }
-
-        // Basic sanity checks
-        if ticker.bid <= Decimal::ZERO || ticker.ask <= Decimal::ZERO || ticker.ask <= ticker.bid {
-            return false;
-        }
-
-        true
-    }
-
-    #[allow(dead_code)]
-    /// Find arbitrage opportunities for newly listed tokens
-    fn find_new_listing_opportunities(&self, market_data: &MarketBundle) -> Vec<RawSignal> {
-        let mut signals = Vec::new();
-
-        // Group tickers by symbol to find cross-exchange opportunities
-        let mut symbol_tickers: FxHashMap<Symbol, Vec<(ExchangeId, &Ticker)>> =
-            FxHashMap::default();
-
-        for ((exchange, symbol), ticker) in &market_data.tickers {
-            if self.is_newly_listed(symbol) && self.is_valid_new_listing(symbol, ticker) {
-                symbol_tickers
-                    .entry((**symbol).clone())
-                    .or_default()
-                    .push((*exchange, ticker));
-            }
-        }
-
-        // Find arbitrage opportunities for each newly listed symbol
-        for (symbol, exchange_tickers) in symbol_tickers {
-            if exchange_tickers.len() < 2 {
-                continue; // Need at least 2 exchanges for arbitrage
-            }
-
-            // Find best bid and ask across exchanges
-            let mut best_bid: Option<(ExchangeId, Decimal)> = None;
-            let mut best_ask: Option<(ExchangeId, Decimal)> = None;
-
-            for (exchange, ticker) in &exchange_tickers {
-                // Update best bid
-                match best_bid {
-                    None => best_bid = Some((*exchange, ticker.bid)),
-                    Some((_, current_bid)) => {
-                        if ticker.bid > current_bid {
-                            best_bid = Some((*exchange, ticker.bid));
-                        }
-                    }
-                }
-
-                // Update best ask
-                match best_ask {
-                    None => best_ask = Some((*exchange, ticker.ask)),
-                    Some((_, current_ask)) => {
-                        if ticker.ask < current_ask {
-                            best_ask = Some((*exchange, ticker.ask));
-                        }
-                    }
-                }
-            }
-
-            if let (Some((sell_exchange, sell_price)), Some((buy_exchange, buy_price))) =
-                (best_bid, best_ask)
-            {
-                if sell_exchange != buy_exchange && sell_price > buy_price {
-                    // Calculate profit
-                    let profit_ratio = (sell_price - buy_price)
-                        .checked_div(buy_price)
-                        .unwrap_or(Decimal::ZERO);
-                    let profit_bps = (profit_ratio * Decimal::from(10000)).to_i32().unwrap_or(0);
-
-                    // Estimate fees
-                    let (_, buy_fee) = ExchangeCapabilities::get_typical_fees(buy_exchange);
-                    let (_, sell_fee) = ExchangeCapabilities::get_typical_fees(sell_exchange);
-                    let total_fee_bps = ((buy_fee + sell_fee) * 100.0) as i32;
-                    let net_profit_bps = profit_bps - total_fee_bps;
-
-                    if net_profit_bps >= self.config.min_profit_bps {
-                        // Get liquidity from order books if available
-                        let mut liquidity = Decimal::from(100); // Default small amount for new listings
-
-                        if let Some(buy_book) = market_data.get_order_book(buy_exchange, &symbol) {
-                            if let Some(ask_level) = buy_book.best_ask() {
-                                liquidity = liquidity.min(ask_level.quantity);
-                            }
-                        }
-
-                        if let Some(sell_book) = market_data.get_order_book(sell_exchange, &symbol)
-                        {
-                            if let Some(bid_level) = sell_book.best_bid() {
-                                liquidity = liquidity.min(bid_level.quantity);
-                            }
-                        }
-
-                        // Create signal
-                        let mut signal = RawSignal::new(self.id(), Arc::new(symbol.clone()));
-
-                        // Buy leg
-                        let buy_leg = TradeLeg::new(
-                            buy_exchange,
-                            Arc::new(symbol.clone()),
-                            Side::Buy,
-                            buy_price,
-                            liquidity,
-                        );
-                        signal.add_leg(buy_leg);
-
-                        // Sell leg
-                        let sell_leg = TradeLeg::new(
-                            sell_exchange,
-                            Arc::new(symbol.clone()),
-                            Side::Sell,
-                            sell_price,
-                            liquidity,
-                        );
-                        signal.add_leg(sell_leg);
-
-                        signal.set_profit_bps(net_profit_bps);
-
-                        // Add metadata
-                        signal.add_metadata("listing_type", json!("new_listing"));
-                        signal.add_metadata("buy_exchange", json!(buy_exchange.to_string()));
-                        signal.add_metadata("sell_exchange", json!(sell_exchange.to_string()));
-                        signal.add_metadata("gross_profit_bps", json!(profit_bps));
-                        signal.add_metadata("estimated_fees_bps", json!(total_fee_bps));
-
-                        if let Some(first_seen) = self.symbol_first_seen.get(&symbol) {
-                            signal.add_metadata("first_seen", json!(first_seen.to_rfc3339()));
-                            let age_hours = (Utc::now() - *first_seen).num_hours();
-                            signal.add_metadata("listing_age_hours", json!(age_hours));
-                        }
-
-                        signals.push(signal);
-
-                        debug!(
-                            "New listing arbitrage: {} buy@{} {} sell@{} {} profit={}bps",
-                            symbol,
-                            buy_exchange,
-                            buy_price,
-                            sell_exchange,
-                            sell_price,
-                            net_profit_bps
-                        );
-                    }
-                }
-            }
-        }
-
-        signals
     }
 }
 
@@ -366,7 +100,14 @@ impl Strategy for NewListingArbitrageStrategy {
         for symbol in &current_symbols {
             let mut exchange_prices = Vec::new();
 
-            for exchange in self.get_supported_exchanges() {
+            for exchange in [
+                ExchangeId::MEXC,
+                ExchangeId::GateIo,
+                ExchangeId::OKX,
+                ExchangeId::ByBit,
+                ExchangeId::Bitstamp,
+                ExchangeId::Kraken,
+            ] {
                 let mut bid_price = None;
                 let mut ask_price = None;
 
@@ -566,11 +307,6 @@ impl Strategy for NewListingArbitrageStrategy {
         }
 
         // Additional risk checks for new listings
-
-        // Check if symbol is still newly listed
-        if !self.is_newly_listed(&signal.symbol) {
-            return Ok(false);
-        }
 
         // Check volatility (new listings can be very volatile)
         let volatility_threshold = self

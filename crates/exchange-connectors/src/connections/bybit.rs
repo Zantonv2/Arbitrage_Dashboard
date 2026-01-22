@@ -32,8 +32,7 @@ struct BybitSubscription {
 }
 
 /// ByBit WebSocket response message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct BybitWsResponse {
     success: Option<bool>,
     ret_msg: Option<String>,
@@ -45,9 +44,6 @@ struct BybitWsResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct BybitMarketData {
     topic: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    data_type: String,
     ts: u64,
     data: Value,
     cts: Option<u64>,
@@ -61,7 +57,6 @@ pub struct BybitConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
 }
