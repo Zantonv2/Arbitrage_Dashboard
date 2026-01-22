@@ -30,6 +30,7 @@ dashmap = { workspace = true }
 parking_lot = { workspace = true }
 rustc-hash = { workspace = true }
 async-trait = { workspace = true }
+rand = "0.8"
 
 [dev-dependencies]
 proptest = { workspace = true }
