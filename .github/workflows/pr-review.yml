@@ -41,12 +41,11 @@ jobs:
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          COMMENT_BODY: ${{ github.event_name == 'issue_comment' && github.event.comment.body || github.event_name == 'pull_request_review_comment' && github.event.comment.body || '' }}
         with:
           model: opencode/minimax-m2.1-free
           share: false
           prompt: |
-            ${{ github.event_name == 'issue_comment' && 'Review the issue/PR and address the user request: ' || github.event_name == 'pull_request_review_comment' && 'Review the specific code lines mentioned and address the user request: ' || 'Review this pull request thoroughly:' }}
+            ${{ github.event_name == 'issue_comment' && 'Review the issue/PR and address the user request in the comment.' || github.event_name == 'pull_request_review_comment' && 'Review the specific code lines mentioned in the PR comment and address the user request.' || 'Review this pull request thoroughly:' }}
 
             ## Review Checklist
             1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions

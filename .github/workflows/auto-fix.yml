@@ -21,10 +21,10 @@ jobs:
     name: Collect issues to fix
     runs-on: ubuntu-latest
     outputs:
-      issues: ${{ steps.filter.outputs.TO_FIX }}
-      count: ${{ steps.filter.outputs.COUNT }}
+      issues: ${{ steps.context.outputs.ISSUES }}
+      count: ${{ steps.context.outputs.COUNT }}
     steps:
-      - name: Get issue context
+      - name: Get issue context (manual /oc fix)
         id: context
         if: github.event_name == 'issue_comment'
         run: |
@@ -36,7 +36,6 @@ jobs:
             echo "ISSUES=" >> $GITHUB_OUTPUT
             echo "COUNT=0" >> $GITHUB_OUTPUT
           fi
-          echo "IS_SCHEDULED=${{ github.event_name != 'issue_comment' }}" >> $GITHUB_OUTPUT
 
       - name: Get open issues (scheduled)
         if: github.event_name != 'issue_comment'
@@ -77,12 +76,11 @@ jobs:
           fetch-depth: 0
 
       - name: Get issue context
-        id: context
+        id: issue-info
         run: |
           ISSUE_NUM=${{ matrix.issue }}
           echo "TITLE=$(gh issue view $ISSUE_NUM --json title -q '.title')" >> $GITHUB_OUTPUT
           echo "BODY=$(gh issue view $ISSUE_NUM --json body -q '.body')" >> $GITHUB_OUTPUT
-          echo "LABELS=$(gh issue view $ISSUE_NUM --json labels -q '.[].name' | tr -d '[]\"')" >> $GITHUB_OUTPUT
 
       - name: Create branch
         run: |
@@ -96,8 +94,8 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           ISSUE_NUM: ${{ matrix.issue }}
-          ISSUE_TITLE: ${{ steps.context.outputs.TITLE }}
-          ISSUE_BODY: ${{ steps.context.outputs.BODY }}
+          ISSUE_TITLE: ${{ steps.issue-info.outputs.TITLE }}
+          ISSUE_BODY: ${{ steps.issue-info.outputs.BODY }}
         with:
           model: opencode/minimax-m2.1-free
           share: false
@@ -121,11 +119,10 @@ jobs:
             Summarize what was fixed. If you cannot fix it completely, explain why.
 
       - name: Push and create PR
-        id: create-pr
         run: |
           BRANCH_NAME="fix/issue-${{ matrix.issue }}"
           git push -u origin "$BRANCH_NAME" || true
-          
+
           gh pr create \
             --title "fix: Resolve issue #${{ matrix.issue }}" \
             --body "Automated PR to resolve issue #${{ matrix.issue }} by OpenCode." \
