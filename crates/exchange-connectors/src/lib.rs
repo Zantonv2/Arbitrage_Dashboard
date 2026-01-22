@@ -1,6 +1,7 @@
 pub mod connections;
 pub mod connector;
 pub mod connector_trait;
+pub mod connector_unit_tests;
 pub mod errors;
 pub mod events;
 pub mod exchange_manager;
