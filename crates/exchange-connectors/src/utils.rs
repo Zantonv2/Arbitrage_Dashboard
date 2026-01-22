@@ -40,9 +40,23 @@ pub fn parse_timestamp(value: &Value) -> Result<DateTime<Utc>> {
                 ))
             }
         }
-        Value::String(s) => s.parse::<DateTime<Utc>>().map_err(|e| {
-            ArbitrageError::ParsingError(format!("Failed to parse timestamp string: {}", e))
-        }),
+        Value::String(s) => {
+            // Try to parse as numeric timestamp first (milliseconds)
+            if let Ok(timestamp) = s.parse::<i64>() {
+                if let Some(dt) = DateTime::from_timestamp(
+                    timestamp / 1000,
+                    ((timestamp % 1000) * 1_000_000) as u32,
+                ) {
+                    return Ok(dt);
+                } else if let Some(dt) = DateTime::from_timestamp(timestamp, 0) {
+                    return Ok(dt);
+                }
+            }
+            // Fall back to ISO datetime parsing
+            s.parse::<DateTime<Utc>>().map_err(|e| {
+                ArbitrageError::ParsingError(format!("Failed to parse timestamp string: {}", e))
+            })
+        }
         _ => Err(ArbitrageError::ParsingError(
             "Invalid timestamp format".to_string(),
         )),

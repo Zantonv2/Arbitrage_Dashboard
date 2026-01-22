@@ -25,7 +25,7 @@ use crate::events::ConnectionEvent;
 /// # Example
 ///
 /// ```rust
-/// use exchange_connectors::connector::ConnectorConfig;
+/// use exchange_connectors::{connector::ConnectorConfig, connector_trait::ConnectorBase};
 ///
 /// let config = ConnectorConfig {
 ///     exchange_id: arbitrage_core::types::ExchangeId::OKX,
@@ -61,7 +61,7 @@ impl ConnectorBase {
     /// # Example
     ///
     /// ```rust
-    /// use exchange_connectors::connector::ConnectorConfig;
+    /// use exchange_connectors::{connector::ConnectorConfig, connector_trait::ConnectorBase};
     ///
     /// let config = ConnectorConfig {
     ///     exchange_id: arbitrage_core::types::ExchangeId::ByBit,
