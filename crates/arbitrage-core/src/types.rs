@@ -518,7 +518,10 @@ impl OrderBook {
             _ => false,
         };
 
-        bids_sorted && asks_sorted && spread_valid
+        let no_zero_quantities = self.bids.iter().all(|l| l.quantity > Decimal::ZERO)
+            && self.asks.iter().all(|l| l.quantity > Decimal::ZERO);
+
+        bids_sorted && asks_sorted && spread_valid && no_zero_quantities
     }
 
     /// Calculates Volume-Weighted Average Price (VWAP) for buying a given quantity.

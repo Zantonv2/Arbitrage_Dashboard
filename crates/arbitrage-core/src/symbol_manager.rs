@@ -494,3 +494,721 @@ impl SymbolStrategy for NewListingArbitrageStrategy {
         "New Listing Arbitrage"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::symbol_discovery::{EnhancedSymbolStats, MarketInfo, OrderBookDepth};
+    use chrono::Utc;
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+
+    fn create_test_symbol(base: &str, quote: &str) -> Symbol {
+        Symbol::new(base, quote)
+    }
+
+    fn create_test_config() -> SymbolManagerConfig {
+        SymbolManagerConfig {
+            core_symbols: vec![Symbol::new("BTC", "USDT"), Symbol::new("ETH", "USDT")],
+            enable_discovery: true,
+            discovery_refresh_interval: 3600,
+            discovery_criteria: SymbolSelectionCriteria::default(),
+        }
+    }
+
+    #[test]
+    fn test_symbol_manager_default_config() {
+        let config = SymbolManagerConfig::default();
+
+        assert_eq!(config.core_symbols.len(), 5);
+        assert!(config.enable_discovery);
+        assert_eq!(config.discovery_refresh_interval, 3600);
+    }
+
+    #[test]
+    fn test_symbol_manager_new() {
+        let config = create_test_config();
+        let manager = SymbolManager::new(config);
+
+        let active_symbols = manager.get_active_symbols();
+        assert_eq!(active_symbols.len(), 2);
+        assert!(active_symbols.contains(&Symbol::new("BTC", "USDT")));
+        assert!(active_symbols.contains(&Symbol::new("ETH", "USDT")));
+    }
+
+    #[test]
+    fn test_is_symbol_active() {
+        let config = create_test_config();
+        let manager = SymbolManager::new(config);
+
+        assert!(manager.is_symbol_active(&Symbol::new("BTC", "USDT")));
+        assert!(manager.is_symbol_active(&Symbol::new("ETH", "USDT")));
+        assert!(!manager.is_symbol_active(&Symbol::new("SOL", "USDT")));
+    }
+
+    #[test]
+    fn test_get_active_symbols() {
+        let config = create_test_config();
+        let manager = SymbolManager::new(config);
+
+        let symbols = manager.get_active_symbols();
+        assert_eq!(symbols.len(), 2);
+    }
+
+    #[test]
+    fn test_get_symbol_statistics() {
+        let config = create_test_config();
+        let manager = SymbolManager::new(config);
+
+        let stats = manager.get_symbol_statistics();
+        assert!(stats.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_update_market_data_disabled_discovery() {
+        let config = SymbolManagerConfig {
+            core_symbols: vec![Symbol::new("BTC", "USDT")],
+            enable_discovery: false,
+            discovery_refresh_interval: 3600,
+            discovery_criteria: SymbolSelectionCriteria::default(),
+        };
+        let mut manager = SymbolManager::new(config);
+
+        let market_info = MarketInfo {
+            symbol: Symbol::new("BTC", "USDT"),
+            exchange: ExchangeId::ByBit,
+            volume_24h_usd: Decimal::from(1000000),
+            price_usd: Decimal::from(50000),
+            spread_bps: 10,
+            is_active: true,
+            timestamp: Utc::now(),
+            depth_analysis: OrderBookDepth {
+                level_1_volume_usd: Decimal::from(100000),
+                depth_01_percent_usd: Decimal::from(500000),
+                depth_05_percent_usd: Decimal::from(2000000),
+                max_order_size_usd: Decimal::from(100000),
+            },
+        };
+        let result = manager.update_market_data(market_info).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_discovered_symbols_disabled() {
+        let config = SymbolManagerConfig {
+            core_symbols: vec![Symbol::new("BTC", "USDT")],
+            enable_discovery: false,
+            discovery_refresh_interval: 3600,
+            discovery_criteria: SymbolSelectionCriteria::default(),
+        };
+        let mut manager = SymbolManager::new(config);
+
+        let result = manager.refresh_discovered_symbols().await;
+        assert!(result.is_ok());
+
+        let symbols = manager.get_active_symbols();
+        assert_eq!(symbols.len(), 1);
+    }
+
+    #[test]
+    fn test_cex_arbitrage_strategy_symbols() {
+        let strategy = CexArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("SOL", "BUSD"),
+            Symbol::new("XRP", "BTC"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDC")));
+        assert!(filtered.contains(&Symbol::new("SOL", "BUSD")));
+    }
+
+    #[test]
+    fn test_cex_arbitrage_strategy_requirements() {
+        let strategy = CexArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(5_000_000));
+        assert_eq!(requirements.max_spread_bps, 30);
+        assert!(!requirements.requires_perpetuals);
+        assert!(!requirements.requires_funding_data);
+        assert_eq!(requirements.min_exchanges, 2);
+    }
+
+    #[test]
+    fn test_spot_perpetual_strategy_symbols() {
+        let strategy = SpotPerpetualStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("DOGE", "USDT"),
+            Symbol::new("ADA", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert!(filtered.len() >= 1);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+    }
+
+    #[test]
+    fn test_spot_perpetual_strategy_requirements() {
+        let strategy = SpotPerpetualStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(10_000_000));
+        assert!(requirements.requires_perpetuals);
+        assert_eq!(requirements.min_exchanges, 2);
+    }
+
+    #[test]
+    fn test_funding_rate_strategy_symbols() {
+        let strategy = FundingRateStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("LTC", "USDT"),
+            Symbol::new("NEAR", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("LTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("NEAR", "USDT")));
+    }
+
+    #[test]
+    fn test_funding_rate_strategy_requirements() {
+        let strategy = FundingRateStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(20_000_000));
+        assert!(requirements.requires_perpetuals);
+        assert!(requirements.requires_funding_data);
+    }
+
+    #[test]
+    fn test_spread_capture_strategy_symbols() {
+        let strategy = SpreadCaptureStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("DOGE", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDC")));
+        assert!(!filtered.contains(&Symbol::new("DOGE", "USDT")));
+    }
+
+    #[test]
+    fn test_spread_capture_strategy_requirements() {
+        let strategy = SpreadCaptureStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.max_spread_bps, 10);
+        assert_eq!(requirements.min_exchanges, 3);
+    }
+
+    #[test]
+    fn test_latency_arbitrage_strategy_symbols() {
+        let strategy = LatencyArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDT"),
+            Symbol::new("SOL", "USDC"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDT")));
+    }
+
+    #[test]
+    fn test_latency_arbitrage_strategy_requirements() {
+        let strategy = LatencyArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(100_000_000));
+        assert_eq!(requirements.max_spread_bps, 5);
+    }
+
+    #[test]
+    fn test_stablecoin_peg_strategy_symbols() {
+        let strategy = StablecoinPegStrategy;
+        let all_symbols = vec![
+            Symbol::new("USDT", "USDC"),
+            Symbol::new("BUSD", "USDT"),
+            Symbol::new("BTC", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&Symbol::new("USDT", "USDC")));
+        assert!(filtered.contains(&Symbol::new("BUSD", "USDT")));
+    }
+
+    #[test]
+    fn test_stablecoin_peg_strategy_requirements() {
+        let strategy = StablecoinPegStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(1_000_000));
+        assert_eq!(requirements.max_spread_bps, 100);
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_strategy_symbols() {
+        let strategy = ConvergenceArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("DOT", "USDT"),
+            Symbol::new("XRP", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("DOT", "USDT")));
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_strategy_requirements() {
+        let strategy = ConvergenceArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert!(requirements.requires_perpetuals);
+    }
+
+    #[test]
+    fn test_new_listing_strategy_symbols() {
+        let strategy = NewListingArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("PEPE", "USDT"),
+            Symbol::new("BONK", "USDC"),
+            Symbol::new("FLOKI", "BUSD"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.contains(&Symbol::new("PEPE", "USDT")));
+        assert!(filtered.contains(&Symbol::new("BONK", "USDC")));
+        assert!(!filtered.contains(&Symbol::new("FLOKI", "BUSD")));
+    }
+
+    #[test]
+    fn test_new_listing_strategy_requirements() {
+        let strategy = NewListingArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(100_000));
+        assert_eq!(requirements.max_spread_bps, 500);
+        assert_eq!(requirements.min_exchanges, 1);
+    }
+
+    #[test]
+    fn test_strategy_requirements_structure() {
+        let requirements = StrategyRequirements {
+            min_volume_usd: Decimal::from(10_000_000),
+            max_spread_bps: 50,
+            required_exchanges: vec![ExchangeId::ByBit, ExchangeId::OKX],
+            quote_currencies: vec!["USDT".to_string()],
+            requires_perpetuals: true,
+            requires_funding_data: false,
+            min_exchanges: 2,
+        };
+
+        assert_eq!(requirements.required_exchanges.len(), 2);
+        assert!(requirements.requires_perpetuals);
+    }
+
+    #[test]
+    fn test_symbol_strategy_trait_objects() {
+        let strategies: Vec<Box<dyn SymbolStrategy>> = vec![
+            Box::new(CexArbitrageStrategy),
+            Box::new(SpotPerpetualStrategy),
+        ];
+
+        assert_eq!(strategies.len(), 2);
+
+        let all_symbols = vec![Symbol::new("BTC", "USDT")];
+        let symbols1 = strategies[0].get_strategy_symbols(&all_symbols);
+        let symbols2 = strategies[1].get_strategy_symbols(&all_symbols);
+
+        assert!(!symbols1.is_empty());
+        assert!(!symbols2.is_empty());
+    }
+
+    #[test]
+    fn test_cross_exchange_strategy_symbols() {
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("SOL", "USDT"),
+            Symbol::new("DOGE", "BTC"),
+        ];
+
+        let strategy = CexArbitrageStrategy;
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDC")));
+        assert!(filtered.contains(&Symbol::new("SOL", "USDT")));
+        assert!(!filtered.contains(&Symbol::new("DOGE", "BTC")));
+    }
+
+    #[test]
+    fn test_cross_exchange_strategy_requirements_details() {
+        let strategy = CexArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(5_000_000));
+        assert_eq!(requirements.max_spread_bps, 30);
+        assert!(!requirements.requires_perpetuals);
+        assert!(!requirements.requires_funding_data);
+        assert_eq!(requirements.min_exchanges, 2);
+        assert!(requirements.required_exchanges.contains(&ExchangeId::ByBit));
+        assert!(requirements.required_exchanges.contains(&ExchangeId::BingX));
+    }
+
+    #[test]
+    fn test_spot_perpetual_strategy_comprehensive_symbols() {
+        let strategy = SpotPerpetualStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("SOL", "USDT"),
+            Symbol::new("XRP", "USDT"),
+            Symbol::new("ADA", "USDT"),
+            Symbol::new("DOGE", "USDT"),
+            Symbol::new("LINK", "USDT"),
+            Symbol::new("AVAX", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 7);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDC")));
+        assert!(filtered.contains(&Symbol::new("SOL", "USDT")));
+        assert!(!filtered.contains(&Symbol::new("DOGE", "USDT")));
+    }
+
+    #[test]
+    fn test_spot_perpetual_strategy_requirements_comprehensive() {
+        let strategy = SpotPerpetualStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(10_000_000));
+        assert_eq!(requirements.max_spread_bps, 20);
+        assert!(requirements.requires_perpetuals);
+        assert!(!requirements.requires_funding_data);
+        assert_eq!(requirements.min_exchanges, 2);
+        assert!(requirements.quote_currencies.contains(&"USDT".to_string()));
+        assert!(requirements.quote_currencies.contains(&"USDC".to_string()));
+    }
+
+    #[test]
+    fn test_funding_rate_strategy_comprehensive_symbols() {
+        let strategy = FundingRateStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("SOL", "USDT"),
+            Symbol::new("XRP", "USDT"),
+            Symbol::new("UNI", "USDT"),
+            Symbol::new("LTC", "USDT"),
+            Symbol::new("NEAR", "USDT"),
+            Symbol::new("ATOM", "USDT"),
+            Symbol::new("DOT", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 9);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("LTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("NEAR", "USDT")));
+    }
+
+    #[test]
+    fn test_funding_rate_strategy_requirements_comprehensive() {
+        let strategy = FundingRateStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(20_000_000));
+        assert_eq!(requirements.max_spread_bps, 15);
+        assert!(requirements.requires_perpetuals);
+        assert!(requirements.requires_funding_data);
+        assert_eq!(requirements.min_exchanges, 2);
+    }
+
+    #[test]
+    fn test_spread_capture_strategy_symbols_edge_cases() {
+        let strategy = SpreadCaptureStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("SOL", "BUSD"),
+            Symbol::new("XRP", "USDT"),
+            Symbol::new("BNB", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 4);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDC")));
+        assert!(filtered.contains(&Symbol::new("XRP", "USDT")));
+        assert!(filtered.contains(&Symbol::new("BNB", "USDT")));
+        assert!(!filtered.contains(&Symbol::new("SOL", "BUSD")));
+    }
+
+    #[test]
+    fn test_spread_capture_strategy_requirements_comprehensive() {
+        let strategy = SpreadCaptureStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(50_000_000));
+        assert_eq!(requirements.max_spread_bps, 10);
+        assert_eq!(requirements.min_exchanges, 3);
+        assert!(!requirements.requires_perpetuals);
+    }
+
+    #[test]
+    fn test_latency_arbitrage_strategy_strict_filtering() {
+        let strategy = LatencyArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDT"),
+            Symbol::new("SOL", "USDC"),
+            Symbol::new("SOL", "USDT"),
+            Symbol::new("BNB", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 3);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("ETH", "USDT")));
+        assert!(filtered.contains(&Symbol::new("SOL", "USDT")));
+        assert!(!filtered.contains(&Symbol::new("SOL", "USDC")));
+    }
+
+    #[test]
+    fn test_latency_arbitrage_strategy_requirements_comprehensive() {
+        let strategy = LatencyArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(100_000_000));
+        assert_eq!(requirements.max_spread_bps, 5);
+        assert_eq!(requirements.min_exchanges, 3);
+        assert_eq!(requirements.quote_currencies.len(), 1);
+        assert_eq!(requirements.quote_currencies[0], "USDT");
+    }
+
+    #[test]
+    fn test_stablecoin_peg_strategy_comprehensive_pairs() {
+        let strategy = StablecoinPegStrategy;
+        let all_symbols = vec![
+            Symbol::new("USDT", "USDC"),
+            Symbol::new("USDC", "USDT"),
+            Symbol::new("BUSD", "USDT"),
+            Symbol::new("DAI", "USDC"),
+            Symbol::new("TUSD", "USD"),
+            Symbol::new("USDT", "USD"),
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 5);
+        assert!(filtered.contains(&Symbol::new("USDT", "USDC")));
+        assert!(filtered.contains(&Symbol::new("BUSD", "USDT")));
+        assert!(filtered.contains(&Symbol::new("USDT", "USD")));
+        assert!(!filtered.contains(&Symbol::new("BTC", "USDT")));
+    }
+
+    #[test]
+    fn test_stablecoin_peg_strategy_requirements_comprehensive() {
+        let strategy = StablecoinPegStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(1_000_000));
+        assert_eq!(requirements.max_spread_bps, 100);
+        assert_eq!(requirements.min_exchanges, 2);
+        assert!(!requirements.requires_perpetuals);
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_strategy_symbol_filtering() {
+        let strategy = ConvergenceArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDC"),
+            Symbol::new("SOL", "USDT"),
+            Symbol::new("DOT", "USDT"),
+            Symbol::new("XRP", "USDT"),
+            Symbol::new("ADA", "USDT"),
+            Symbol::new("DOGE", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 6);
+        assert!(filtered.contains(&Symbol::new("BTC", "USDT")));
+        assert!(filtered.contains(&Symbol::new("DOT", "USDT")));
+        assert!(!filtered.contains(&Symbol::new("DOGE", "USDT")));
+    }
+
+    #[test]
+    fn test_convergence_arbitrage_strategy_requirements_comprehensive() {
+        let strategy = ConvergenceArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(15_000_000));
+        assert_eq!(requirements.max_spread_bps, 25);
+        assert!(requirements.requires_perpetuals);
+        assert!(!requirements.requires_funding_data);
+    }
+
+    #[test]
+    fn test_new_listing_strategy_comprehensive() {
+        let strategy = NewListingArbitrageStrategy;
+        let all_symbols = vec![
+            Symbol::new("PEPE", "USDT"),
+            Symbol::new("BONK", "USDC"),
+            Symbol::new("FLOKI", "BUSD"),
+            Symbol::new("WIF", "USDT"),
+            Symbol::new("NEWCOIN", "USDT"),
+        ];
+
+        let filtered = strategy.get_strategy_symbols(&all_symbols);
+
+        assert_eq!(filtered.len(), 4);
+        assert!(filtered.contains(&Symbol::new("PEPE", "USDT")));
+        assert!(filtered.contains(&Symbol::new("BONK", "USDC")));
+        assert!(filtered.contains(&Symbol::new("WIF", "USDT")));
+        assert!(filtered.contains(&Symbol::new("NEWCOIN", "USDT")));
+        assert!(!filtered.contains(&Symbol::new("FLOKI", "BUSD")));
+    }
+
+    #[test]
+    fn test_new_listing_strategy_requirements_comprehensive() {
+        let strategy = NewListingArbitrageStrategy;
+        let requirements = strategy.get_requirements();
+
+        assert_eq!(requirements.min_volume_usd, Decimal::from(100_000));
+        assert_eq!(requirements.max_spread_bps, 500);
+        assert_eq!(requirements.min_exchanges, 1);
+        assert!(!requirements.requires_perpetuals);
+    }
+
+    #[test]
+    fn test_symbol_manager_with_custom_config() {
+        let config = SymbolManagerConfig {
+            core_symbols: vec![
+                Symbol::new("BTC", "USDT"),
+                Symbol::new("ETH", "USDT"),
+                Symbol::new("SOL", "USDT"),
+            ],
+            enable_discovery: false,
+            discovery_refresh_interval: 7200,
+            discovery_criteria: SymbolSelectionCriteria::default(),
+        };
+        let manager = SymbolManager::new(config);
+
+        let active_symbols = manager.get_active_symbols();
+        assert_eq!(active_symbols.len(), 3);
+        assert!(manager.is_symbol_active(&Symbol::new("BTC", "USDT")));
+    }
+
+    #[test]
+    fn test_symbol_manager_discovery_disabled() {
+        let config = SymbolManagerConfig {
+            core_symbols: vec![Symbol::new("BTC", "USDT")],
+            enable_discovery: false,
+            discovery_refresh_interval: 3600,
+            discovery_criteria: SymbolSelectionCriteria::default(),
+        };
+        let manager = SymbolManager::new(config);
+
+        assert!(manager.is_symbol_active(&Symbol::new("BTC", "USDT")));
+        assert!(!manager.is_symbol_active(&Symbol::new("ETH", "USDT")));
+    }
+
+    #[test]
+    fn test_all_strategies_trait_object_collection() {
+        let strategies: Vec<Box<dyn SymbolStrategy>> = vec![
+            Box::new(CexArbitrageStrategy),
+            Box::new(SpotPerpetualStrategy),
+            Box::new(FundingRateStrategy),
+            Box::new(SpreadCaptureStrategy),
+            Box::new(LatencyArbitrageStrategy),
+            Box::new(StablecoinPegStrategy),
+            Box::new(ConvergenceArbitrageStrategy),
+            Box::new(NewListingArbitrageStrategy),
+        ];
+
+        assert_eq!(strategies.len(), 8);
+
+        let all_symbols = vec![
+            Symbol::new("BTC", "USDT"),
+            Symbol::new("ETH", "USDT"),
+            Symbol::new("USDT", "USDC"),
+        ];
+
+        for strategy in &strategies {
+            let filtered = strategy.get_strategy_symbols(&all_symbols);
+            let requirements = strategy.get_requirements();
+            let name = strategy.get_name();
+
+            assert!(!name.is_empty());
+            assert!(requirements.min_volume_usd > Decimal::ZERO);
+            assert!(requirements.max_spread_bps > 0);
+        }
+    }
+
+    #[test]
+    fn test_strategy_requirements_equality() {
+        let req1 = StrategyRequirements {
+            min_volume_usd: Decimal::from(10_000_000),
+            max_spread_bps: 50,
+            required_exchanges: vec![ExchangeId::ByBit],
+            quote_currencies: vec!["USDT".to_string()],
+            requires_perpetuals: true,
+            requires_funding_data: false,
+            min_exchanges: 1,
+        };
+
+        let req2 = StrategyRequirements {
+            min_volume_usd: Decimal::from(10_000_000),
+            max_spread_bps: 50,
+            required_exchanges: vec![ExchangeId::ByBit],
+            quote_currencies: vec!["USDT".to_string()],
+            requires_perpetuals: true,
+            requires_funding_data: false,
+            min_exchanges: 1,
+        };
+
+        assert_eq!(req1.min_volume_usd, req2.min_volume_usd);
+        assert_eq!(req1.max_spread_bps, req2.max_spread_bps);
+        assert_eq!(req1.requires_perpetuals, req2.requires_perpetuals);
+    }
+}
