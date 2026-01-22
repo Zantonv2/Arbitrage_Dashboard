@@ -40,8 +40,8 @@ struct KrakenSubscriptionDetails {
 }
 
 /// Kraken WebSocket response message
+/// Used for parsing WebSocket responses (subscription confirmations, heartbeats, errors)
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct KrakenWsResponse {
     event: Option<String>,
     status: Option<String>,
@@ -62,7 +62,8 @@ pub struct KrakenConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
+    /// WebSocket task handle for connection management
+    /// Used in disconnect() to abort the task
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 

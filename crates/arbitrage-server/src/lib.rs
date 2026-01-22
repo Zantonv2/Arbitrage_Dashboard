@@ -7,4 +7,7 @@ pub mod routes;
 pub mod server;
 pub mod websocket;
 
+#[cfg(test)]
+mod tests;
+
 pub use server::ArbitrageServer;

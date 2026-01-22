@@ -42,6 +42,7 @@ struct BybitWsResponse {
 }
 
 /// ByBit WebSocket market data message
+/// Used for parsing incoming market data from WebSocket stream
 #[derive(Debug, Clone, Deserialize)]
 struct BybitMarketData {
     topic: String,
@@ -58,6 +59,8 @@ pub struct BybitConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    /// WebSocket task handle for connection management
+    /// Used in disconnect() to abort the task
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
 }

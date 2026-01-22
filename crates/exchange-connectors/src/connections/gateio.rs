@@ -31,16 +31,6 @@ struct GateioSubscription {
     id: u64,
 }
 
-/// Gate.io WebSocket response message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct GateioWsResponse {
-    method: Option<String>,
-    params: Option<Value>,
-    id: Option<u64>,
-    error: Option<Value>,
-}
-
 #[derive(Clone)]
 pub struct GateioConnector {
     pub config: ConnectorConfig,
@@ -49,6 +39,8 @@ pub struct GateioConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
+    /// WebSocket task handle for connection management
+    /// Used in disconnect() to abort the task
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 

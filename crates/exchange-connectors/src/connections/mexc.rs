@@ -23,16 +23,16 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, warn};
 
 /// MEXC WebSocket subscription message
+/// Used for subscribing to order book updates via WebSocket
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct MexcSubscription {
     method: String,
     params: Vec<String>,
 }
 
 /// MEXC WebSocket response message
+/// Used for parsing WebSocket responses (pong, subscription confirmations)
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct MexcWsResponse {
     id: Option<u64>,
     code: Option<i32>,
@@ -40,8 +40,8 @@ struct MexcWsResponse {
 }
 
 /// MEXC WebSocket market data message
+/// Used for parsing incoming market data from WebSocket stream
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct MexcMarketData {
     c: Option<String>,
     d: Option<Value>,
@@ -54,7 +54,8 @@ pub struct MEXCConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
+    /// WebSocket task handle for connection management
+    /// Used in disconnect() to abort the task
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -608,7 +609,6 @@ impl ExchangeConnector for MEXCConnector {
     }
 }
 
-#[allow(dead_code)]
 impl MEXCConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(

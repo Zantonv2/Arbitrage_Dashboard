@@ -24,23 +24,23 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, warn};
 
 /// Bitstamp WebSocket subscription message
+/// Used for subscribing to order book updates via WebSocket
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct BitstampSubscription {
     event: String,
     data: BitstampSubscriptionData,
 }
 
 /// Bitstamp subscription data
+/// Contains the channel name to subscribe to
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct BitstampSubscriptionData {
     channel: String,
 }
 
 /// Bitstamp WebSocket response message
+/// Used for parsing WebSocket responses (data events, subscription confirmations)
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct BitstampWsResponse {
     event: Option<String>,
     channel: Option<String>,
@@ -52,7 +52,8 @@ pub struct BitstampConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
+    /// WebSocket task handle for connection management
+    /// Managed by base ConnectorBase, kept for consistency with other connectors
     ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -525,7 +526,6 @@ impl ExchangeConnector for BitstampConnector {
     }
 }
 
-#[allow(dead_code)]
 impl BitstampConnector {
     /// Main WebSocket connection task with reconnection logic
     async fn websocket_task(
