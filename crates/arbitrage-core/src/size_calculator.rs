@@ -200,6 +200,21 @@ impl SizeCalculator {
         buy_order_book: &OrderBook,
         sell_order_book: &OrderBook,
     ) -> Result<SizeRecommendation> {
+        // Validate signal prices - reject negative prices
+        if signal.buy_price < Decimal::ZERO {
+            return Err(ArbitrageError::Validation(format!(
+                "Buy price must be non-negative, got {}",
+                signal.buy_price
+            )));
+        }
+
+        if signal.sell_price < Decimal::ZERO {
+            return Err(ArbitrageError::Validation(format!(
+                "Sell price must be non-negative, got {}",
+                signal.sell_price
+            )));
+        }
+
         let mut size_tiers = Vec::new();
         let mut max_size = Decimal::ZERO;
 
@@ -321,6 +336,11 @@ impl SizeCalculator {
     /// # Returns
     ///
     /// Tuple of (max quantity, average fill price)
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArbitrageError::Validation` if start_price is zero or negative,
+    /// or if max_slippage is negative.
     fn calculate_max_size_for_slippage(
         &self,
         levels: &[OrderBookLevel],
@@ -328,6 +348,20 @@ impl SizeCalculator {
         max_slippage: Decimal,
         is_buying: bool,
     ) -> Result<(Decimal, Decimal)> {
+        if start_price <= Decimal::ZERO {
+            return Err(ArbitrageError::Validation(format!(
+                "Start price must be positive, got {}",
+                start_price
+            )));
+        }
+
+        if max_slippage < Decimal::ZERO {
+            return Err(ArbitrageError::Validation(format!(
+                "Max slippage must be non-negative, got {}",
+                max_slippage
+            )));
+        }
+
         if levels.is_empty() {
             return Ok((Decimal::ZERO, start_price));
         }
@@ -351,6 +385,14 @@ impl SizeCalculator {
 
             if !can_use_level {
                 break;
+            }
+
+            if level.quantity <= Decimal::ZERO {
+                continue;
+            }
+
+            if level.price <= Decimal::ZERO {
+                continue;
             }
 
             total_quantity += level.quantity;

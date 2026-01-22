@@ -1216,12 +1216,39 @@ use super::constants::BASIS_POINTS_DIVISOR;
 ///
 /// # Returns
 ///
-/// `Some(i32)` representing profit in basis points if buy_price > 0,
-/// `None` if buy_price is zero.
-pub fn calculate_profit_bps(buy_price: Decimal, sell_price: Decimal) -> Option<i32> {
-    if buy_price.is_zero() {
-        return None;
+/// `Ok(i32)` representing profit in basis points,
+/// `Err(ArbitrageError::Validation)` if prices are invalid.
+pub fn calculate_profit_bps(
+    buy_price: Decimal,
+    sell_price: Decimal,
+) -> Result<i32, crate::ArbitrageError> {
+    if buy_price <= Decimal::ZERO {
+        return Err(crate::ArbitrageError::Validation(format!(
+            "Buy price must be positive, got {}",
+            buy_price
+        )));
     }
-    let profit_ratio = (sell_price - buy_price) / buy_price;
-    (profit_ratio * Decimal::from(BASIS_POINTS_DIVISOR)).to_i32()
+    if sell_price <= Decimal::ZERO {
+        return Err(crate::ArbitrageError::Validation(format!(
+            "Sell price must be positive, got {}",
+            sell_price
+        )));
+    }
+
+    let profit_ratio = (sell_price - buy_price)
+        .checked_div(buy_price)
+        .ok_or_else(|| {
+            crate::ArbitrageError::Calculation("Division by zero in profit calculation".to_string())
+        })?;
+
+    let profit_bps = (profit_ratio * Decimal::from(BASIS_POINTS_DIVISOR))
+        .to_i32()
+        .ok_or_else(|| {
+            crate::ArbitrageError::Calculation(format!(
+                "Profit calculation overflow: {}",
+                profit_ratio
+            ))
+        })?;
+
+    Ok(profit_bps)
 }
