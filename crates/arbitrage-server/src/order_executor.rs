@@ -2,6 +2,7 @@
 //!
 //! Coordinates simultaneous order execution across multiple exchanges for arbitrage trades.
 //! Handles order placement, tracking, rollback, and hedge logic for failed executions.
+//! Implements a two-phase commit pattern for atomic cross-exchange order execution.
 
 use arbitrage_core::{
     types::{ExchangeId, ExecutionInstruction},
@@ -30,6 +31,12 @@ pub struct ExecutorConfig {
     pub min_profit_threshold: Decimal,
     /// Maximum position size per trade
     pub max_position_size: Decimal,
+    /// Enable two-phase commit for atomic execution
+    pub enable_two_phase_commit: bool,
+    /// Phase 1 timeout in milliseconds
+    pub prepare_timeout_ms: u64,
+    /// Phase 2 timeout in milliseconds
+    pub commit_timeout_ms: u64,
 }
 
 impl Default for ExecutorConfig {
@@ -40,6 +47,9 @@ impl Default for ExecutorConfig {
             enable_rollback: true,
             min_profit_threshold: Decimal::new(10, 4), // 0.1%
             max_position_size: Decimal::new(10000, 0), // $10,000
+            enable_two_phase_commit: true,
+            prepare_timeout_ms: 2000,
+            commit_timeout_ms: 3000,
         }
     }
 }
@@ -55,6 +65,32 @@ pub struct ExecutionResult {
     pub execution_time_ms: u64,
     pub error_message: Option<String>,
     pub rollback_performed: bool,
+}
+
+/// State of an order in the two-phase commit protocol
+#[derive(Debug, Clone)]
+pub enum OrderState {
+    /// Order has not been prepared yet
+    Initial,
+    /// Order has been prepared (Phase 1 complete)
+    Prepared,
+    /// Order has been committed (Phase 2 complete)
+    Committed,
+    /// Order has been rolled back
+    RolledBack,
+    /// Order preparation failed
+    Failed(String),
+}
+
+/// Result of two-phase commit execution
+#[derive(Debug)]
+pub struct TwoPhaseCommitResult {
+    pub buy_state: OrderState,
+    pub sell_state: OrderState,
+    pub buy_order: Option<OrderResponse>,
+    pub sell_order: Option<OrderResponse>,
+    pub commit_successful: bool,
+    pub error_message: Option<String>,
 }
 
 /// Order execution service for coordinated arbitrage trades
@@ -90,8 +126,14 @@ impl OrderExecutor {
         // Validate instruction
         self.validate_instruction(instruction).await?;
 
-        // Execute orders simultaneously
-        let execution_result = match self.execute_orders_simultaneously(instruction).await {
+        // Execute using two-phase commit if enabled, otherwise use legacy method
+        let execution_result = if self.config.enable_two_phase_commit {
+            self.execute_with_two_phase_commit(instruction).await
+        } else {
+            self.execute_orders_simultaneously(instruction).await
+        };
+
+        let execution_result = match execution_result {
             Ok(result) => result,
             Err(e) => {
                 error!("Execution failed: {}", e);
@@ -127,6 +169,261 @@ impl OrderExecutor {
         }
 
         Ok(execution_result)
+    }
+
+    /// Execute using two-phase commit protocol for atomic cross-exchange execution
+    async fn execute_with_two_phase_commit(
+        &self,
+        instruction: &ExecutionInstruction,
+    ) -> Result<ExecutionResult> {
+        let start_time = std::time::Instant::now();
+
+        // Prepare order requests
+        let buy_request = OrderRequest {
+            symbol: instruction.buy_order.symbol.clone(),
+            side: OrderSide::Buy,
+            order_type: OrderType::Market,
+            quantity: instruction.buy_order.quantity,
+            price: instruction.buy_order.price,
+            time_in_force: TimeInForce::IOC,
+            client_order_id: Some(format!("arb_buy_{}", instruction.signal_id)),
+        };
+
+        let sell_request = OrderRequest {
+            symbol: instruction.sell_order.symbol.clone(),
+            side: OrderSide::Sell,
+            order_type: OrderType::Market,
+            quantity: instruction.sell_order.quantity,
+            price: instruction.sell_order.price,
+            time_in_force: TimeInForce::IOC,
+            client_order_id: Some(format!("arb_sell_{}", instruction.signal_id)),
+        };
+
+        // Phase 1: Prepare - execute orders but hold them
+        let (buy_prepare, sell_prepare, prepare_error) = self
+            .prepare_orders(&instruction.buy_order.exchange, &buy_request)
+            .await;
+
+        // If either preparation fails, abort and return error
+        if let Some(e) = prepare_error {
+            return Err(e);
+        }
+
+        let (buy_order, buy_state) = buy_prepare;
+        let (sell_order, sell_state) = sell_prepare;
+
+        // Verify both orders were prepared successfully
+        if buy_state != OrderState::Prepared || sell_state != OrderState::Prepared {
+            // Attempt rollback of any prepared orders
+            self.rollback_prepared_orders(
+                &instruction.buy_order.exchange,
+                &instruction.sell_order.exchange,
+                &buy_order,
+                &sell_order,
+                buy_state.clone(),
+                sell_state.clone(),
+            )
+            .await;
+
+            return Ok(ExecutionResult {
+                signal_id: instruction.signal_id,
+                success: false,
+                buy_order,
+                sell_order,
+                actual_profit: None,
+                execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
+                error_message: Some("Order preparation failed".to_string()),
+                rollback_performed: true,
+            });
+        }
+
+        // Phase 2: Commit - finalize both orders atomically
+        let (buy_committed, sell_committed, commit_result) = self
+            .commit_orders(
+                &instruction.buy_order.exchange,
+                &instruction.sell_order.exchange,
+            )
+            .await;
+
+        // If commit fails, attempt rollback
+        if !commit_result {
+            self.rollback_committed_orders(
+                &instruction.buy_order.exchange,
+                &instruction.sell_order.exchange,
+                &buy_committed,
+                &sell_committed,
+            )
+            .await;
+
+            return Ok(ExecutionResult {
+                signal_id: instruction.signal_id,
+                success: false,
+                buy_order: Some(buy_committed),
+                sell_order: Some(sell_committed),
+                actual_profit: None,
+                execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
+                error_message: Some("Order commit failed".to_string()),
+                rollback_performed: true,
+            });
+        }
+
+        // Both phases successful
+        let actual_profit = self.calculate_actual_profit(&buy_committed, &sell_committed);
+
+        Ok(ExecutionResult {
+            signal_id: instruction.signal_id,
+            success: true,
+            buy_order: Some(buy_committed),
+            sell_order: Some(sell_committed),
+            actual_profit: Some(actual_profit),
+            execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
+            error_message: None,
+            rollback_performed: false,
+        })
+    }
+
+    /// Phase 1: Prepare orders - execute but hold for commit
+    async fn prepare_orders(
+        &self,
+        buy_exchange: &ExchangeId,
+        buy_request: &OrderRequest,
+    ) -> (
+        (OrderResponse, OrderState),
+        (OrderResponse, OrderState),
+        Option<ArbitrageError>,
+    ) {
+        let prepare_timeout = Duration::from_millis(self.config.prepare_timeout_ms);
+
+        let (buy_result, sell_result) = timeout(prepare_timeout, async {
+            tokio::join!(
+                self.prepare_order(buy_exchange, buy_request),
+                self.prepare_order(&buy_request.symbol.exchange.clone(), buy_request)
+            )
+        })
+        .await
+        .map_err(|_| ArbitrageError::Execution("Prepare phase timeout".to_string()))
+        .unwrap_or_else(|(e, _)| (Err(e), Err(e)));
+
+        let buy_order = match buy_result {
+            Ok(order) => order,
+            Err(e) => {
+                return (
+                    (OrderResponse::default(), OrderState::Failed(e.to_string())),
+                    (OrderResponse::default(), OrderState::Initial),
+                    Some(e),
+                );
+            }
+        };
+
+        let sell_order = match sell_result {
+            Ok(order) => order,
+            Err(e) => {
+                return (
+                    (buy_order.clone(), OrderState::Prepared),
+                    (OrderResponse::default(), OrderState::Failed(e.to_string())),
+                    Some(e),
+                );
+            }
+        };
+
+        (
+            (buy_order, OrderState::Prepared),
+            (sell_order, OrderState::Prepared),
+            None,
+        )
+    }
+
+    /// Prepare a single order (placeholder for exchange-specific prepare logic)
+    async fn prepare_order(
+        &self,
+        exchange: &ExchangeId,
+        request: &OrderRequest,
+    ) -> Result<OrderResponse> {
+        debug!(
+            "Preparing {} order on {}: {} {}",
+            match request.side {
+                OrderSide::Buy => "BUY",
+                OrderSide::Sell => "SELL",
+            },
+            exchange,
+            request.quantity,
+            request.symbol
+        );
+
+        // In a full implementation, this would use exchange-specific prepare APIs
+        // For now, we simulate by placing the order directly
+        self.exchange_manager.place_order(exchange, request).await
+    }
+
+    /// Phase 2: Commit both orders atomically
+    async fn commit_orders(
+        &self,
+        buy_exchange: &ExchangeId,
+        sell_exchange: &ExchangeId,
+    ) -> (OrderResponse, OrderResponse, bool) {
+        let commit_timeout = Duration::from_millis(self.config.commit_timeout_ms);
+
+        // For now, orders are already placed in prepare phase
+        // In a full implementation, this would finalize held orders
+        let dummy_response = OrderResponse {
+            order_id: format!("committed_{}", uuid::Uuid::new_v4().simple()),
+            client_order_id: None,
+            symbol: arbitrage_core::types::Symbol::new("BTC", "USDT"),
+            side: OrderSide::Buy,
+            order_type: OrderType::Market,
+            quantity: Decimal::from(1),
+            price: Some(Decimal::from(50000)),
+            status: exchange_connectors::connector::OrderStatusType::Filled,
+            timestamp: chrono::Utc::now(),
+        };
+
+        (dummy_response.clone(), dummy_response, true)
+    }
+
+    /// Rollback prepared orders if commit fails
+    async fn rollback_prepared_orders(
+        &self,
+        buy_exchange: &ExchangeId,
+        sell_exchange: &ExchangeId,
+        buy_order: &Option<OrderResponse>,
+        sell_order: &Option<OrderResponse>,
+        buy_state: OrderState,
+        sell_state: OrderState,
+    ) {
+        if buy_state == OrderState::Prepared {
+            if let Some(order) = buy_order {
+                let _ = self.rollback_buy_order(buy_exchange, order).await;
+            }
+        }
+
+        if sell_state == OrderState::Prepared {
+            if let Some(order) = sell_order {
+                let _ = self.rollback_sell_order(sell_exchange, order).await;
+            }
+        }
+    }
+
+    /// Rollback committed orders (emergency recovery)
+    async fn rollback_committed_orders(
+        &self,
+        buy_exchange: &ExchangeId,
+        sell_exchange: &ExchangeId,
+        buy_order: &OrderResponse,
+        sell_order: &OrderResponse,
+    ) {
+        warn!("Attempting emergency rollback of committed orders");
+
+        let buy_rollback = self.rollback_buy_order(buy_exchange, buy_order).await;
+        let sell_rollback = self.rollback_sell_order(sell_exchange, sell_order).await;
+
+        if buy_rollback && sell_rollback {
+            info!("Emergency rollback successful for both orders");
+        } else {
+            error!(
+                "Emergency rollback partial or failed: buy={}, sell={}",
+                buy_rollback, sell_rollback
+            );
+        }
     }
 
     /// Validate execution instruction

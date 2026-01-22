@@ -335,7 +335,7 @@ pub async fn parse_json_with_retry(
 }
 
 /// Tracks parsing failures per exchange
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ParsingFailureTracker {
     failures: std::sync::Mutex<std::collections::HashMap<String, AtomicU64>>,
 }
@@ -349,43 +349,39 @@ impl ParsingFailureTracker {
     }
 
     /// Records a parsing failure for an exchange
-    pub fn record_failure(&self, exchange: &str, operation: &str) {
+    pub fn record_failure(&self, exchange: &str, operation: &str) -> Result<(), ArbitrageError> {
         let key = format!("{}_{}", exchange, operation);
-        let mut map = match self.failures.lock() {
-            Ok(guard) => guard,
-            Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - aborting", e);
-                std::process::abort();
-            }
-        };
+        let mut map = self.failures.lock().map_err(|e| {
+            ArbitrageError::LockError(format!("Mutex poisoned for failures: {}", e))
+        })?;
         let counter = map.entry(key).or_insert_with(|| AtomicU64::new(0));
         counter.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Gets the failure count for an exchange and operation
-    pub fn get_failure_count(&self, exchange: &str, operation: &str) -> u64 {
+    pub fn get_failure_count(
+        &self,
+        exchange: &str,
+        operation: &str,
+    ) -> Result<u64, ArbitrageError> {
         let key = format!("{}_{}", exchange, operation);
-        let map = match self.failures.lock() {
-            Ok(guard) => guard,
-            Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - aborting", e);
-                std::process::abort();
-            }
-        };
-        map.get(&key).map(|c| c.load(Ordering::SeqCst)).unwrap_or(0)
+        let map = self.failures.lock().map_err(|e| {
+            ArbitrageError::LockError(format!("Mutex poisoned for failures: {}", e))
+        })?;
+        Ok(map.get(&key).map(|c| c.load(Ordering::SeqCst)).unwrap_or(0))
     }
 
     /// Gets all failure counts
-    pub fn get_all_failures(&self) -> std::collections::HashMap<String, u64> {
-        let map = match self.failures.lock() {
-            Ok(guard) => guard,
-            Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - aborting", e);
-                std::process::abort();
-            }
-        };
-        map.iter()
+    pub fn get_all_failures(
+        &self,
+    ) -> Result<std::collections::HashMap<String, u64>, ArbitrageError> {
+        let map = self.failures.lock().map_err(|e| {
+            ArbitrageError::LockError(format!("Mutex poisoned for failures: {}", e))
+        })?;
+        Ok(map
+            .iter()
             .map(|(k, v)| (k.clone(), v.load(Ordering::SeqCst)))
-            .collect()
+            .collect())
     }
 }

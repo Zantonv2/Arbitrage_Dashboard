@@ -87,4 +87,7 @@ pub enum ArbitrageError {
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    #[error("Lock error: {0}")]
+    LockError(String),
 }

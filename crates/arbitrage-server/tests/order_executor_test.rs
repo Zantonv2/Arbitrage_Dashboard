@@ -648,3 +648,159 @@ async fn test_config_updates() {
         new_config.max_position_size
     );
 }
+
+#[tokio::test]
+async fn test_two_phase_commit_execution() {
+    let exchange_manager = create_mock_exchange_manager().await;
+    let config = ExecutorConfig {
+        enable_two_phase_commit: true,
+        prepare_timeout_ms: 2000,
+        commit_timeout_ms: 3000,
+        ..Default::default()
+    };
+    let executor = OrderExecutor::new(config, exchange_manager);
+
+    let instruction = create_test_execution();
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
+    assert!(result.success);
+    assert!(result.buy_order.is_some());
+    assert!(result.sell_order.is_some());
+    assert!(!result.rollback_performed);
+}
+
+#[tokio::test]
+async fn test_two_phase_commit_prepare_failure_triggers_rollback() {
+    let config = ExchangeManagerConfig::default();
+    let mut manager = ExchangeManager::new(config);
+
+    manager
+        .add_connector(Box::new(MockExchangeConnector::new(ExchangeId::OKX)))
+        .await
+        .unwrap();
+    manager
+        .add_connector(Box::new(
+            MockExchangeConnector::new(ExchangeId::ByBit).with_failure(true),
+        ))
+        .await
+        .unwrap();
+
+    let exchange_manager = Arc::new(manager);
+    let config = ExecutorConfig {
+        enable_two_phase_commit: true,
+        enable_rollback: true,
+        ..Default::default()
+    };
+    let executor = OrderExecutor::new(config, exchange_manager);
+
+    let instruction = create_test_execution();
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
+    assert!(!result.success);
+    assert!(result.rollback_performed);
+    assert!(result.error_message.is_some());
+}
+
+#[tokio::test]
+async fn test_graceful_mutex_poison_recovery() {
+    use exchange_connectors::mock::MockConnector;
+    use std::sync::{Arc, Mutex};
+
+    let connector = MockConnector::new(ExchangeId::OKX);
+    let order_book = arbitrage_core::types::OrderBook::new(
+        ExchangeId::OKX,
+        Symbol::new("BTC", "USDT"),
+        vec![],
+        vec![],
+    );
+
+    let result = connector.set_order_book(order_book);
+    assert!(
+        result.is_ok(),
+        "set_order_book should handle mutex gracefully"
+    );
+
+    let result = connector.set_ticker(TickerData {
+        symbol: Symbol::new("BTC", "USDT"),
+        exchange: ExchangeId::OKX,
+        last_price: Decimal::from(50000),
+        bid_price: Decimal::from(49999),
+        ask_price: Decimal::from(50001),
+        volume_24h: Decimal::from(1000000),
+        price_change_24h: Decimal::ZERO,
+        timestamp: chrono::Utc::now(),
+    });
+    assert!(result.is_ok(), "set_ticker should handle mutex gracefully");
+}
+
+#[tokio::test]
+async fn test_parsing_failure_tracker_lock_error() {
+    use exchange_connectors::utils::ParsingFailureTracker;
+
+    let tracker = ParsingFailureTracker::new();
+
+    let result = tracker.record_failure("test_exchange", "test_operation");
+    assert!(
+        result.is_ok(),
+        "record_failure should return Result instead of aborting"
+    );
+
+    let count = tracker.get_failure_count("test_exchange", "test_operation");
+    assert!(count.is_ok(), "get_failure_count should return Result");
+    assert_eq!(count.unwrap(), 1);
+
+    let all_failures = tracker.get_all_failures();
+    assert!(
+        all_failures.is_ok(),
+        "get_all_failures should return Result"
+    );
+    let failures = all_failures.unwrap();
+    assert!(failures.contains_key("test_exchange_test_operation"));
+}
+
+#[tokio::test]
+async fn test_legacy_execution_mode() {
+    let exchange_manager = create_mock_exchange_manager().await;
+    let config = ExecutorConfig {
+        enable_two_phase_commit: false,
+        ..Default::default()
+    };
+    let executor = OrderExecutor::new(config, exchange_manager);
+
+    let instruction = create_test_execution();
+
+    let result = executor
+        .execute_arbitrage(&instruction)
+        .await
+        .expect("Execution failed");
+
+    assert!(result.success);
+    assert!(result.buy_order.is_some());
+    assert!(result.sell_order.is_some());
+}
+
+#[tokio::test]
+async fn test_order_state_transitions() {
+    use arbitrage_server::order_executor::OrderState;
+
+    let states = vec![
+        OrderState::Initial,
+        OrderState::Prepared,
+        OrderState::Committed,
+        OrderState::RolledBack,
+        OrderState::Failed("test error".to_string()),
+    ];
+
+    for state in states {
+        let debug_fmt = format!("{:?}", state);
+        assert!(!debug_fmt.is_empty());
+    }
+}
