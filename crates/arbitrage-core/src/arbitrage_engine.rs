@@ -296,7 +296,7 @@ impl ArbitrageEngine {
             return Ok(Vec::new());
         }
 
-        let mut validated_signals = Vec::new();
+        let mut validated_signals = Vec::with_capacity(64);
         let strategies = registry.get_enabled();
 
         for strategy in strategies {
