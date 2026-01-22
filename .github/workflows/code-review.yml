@@ -1,0 +1,88 @@
+name: Code Review
+on:
+  schedule:
+    - cron: "0 8 * * *" # Daily at 8 AM UTC
+  workflow_dispatch:
+
+concurrency:
+  group: code-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run OpenCode Code Review
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/minimax-m2.1-free
+          share: false
+          prompt: |
+            Perform a comprehensive code review of the entire codebase.
+
+            ## Review Focus Areas
+
+            ### Bugs & Glitches
+            - unwrap()/expect() on external data
+            - Division by zero, missing error handling
+            - Race conditions, invalid state transitions
+
+            ### Performance
+            - Unnecessary cloning, O(n²) algorithms
+            - Memory leaks, missing caches
+            - Blocking in async code
+
+            ### Code Quality
+            - Magic numbers, poor naming
+            - Code duplication (>3 lines)
+            - Dead code, functions >50 lines
+            - Missing docs on public APIs
+
+            ### Order Book Validation
+            - Check bids >= asks (no arbitrage within single exchange)
+
+            ### Technical Debt
+            - TODO/FIXME comments
+            - Hardcoded values, missing tests
+
+            ### Security
+            - Hardcoded secrets
+            - Missing input validation
+            - Unsafe operations
+
+            ## Rust-Specific
+            - f64 instead of Decimal
+            - Proper error types (thiserror)
+            - Async/await correctness
+            - Concurrency primitives (Mutex vs RwLock vs DashMap)
+
+            ## Output
+            For each issue found, create a GitHub issue with:
+            ```yaml
+            ---
+            title: [P1-P3] Clear title (<70 chars)
+            problem: One sentence
+            impact: User/system impact
+            effort: 1-5
+            risk: High|Medium|Low
+            category: security|critical|performance|reliability|testing|tech-debt
+            files:
+            - src/file.rs
+            labels: security|crash|performance|error-handling|testing|debt
+            ---
+            ```
+
+            Priority: P1 (bugs/security), P2 (performance/tests), P3 (quality/refactoring).
+            Output summary: how many issues created by category and priority.
