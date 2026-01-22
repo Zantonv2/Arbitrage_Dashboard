@@ -103,5 +103,6 @@ jobs:
     steps:
       - name: List open PRs
         run: |
+          export GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
           echo "## Pending PRs for Review"
           gh pr list --state open --json number,title,author,url -q '.[] | "- #\(.number): \(.title) by \(.author.login) - \(.url)"'
