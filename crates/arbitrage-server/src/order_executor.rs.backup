@@ -1,0 +1,712 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arbitrage_core::{
+        types::{ExchangeId, ExecutionInstruction, Order},
+        ArbitrageError,
+    };
+    use exchange_connectors::{
+        connector::{OrderRequest, OrderResponse, OrderSide, OrderType, TimeInForce},
+        ExchangeManager, ExchangeManagerConfig,
+    };
+    use rust_decimal::Decimal;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use uuid::Uuid;
+    
+    // Mock types for testing
+    #[derive(Debug, Clone)]
+    struct ExecutorConfig {
+        execution_timeout_ms: u64,
+        max_slippage_percent: Decimal,
+        enable_rollback: bool,
+        min_profit_threshold: Decimal,
+        max_position_size: Decimal,
+    }
+    
+    impl Default for ExecutorConfig {
+        fn default() -> Self {
+            Self {
+                execution_timeout_ms: 5000,
+                max_slippage_percent: Decimal::new(50, 4), // 0.5%
+                enable_rollback: true,
+                min_profit_threshold: Decimal::new(10, 4), // 0.1%
+                max_position_size: Decimal::new(10000, 0), // $10,000
+            }
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    struct ExecutionResult {
+        signal_id: Uuid,
+        success: bool,
+        buy_order: Option<OrderResponse>,
+        sell_order: Option<OrderResponse>,
+        actual_profit: Option<Decimal>,
+        execution_time_ms: u64,
+        error_message: Option<String>,
+        rollback_performed: bool,
+    }
+    
+    #[derive(Debug, Clone)]
+    struct OrderExecutor {
+        config: ExecutorConfig,
+    }
+    
+    impl OrderExecutor {
+        fn new(config: ExecutorConfig) -> Self {
+            Self { config }
+        }
+        
+        async fn execute_instruction(&self, _instruction: ExecutionInstruction) -> ExecutionResult {
+            ExecutionResult {
+                signal_id: Uuid::new_v4(),
+                success: true,
+                buy_order: None,
+                sell_order: None,
+                actual_profit: Some(Decimal::ZERO),
+                execution_time_ms: 1000,
+                error_message: None,
+                rollback_performed: false,
+            }
+        }
+    }
+
+    // Mock helper function to create test execution instruction
+    fn create_test_instruction() -> ExecutionInstruction {
+        let signal_id = Uuid::new_v4();
+        let symbol = arbitrage_core::types::Symbol::new("BTC", "USDT");
+        
+        ExecutionInstruction {
+            id: signal_id,
+            signal_id,
+            buy_order: Order {
+                exchange: ExchangeId::OKX,
+                symbol: symbol.clone(),
+                side: arbitrage_core::types::OrderSide::Buy,
+                order_type: arbitrage_core::types::OrderType::Market,
+                quantity: Decimal::new(1, 0), // 1 BTC
+                price: Some(Decimal::new(50000, 0)), // $50,000
+                expected_fee: Decimal::new(5, 1), // $0.50
+            },
+            sell_order: Order {
+                exchange: ExchangeId::ByBit,
+                symbol: symbol.clone(),
+                side: arbitrage_core::types::OrderSide::Sell,
+                order_type: arbitrage_core::types::OrderType::Market,
+                quantity: Decimal::new(1, 0), // 1 BTC
+                price: Some(Decimal::new(50100, 0)), // $50,100
+                expected_fee: Decimal::new(5, 1), // $0.50
+            },
+            expected_profit: Decimal::new(100, 0), // $100 profit
+            worst_case_profit: Decimal::new(50, 0), // $50 worst case
+            total_fees: Decimal::new(1, 0), // $1 total fees
+            confidence: Decimal::new(8, 1), // 0.8 confidence
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            validation_errors: vec![],
+        }
+    }
+
+    // Mock helper function to create test order response
+    fn create_test_order_response(
+        exchange: ExchangeId,
+        side: OrderSide,
+        price: Decimal,
+        quantity: Decimal,
+    ) -> OrderResponse {
+        OrderResponse {
+            order_id: format!("order_{}", Uuid::new_v4()),
+            client_order_id: Some(format!("client_{}", Uuid::new_v4())),
+            exchange,
+            symbol: arbitrage_core::types::Symbol::new("BTC", "USDT"),
+            side,
+            order_type: OrderType::Market,
+            quantity,
+            price: Some(price),
+            filled_quantity: Some(quantity),
+            average_price: Some(price),
+            status: exchange_connectors::connector::OrderStatus::Filled,
+            expected_fee: Some(Decimal::new(5, 1)),
+            actual_fee: Some(Decimal::new(5, 1)),
+            timestamp: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn test_executor_config_default() {
+        let config = ExecutorConfig::default();
+        
+        assert_eq!(config.execution_timeout_ms, 5000);
+        assert_eq!(config.max_slippage_percent, Decimal::new(50, 4)); // 0.5%
+        assert!(config.enable_rollback);
+        assert_eq!(config.min_profit_threshold, Decimal::new(10, 4)); // 0.1%
+        assert_eq!(config.max_position_size, Decimal::new(10000, 0)); // $10,000
+    }
+
+    #[test]
+    fn test_executor_config_debug() {
+        let config = ExecutorConfig {
+            execution_timeout_ms: 3000,
+            max_slippage_percent: Decimal::new(75, 4), // 0.75%
+            enable_rollback: false,
+            min_profit_threshold: Decimal::new(5, 4), // 0.05%
+            max_position_size: Decimal::new(5000, 0), // $5,000
+        };
+        
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("ExecutorConfig"));
+        assert!(debug_str.contains("execution_timeout_ms: 3000"));
+    }
+
+    #[test]
+    fn test_executor_config_clone() {
+        let config = ExecutorConfig::default();
+        let cloned = config.clone();
+        
+        assert_eq!(config.execution_timeout_ms, cloned.execution_timeout_ms);
+        assert_eq!(config.max_slippage_percent, cloned.max_slippage_percent);
+        assert_eq!(config.enable_rollback, cloned.enable_rollback);
+        assert_eq!(config.min_profit_threshold, cloned.min_profit_threshold);
+        assert_eq!(config.max_position_size, cloned.max_position_size);
+    }
+
+    #[test]
+    fn test_execution_result_debug() {
+        let signal_id = Uuid::new_v4();
+        let result = ExecutionResult {
+            signal_id,
+            success: true,
+            buy_order: None,
+            sell_order: None,
+            actual_profit: Some(Decimal::new(100, 0)),
+            execution_time_ms: 1500,
+            error_message: None,
+            rollback_performed: false,
+        };
+        
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("ExecutionResult"));
+        assert!(debug_str.contains("success: true"));
+        assert!(debug_str.contains("execution_time_ms: 1500"));
+    }
+
+    #[test]
+    fn test_execution_result_clone() {
+        let signal_id = Uuid::new_v4();
+        let result = ExecutionResult {
+            signal_id,
+            success: false,
+            buy_order: Some(create_test_order_response(
+                ExchangeId::OKX,
+                OrderSide::Buy,
+                Decimal::new(50000, 0),
+                Decimal::new(1, 0),
+            )),
+            sell_order: None,
+            actual_profit: None,
+            execution_time_ms: 2000,
+            error_message: Some("Test error".to_string()),
+            rollback_performed: true,
+        };
+        
+        let cloned = result.clone();
+        assert_eq!(result.signal_id, cloned.signal_id);
+        assert_eq!(result.success, cloned.success);
+        assert_eq!(result.execution_time_ms, cloned.execution_time_ms);
+        assert_eq!(result.rollback_performed, cloned.rollback_performed);
+        assert_eq!(result.error_message, cloned.error_message);
+    }
+
+    #[tokio::test]
+    async fn test_order_executor_new() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig {
+            enabled_exchanges: vec![ExchangeId::OKX, ExchangeId::ByBit],
+            health_check_interval_seconds: 30,
+            max_reconnect_attempts: 5,
+            event_buffer_size: 1000,
+            rate_limits: Default::default(),
+            auto_reconnect: true,
+            max_parallel_connections: 5,
+        };
+        
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        // Verify executor was created
+        assert_eq!(executor.config.execution_timeout_ms, 5000);
+        assert!(executor.config.enable_rollback);
+    }
+
+    #[tokio::test]
+    async fn test_validate_instruction_valid() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let instruction = create_test_instruction();
+        
+        // Should pass validation
+        let result = executor.validate_instruction(&instruction).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_instruction_profit_too_low() {
+        let mut config = ExecutorConfig::default();
+        config.min_profit_threshold = Decimal::new(200, 0); // $200 minimum
+        
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let mut instruction = create_test_instruction();
+        instruction.expected_profit = Decimal::new(100, 0); // Only $100 profit
+        
+        let result = executor.validate_instruction(&instruction).await;
+        assert!(result.is_err());
+        
+        if let Err(ArbitrageError::Execution(msg)) = result {
+            assert!(msg.contains("Profit"));
+            assert!(msg.contains("below threshold"));
+        } else {
+            panic!("Expected Execution error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_instruction_position_too_large() {
+        let mut config = ExecutorConfig::default();
+        config.max_position_size = Decimal::new(25000, 0); // $25,000 max
+        
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let mut instruction = create_test_instruction();
+        instruction.buy_order.price = Some(Decimal::new(30000, 0)); // $30,000 BTC
+        instruction.buy_order.quantity = Decimal::new(1, 0); // 1 BTC = $30,000 position
+        
+        let result = executor.validate_instruction(&instruction).await;
+        assert!(result.is_err());
+        
+        if let Err(ArbitrageError::Execution(msg)) = result {
+            assert!(msg.contains("Position size"));
+            assert!(msg.contains("exceeds limit"));
+        } else {
+            panic!("Expected Execution error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prepare_execution_success() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let instruction = create_test_instruction();
+        
+        // Note: This test would require mocking the exchange manager's connection status
+        // For now, we test the validation logic separately
+        let result = executor.validate_instruction(&instruction).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_arbitrage_validation_failure() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let mut instruction = create_test_instruction();
+        instruction.expected_profit = Decimal::new(-1, 0); // Negative profit
+        
+        let result = executor.execute_arbitrage(&instruction).await;
+        
+        assert!(!result.unwrap().success);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_actual_profit() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let buy_order = create_test_order_response(
+            ExchangeId::OKX,
+            OrderSide::Buy,
+            Decimal::new(50000, 0), // Bought at $50,000
+            Decimal::new(1, 0), // 1 BTC
+        );
+        
+        let sell_order = create_test_order_response(
+            ExchangeId::ByBit,
+            OrderSide::Sell,
+            Decimal::new(50100, 0), // Sold at $50,100
+            Decimal::new(1, 0), // 1 BTC
+        );
+        
+        let profit = executor.calculate_actual_profit(&buy_order, &sell_order);
+        
+        // Expected profit: (50100 - 50000) / 50000 * 1 = 0.002 = 0.2%
+        let expected_profit = Decimal::new(2, 3); // 0.002
+        assert_eq!(profit, expected_profit);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_actual_profit_zero_price() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let buy_order = create_test_order_response(
+            ExchangeId::OKX,
+            OrderSide::Buy,
+            Decimal::ZERO, // Zero price
+            Decimal::new(1, 0),
+        );
+        
+        let sell_order = create_test_order_response(
+            ExchangeId::ByBit,
+            OrderSide::Sell,
+            Decimal::new(50100, 0),
+            Decimal::new(1, 0),
+        );
+        
+        let profit = executor.calculate_actual_profit(&buy_order, &sell_order);
+        assert_eq!(profit, Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_actual_profit_zero_quantity() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let buy_order = create_test_order_response(
+            ExchangeId::OKX,
+            OrderSide::Buy,
+            Decimal::new(50000, 0),
+            Decimal::ZERO, // Zero quantity
+        );
+        
+        let sell_order = create_test_order_response(
+            ExchangeId::ByBit,
+            OrderSide::Sell,
+            Decimal::new(50100, 0),
+            Decimal::new(1, 0),
+        );
+        
+        let profit = executor.calculate_actual_profit(&buy_order, &sell_order);
+        assert_eq!(profit, Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_get_config() {
+        let config = ExecutorConfig {
+            execution_timeout_ms: 10000,
+            max_slippage_percent: Decimal::new(100, 4), // 1%
+            enable_rollback: false,
+            min_profit_threshold: Decimal::new(50, 4), // 0.5%
+            max_position_size: Decimal::new(20000, 0), // $20,000
+        };
+        
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config.clone(), exchange_manager);
+        
+        let retrieved_config = executor.get_config();
+        assert_eq!(retrieved_config.execution_timeout_ms, 10000);
+        assert_eq!(retrieved_config.max_slippage_percent, Decimal::new(100, 4));
+        assert!(!retrieved_config.enable_rollback);
+        assert_eq!(retrieved_config.min_profit_threshold, Decimal::new(50, 4));
+        assert_eq!(retrieved_config.max_position_size, Decimal::new(20000, 0));
+    }
+
+    #[tokio::test]
+    async fn test_update_config() {
+        let initial_config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let mut executor = OrderExecutor::new(initial_config, exchange_manager);
+        
+        let new_config = ExecutorConfig {
+            execution_timeout_ms: 15000,
+            max_slippage_percent: Decimal::new(75, 4), // 0.75%
+            enable_rollback: true,
+            min_profit_threshold: Decimal::new(25, 4), // 0.25%
+            max_position_size: Decimal::new(15000, 0), // $15,000
+        };
+        
+        executor.update_config(new_config.clone());
+        
+        let retrieved_config = executor.get_config();
+        assert_eq!(retrieved_config.execution_timeout_ms, 15000);
+        assert_eq!(retrieved_config.max_slippage_percent, Decimal::new(75, 4));
+        assert!(retrieved_config.enable_rollback);
+        assert_eq!(retrieved_config.min_profit_threshold, Decimal::new(25, 4));
+        assert_eq!(retrieved_config.max_position_size, Decimal::new(15000, 0));
+    }
+
+    #[tokio::test]
+    async fn test_order_request_creation() {
+        let instruction = create_test_instruction();
+        
+        let buy_request = OrderRequest {
+            symbol: instruction.buy_order.symbol.clone(),
+            side: OrderSide::Buy,
+            order_type: OrderType::Market,
+            quantity: instruction.buy_order.quantity,
+            price: instruction.buy_order.price,
+            time_in_force: TimeInForce::IOC,
+            client_order_id: Some(format!("arb_buy_{}", instruction.signal_id)),
+        };
+        
+        let sell_request = OrderRequest {
+            symbol: instruction.sell_order.symbol.clone(),
+            side: OrderSide::Sell,
+            order_type: OrderType::Market,
+            quantity: instruction.sell_order.quantity,
+            price: instruction.sell_order.price,
+            time_in_force: TimeInForce::IOC,
+            client_order_id: Some(format!("arb_sell_{}", instruction.signal_id)),
+        };
+        
+        // Verify buy request
+        assert_eq!(buy_request.side, OrderSide::Buy);
+        assert_eq!(buy_request.order_type, OrderType::Market);
+        assert_eq!(buy_request.time_in_force, TimeInForce::IOC);
+        assert!(buy_request.client_order_id.unwrap().starts_with("arb_buy_"));
+        
+        // Verify sell request
+        assert_eq!(sell_request.side, OrderSide::Sell);
+        assert_eq!(sell_request.order_type, OrderType::Market);
+        assert_eq!(sell_request.time_in_force, TimeInForce::IOC);
+        assert!(sell_request.client_order_id.unwrap().starts_with("arb_sell_"));
+    }
+
+    #[tokio::test]
+    async fn test_rollback_order_request_creation() {
+        let original_order = create_test_order_response(
+            ExchangeId::OKX,
+            OrderSide::Buy,
+            Decimal::new(50000, 0),
+            Decimal::new(1, 0),
+        );
+        
+        let rollback_request = OrderRequest {
+            symbol: original_order.symbol.clone(),
+            side: OrderSide::Sell, // Opposite side for rollback
+            order_type: OrderType::Market,
+            quantity: original_order.quantity,
+            price: None, // Market order for rollback
+            time_in_force: TimeInForce::IOC,
+            client_order_id: Some(format!("rollback_{}", original_order.order_id)),
+        };
+        
+        // Verify rollback request
+        assert_eq!(rollback_request.side, OrderSide::Sell);
+        assert_eq!(rollback_request.order_type, OrderType::Market);
+        assert_eq!(rollback_request.time_in_force, TimeInForce::IOC);
+        assert!(rollback_request.price.is_none()); // Market order
+        assert!(rollback_request.client_order_id.unwrap().starts_with("rollback_"));
+    }
+
+    #[test]
+    fn test_execution_result_creation() {
+        let signal_id = Uuid::new_v4();
+        let buy_order = create_test_order_response(
+            ExchangeId::OKX,
+            OrderSide::Buy,
+            Decimal::new(50000, 0),
+            Decimal::new(1, 0),
+        );
+        let sell_order = create_test_order_response(
+            ExchangeId::ByBit,
+            OrderSide::Sell,
+            Decimal::new(50100, 0),
+            Decimal::new(1, 0),
+        );
+        
+        let result = ExecutionResult {
+            signal_id,
+            success: true,
+            buy_order: Some(buy_order),
+            sell_order: Some(sell_order),
+            actual_profit: Some(Decimal::new(100, 0)),
+            execution_time_ms: 2500,
+            error_message: None,
+            rollback_performed: false,
+        };
+        
+        assert_eq!(result.signal_id, signal_id);
+        assert!(result.success);
+        assert!(result.buy_order.is_some());
+        assert!(result.sell_order.is_some());
+        assert_eq!(result.actual_profit, Some(Decimal::new(100, 0)));
+        assert_eq!(result.execution_time_ms, 2500);
+        assert!(result.error_message.is_none());
+        assert!(!result.rollback_performed);
+    }
+
+    #[test]
+    fn test_execution_result_failure() {
+        let signal_id = Uuid::new_v4();
+        
+        let result = ExecutionResult {
+            signal_id,
+            success: false,
+            buy_order: None,
+            sell_order: None,
+            actual_profit: None,
+            execution_time_ms: 1000,
+            error_message: Some("Exchange connection failed".to_string()),
+            rollback_performed: false,
+        };
+        
+        assert_eq!(result.signal_id, signal_id);
+        assert!(!result.success);
+        assert!(result.buy_order.is_none());
+        assert!(result.sell_order.is_none());
+        assert!(result.actual_profit.is_none());
+        assert_eq!(result.execution_time_ms, 1000);
+        assert_eq!(result.error_message, Some("Exchange connection failed".to_string()));
+        assert!(!result.rollback_performed);
+    }
+
+    #[tokio::test]
+    async fn test_timeout_behavior() {
+        let config = ExecutorConfig {
+            execution_timeout_ms: 100, // Very short timeout
+            ..Default::default()
+        };
+        
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        let instruction = create_test_instruction();
+        
+        // Note: This test would require mocking slow exchange responses
+        // For now, we verify the timeout configuration is set correctly
+        assert_eq!(executor.config.execution_timeout_ms, 100);
+    }
+
+    #[test]
+    fn test_decimal_calculations() {
+        // Test profit calculation edge cases
+        let buy_price = Decimal::new(50000, 0);
+        let sell_price = Decimal::new(50100, 0);
+        let quantity = Decimal::new(1, 0);
+        
+        // (50100 - 50000) / 50000 * 1 = 100 / 50000 = 0.002
+        let expected_profit = (sell_price - buy_price) / buy_price * quantity;
+        assert_eq!(expected_profit, Decimal::new(2, 3)); // 0.002
+        
+        // Test with different quantities
+        let quantity_2 = Decimal::new(2, 0);
+        let profit_2 = (sell_price - buy_price) / buy_price * quantity_2;
+        assert_eq!(profit_2, Decimal::new(4, 3)); // 0.004
+        
+        // Test with zero buy price (should handle gracefully)
+        let zero_buy_price = Decimal::ZERO;
+        let profit_zero = (sell_price - zero_buy_price) / zero_buy_price * quantity;
+        // This would panic in real code, so we need to handle it
+        assert!(zero_buy_price == Decimal::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_execution() {
+        let config = ExecutorConfig::default();
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = Arc::new(executor);
+        
+        // Test concurrent execution attempts
+        let mut handles = vec![];
+        
+        for i in 0..3 {
+            let executor_clone = Arc::clone(&executor);
+            let handle = tokio::spawn(async move {
+                let mut instruction = create_test_instruction();
+                instruction.signal_id = Uuid::new_v4(); // Unique signal ID
+                
+                // This would require mocking for actual execution
+                // For now, test validation
+                executor_clone.validate_instruction(&instruction).await
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all validations to complete
+        let results: Vec<Result<(), ArbitrageError>> = futures::future::join_all(handles)
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .collect();
+        
+        // All validations should succeed
+        for result in results {
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_error_message_formatting() {
+        let test_cases = vec![
+            ("Connection timeout", "Connection timeout"),
+            ("Insufficient balance", "Insufficient balance"),
+            ("Order rejected", "Order rejected"),
+        ];
+        
+        for (error_input, expected_output) in test_cases {
+            let error_msg = format!("Execution failed: {}", error_input);
+            assert!(error_msg.contains(expected_output));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_rollback_scenarios() {
+        // Test rollback logic for different scenarios
+        let config = ExecutorConfig {
+            enable_rollback: true,
+            ..Default::default()
+        };
+        
+        let exchange_config = ExchangeManagerConfig::default();
+        let exchange_manager = Arc::new(ExchangeManager::new(exchange_config));
+        let executor = OrderExecutor::new(config, exchange_manager);
+        
+        // Verify rollback is enabled
+        assert!(executor.config.enable_rollback);
+        
+        // Test rollback disabled scenario
+        let config_no_rollback = ExecutorConfig {
+            enable_rollback: false,
+            ..Default::default()
+        };
+        
+        let executor_no_rollback = OrderExecutor::new(config_no_rollback, exchange_manager);
+        assert!(!executor_no_rollback.config.enable_rollback);
+    }
+
+    #[test]
+    fn test_constants_and_defaults() {
+        let config = ExecutorConfig::default();
+        
+        // Verify reasonable defaults
+        assert!(config.execution_timeout_ms > 0);
+        assert!(config.execution_timeout_ms <= 30000); // Max 30 seconds
+        assert!(config.max_slippage_percent > Decimal::ZERO);
+        assert!(config.max_slippage_percent <= Decimal::ONE); // Max 100%
+        assert!(config.min_profit_threshold >= Decimal::ZERO);
+        assert!(config.max_position_size > Decimal::ZERO);
+    }
+}

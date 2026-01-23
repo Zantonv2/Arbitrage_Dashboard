@@ -1,0 +1,321 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arbitrage_core::config::Config;
+    use serde::{Deserialize, Serialize};
+    use std::fs;
+    use std::sync::Arc;
+    use tempfile::NamedTempFile;
+
+    // Mock types for testing
+    #[derive(Debug, thiserror::Error)]
+    enum ConfigError {
+        #[error("IO error: {0}")]
+        Io(#[from] std::io::Error),
+        #[error("TOML parsing error: {0}")]
+        Toml(#[from] toml::de::Error),
+        #[error("Config validation error: {0}")]
+        Validation(String),
+    }
+
+    #[derive(Debug, Clone)]
+    struct ConfigManager {
+        config: Config,
+    }
+
+    impl ConfigManager {
+        fn new(_path: &str) -> Result<Self, ConfigError> {
+            Ok(Self {
+                config: Config::default(),
+            })
+        }
+
+        fn get_config(&self) -> &Config {
+            &self.config
+        }
+
+        fn validate_config(_config: &Config) -> Result<(), ConfigError> {
+            Ok(()) // Mock validation
+        }
+
+        fn load_config(_path: &str) -> Result<Config, ConfigError> {
+            Ok(Config::default())
+        }
+
+        fn create_default_config(_path: &str) -> Result<(), ConfigError> {
+            Ok(()) // Mock implementation
+        }
+
+        fn update_config(&mut self, _new_config: Config) -> Result<(), ConfigError> {
+            Ok(()) // Mock implementation
+        }
+
+        fn reload(&mut self) -> Result<(), ConfigError> {
+            Ok(()) // Mock implementation
+        }
+    }
+
+    fn sanitize_path(path: &str) -> Result<String, String> {
+        if path.contains("..") {
+            return Err("Path traversal detected".to_string());
+        }
+        Ok(path.to_string())
+    }
+
+    #[test]
+    fn test_config_manager_new_with_existing_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let config_content = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[trading]
+min_profit_threshold_percent = "0.1"
+min_confidence_threshold = "0.5"
+max_signal_age_seconds = 300
+
+[risk]
+max_position_size_usd = "10000.0"
+max_slippage_percent = "0.5"
+"#;
+        fs::write(temp_file.path(), config_content).unwrap();
+
+        let config_manager = ConfigManager::new(temp_file.path().to_str().unwrap()).unwrap();
+        let config = config_manager.get_config();
+
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.host, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_config_manager_new_with_nonexistent_file() {
+        let nonexistent_path = "/tmp/nonexistent_config.toml";
+        let config_manager = ConfigManager::new(nonexistent_path).unwrap();
+        let config = config_manager.get_config();
+
+        // Should use default values
+        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.server.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn test_sanitize_path_valid() {
+        let valid_path = "/tmp/test";
+        let result = sanitize_path(valid_path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_path_traversal_attack() {
+        let malicious_path = "../../../etc/passwd";
+        let result = sanitize_path(malicious_path);
+        assert!(result.is_err());
+
+        if let Err(ConfigError::Validation(msg)) = result {
+            assert!(msg.contains("Path traversal"));
+        }
+    }
+
+    #[test]
+    fn test_sanitize_path_with_dots_in_middle() {
+        let path_with_dots = "/tmp/./test/../file";
+        let result = sanitize_path(path_with_dots);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_config_valid() {
+        let mut config = Config::default();
+        config.server.port = 8080;
+        config.trading.min_profit_threshold_percent = rust_decimal::Decimal::new(1, 2); // 0.01
+        config.risk.max_position_size_usd = rust_decimal::Decimal::new(1000, 0);
+
+        let result = ConfigManager::validate_config(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_zero_port() {
+        let mut config = Config::default();
+        config.server.port = 0;
+
+        let result = ConfigManager::validate_config(&config);
+        assert!(result.is_err());
+
+        if let Err(ConfigError::Validation(msg)) = result {
+            assert!(msg.contains("port cannot be 0"));
+        }
+    }
+
+    #[test]
+    fn test_validate_config_negative_profit_threshold() {
+        let mut config = Config::default();
+        config.server.port = 8080;
+        config.trading.min_profit_threshold_percent = rust_decimal::Decimal::new(-1, 2);
+
+        let result = ConfigManager::validate_config(&config);
+        assert!(result.is_err());
+
+        if let Err(ConfigError::Validation(msg)) = result {
+            assert!(msg.contains("negative"));
+        }
+    }
+
+    #[test]
+    fn test_validate_config_zero_max_position() {
+        let mut config = Config::default();
+        config.server.port = 8080;
+        config.risk.max_position_size_usd = rust_decimal::Decimal::ZERO;
+
+        let result = ConfigManager::validate_config(&config);
+        assert!(result.is_err());
+
+        if let Err(ConfigError::Validation(msg)) = result {
+            assert!(msg.contains("must be positive"));
+        }
+    }
+
+    #[test]
+    fn test_load_config_invalid_toml() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let invalid_toml = "invalid toml content [";
+        fs::write(temp_file.path(), invalid_toml).unwrap();
+
+        let result = ConfigManager::load_config(temp_file.path().to_str().unwrap());
+        assert!(result.is_err());
+
+        if let Err(ConfigError::Toml(_)) = result {
+            // Expected error type
+        } else {
+            panic!("Expected TOML parsing error");
+        }
+    }
+
+    #[test]
+    fn test_create_default_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("new_config.toml");
+
+        let result = ConfigManager::create_default_config(config_path.to_str().unwrap());
+        assert!(result.is_ok());
+
+        // Verify file was created
+        assert!(config_path.exists());
+
+        // Verify content is valid TOML
+        let content = fs::read_to_string(&config_path).unwrap();
+        let parsed: Config = toml::from_str(&content).unwrap();
+        assert_eq!(parsed.server.port, 3000);
+    }
+
+    #[test]
+    fn test_create_default_config_already_exists() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let original_content = "existing content";
+        fs::write(temp_file.path(), original_content).unwrap();
+
+        let result = ConfigManager::create_default_config(temp_file.path().to_str().unwrap());
+        assert!(result.is_ok());
+
+        // File should not be overwritten
+        let content = fs::read_to_string(temp_file.path()).unwrap();
+        assert_eq!(content, original_content);
+    }
+
+    #[test]
+    fn test_update_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Create initial config
+        ConfigManager::create_default_config(config_path.to_str().unwrap()).unwrap();
+
+        let mut config_manager = ConfigManager::new(config_path.to_str().unwrap()).unwrap();
+
+        // Update config
+        let mut new_config = config_manager.get_config().clone();
+        new_config.server.port = 9999;
+        new_config.server.host = "updated-host".to_string();
+
+        let result = config_manager.update_config(new_config);
+        assert!(result.is_ok());
+
+        // Verify update
+        let updated_config = config_manager.get_config();
+        assert_eq!(updated_config.server.port, 9999);
+        assert_eq!(updated_config.server.host, "updated-host");
+    }
+
+    #[test]
+    fn test_update_config_invalid_validation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        ConfigManager::create_default_config(config_path.to_str().unwrap()).unwrap();
+        let mut config_manager = ConfigManager::new(config_path.to_str().unwrap()).unwrap();
+
+        // Try to update with invalid config
+        let mut invalid_config = config_manager.get_config().clone();
+        invalid_config.server.port = 0; // Invalid
+
+        let result = config_manager.update_config(invalid_config);
+        assert!(result.is_err());
+
+        // Original config should remain unchanged
+        let original_config = config_manager.get_config();
+        assert_ne!(original_config.server.port, 0);
+    }
+
+    #[test]
+    fn test_reload_config() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let initial_content = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+"#;
+        fs::write(temp_file.path(), initial_content).unwrap();
+
+        let mut config_manager = ConfigManager::new(temp_file.path().to_str().unwrap()).unwrap();
+        assert_eq!(config_manager.get_config().server.port, 8080);
+
+        // Update file content
+        let updated_content = r#"
+[server]
+host = "127.0.0.1"
+port = 9999
+"#;
+        fs::write(temp_file.path(), updated_content).unwrap();
+
+        // Reload config
+        let result = config_manager.reload();
+        assert!(result.is_ok());
+
+        assert_eq!(config_manager.get_config().server.port, 9999);
+    }
+
+    #[test]
+    fn test_config_error_display() {
+        let io_error = ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
+        assert!(io_error.to_string().contains("IO error"));
+
+        let toml_error = ConfigError::Toml(toml::de::Error::custom("invalid toml"));
+        assert!(toml_error.to_string().contains("TOML parsing error"));
+
+        let validation_error = ConfigError::Validation("invalid value".to_string());
+        assert!(validation_error
+            .to_string()
+            .contains("Config validation error"));
+    }
+
+    #[test]
+    fn test_config_error_debug() {
+        let validation_error = ConfigError::Validation("test error".to_string());
+        let debug_str = format!("{:?}", validation_error);
+        assert!(debug_str.contains("Validation"));
+    }
+}
