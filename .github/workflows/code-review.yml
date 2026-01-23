@@ -101,11 +101,18 @@ jobs:
                 BODY=$(cat "$finding")
                 echo "Creating issue: $TITLE"
 
+                # Create labels string safely
+                if [ -n "$LABELS" ]; then
+                  LABEL_STRING="auto-generated,code-review,$LABELS"
+                else
+                  LABEL_STRING="auto-generated,code-review"
+                fi
+
                 gh issue create \
                   --title "$TITLE" \
                   --body "$BODY" \
-                  --label "$LABELS,auto-generated,code-review" \
-                  --assignee "" 2>/dev/null || echo "Failed to create issue for $finding"
+                  --label "$LABEL_STRING" \
+                  --repo "$GITHUB_REPOSITORY" 2>/dev/null || echo "Failed to create issue for $finding"
 
                 ISSUE_COUNT=$((ISSUE_COUNT + 1))
               fi
