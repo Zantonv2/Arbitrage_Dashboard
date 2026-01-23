@@ -81,7 +81,7 @@ jobs:
           PR_BODY: ${{ steps.pr-details.outputs.BODY }}
           PR_DIFF: ${{ steps.pr-details.outputs.DIFF }}
         with:
-          model: opencode/minimax-m2.1-free
+          model: opencode/big-pickle
           share: false
           prompt: |
             Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
@@ -130,7 +130,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         with:
-          model: opencode/minimax-m2.1-free
+          model: opencode/big-pickle
           share: false
           prompt: |
             Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
