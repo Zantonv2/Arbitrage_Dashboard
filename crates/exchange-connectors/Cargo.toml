@@ -37,3 +37,4 @@ proptest = { workspace = true }
 tokio-test = "0.4"
 tracing-subscriber = { workspace = true }
 wiremock = "0.6"
+rstest = "0.23"

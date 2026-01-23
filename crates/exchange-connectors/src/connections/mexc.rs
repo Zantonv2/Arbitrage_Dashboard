@@ -123,13 +123,13 @@ impl ExchangeConnector for MEXCConnector {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC fetch_order_book request failed: {}",
-                    e
+                    "MEXC fetch_order_book failed: operation=fetch_order_book, exchange=MEXC, symbol={}, error={}",
+                    mexc_symbol, e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "fetch_order_book timed out after 5s".to_string(),
+                    format!("MEXC fetch_order_book timed out after 5s: operation=fetch_order_book, exchange=MEXC, symbol={}", mexc_symbol)
                 ));
             }
         };
@@ -144,13 +144,13 @@ impl ExchangeConnector for MEXCConnector {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC fetch_symbols request failed: {}",
+                    "MEXC fetch_symbols failed: operation=fetch_symbols, exchange=MEXC, error={}",
                     e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "fetch_symbols timed out after 5s".to_string(),
+                    "MEXC fetch_symbols timed out after 5s: operation=fetch_symbols, exchange=MEXC".to_string(),
                 ));
             }
         };
@@ -176,17 +176,18 @@ impl ExchangeConnector for MEXCConnector {
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
         let url = format!("{}/api/v3/ticker/bookTicker", self.base.config.rest_url);
+        let symbols_str: String = symbols.iter().map(|s| format!("{}/{}", s.base, s.quote)).collect::<Vec<_>>().join(",");
         let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC fetch_tickers request failed: {}",
-                    e
+                    "MEXC fetch_tickers failed: operation=fetch_tickers, exchange=MEXC, symbols={}, error={}",
+                    symbols_str, e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "fetch_tickers timed out after 5s".to_string(),
+                    format!("MEXC fetch_tickers timed out after 5s: operation=fetch_tickers, exchange=MEXC, symbols={}", symbols_str)
                 ));
             }
         };
@@ -224,11 +225,11 @@ impl ExchangeConnector for MEXCConnector {
             let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
                 Ok(Ok(resp)) => resp,
                 Ok(Err(e)) => {
-                    warn!("MEXC funding rate request failed for {}: {}", mexc_symbol, e);
+                    warn!("MEXC funding rate request failed: operation=fetch_funding_rates, exchange=MEXC, symbol={}, error={}", mexc_symbol, e);
                     continue;
                 }
                 Err(_) => {
-                    warn!("MEXC funding rate request timed out for {}", mexc_symbol);
+                    warn!("MEXC funding rate request timed out: operation=fetch_funding_rates, exchange=MEXC, symbol={}", mexc_symbol);
                     continue;
                 }
             };
@@ -362,13 +363,14 @@ impl ExchangeConnector for MEXCConnector {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC place order request failed: {}",
-                    e
+                    "MEXC place_order failed: operation=place_order, exchange=MEXC, symbol={}/{}, side={:?}, type={:?}, quantity={}, error={}",
+                    order.symbol.base, order.symbol.quote, order.side, order.order_type, order.quantity, e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "place_order timed out after 5s".to_string(),
+                    format!("MEXC place_order timed out after 5s: operation=place_order, exchange=MEXC, symbol={}/{}, side={:?}, type={:?}, quantity={}",
+                        order.symbol.base, order.symbol.quote, order.side, order.order_type, order.quantity)
                 ));
             }
         };
@@ -420,13 +422,13 @@ impl ExchangeConnector for MEXCConnector {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC cancel order request failed: {}",
-                    e
+                    "MEXC cancel_order failed: operation=cancel_order, exchange=MEXC, order_id={}, error={}",
+                    order_id, e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "cancel_order timed out after 5s".to_string(),
+                    format!("MEXC cancel_order timed out after 5s: operation=cancel_order, exchange=MEXC, order_id={}", order_id)
                 ));
             }
         };
@@ -456,13 +458,13 @@ impl ExchangeConnector for MEXCConnector {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC get order status request failed: {}",
-                    e
+                    "MEXC get_order_status failed: operation=get_order_status, exchange=MEXC, order_id={}, error={}",
+                    order_id, e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "get_order_status timed out after 5s".to_string(),
+                    format!("MEXC get_order_status timed out after 5s: operation=get_order_status, exchange=MEXC, order_id={}", order_id)
                 ));
             }
         };
@@ -546,13 +548,13 @@ impl ExchangeConnector for MEXCConnector {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC get balance request failed: {}",
+                    "MEXC get_balance failed: operation=get_balance, exchange=MEXC, error={}",
                     e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "get_balance timed out after 5s".to_string(),
+                    "MEXC get_balance timed out after 5s: operation=get_balance, exchange=MEXC".to_string(),
                 ));
             }
         };
@@ -617,17 +619,18 @@ impl ExchangeConnector for MEXCConnector {
             url.push_str(&format!("?symbol={}{}", sym.base, sym.quote));
         }
 
+        let symbol_filter = symbol.map(|s| format!("{}/{}", s.base, s.quote)).unwrap_or_else(|| "all".to_string());
         let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
-                    "MEXC get open orders request failed: {}",
-                    e
+                    "MEXC get_open_orders failed: operation=get_open_orders, exchange=MEXC, symbol={}, error={}",
+                    symbol_filter, e
                 )));
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "get_open_orders timed out after 5s".to_string(),
+                    format!("MEXC get_open_orders timed out after 5s: operation=get_open_orders, exchange=MEXC, symbol={}", symbol_filter)
                 ));
             }
         };
