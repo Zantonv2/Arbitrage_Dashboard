@@ -89,4 +89,64 @@ jobs:
             ```
 
             Priority: P1 (bugs/security), P2 (performance/tests), P3 (quality/refactoring).
+
+            IMPORTANT: Save ALL findings to individual files in docs/outputs/issues/ directory first.
+            Then consolidate similar issues and create maximum 15 GitHub issues total.
+            For each consolidated issue, run: gh issue create --title "TITLE" --body "BODY" --label "LABELS"
             Output summary: how many issues created by category and priority.
+
+      - name: Create GitHub Issues from Findings
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Wait for OpenCode to finish
+          sleep 10
+
+          # Check if OpenCode created its own branch with findings
+          OPENCODE_BRANCH=$(git branch -r | grep opencode | head -1 | sed 's/origin\///')
+          if [ -n "$OPENCODE_BRANCH" ]; then
+            echo "Checking OpenCode branch: $OPENCODE_BRANCH"
+            git checkout "$OPENCODE_BRANCH"
+          fi
+
+          # Check if findings directory exists
+          if [ -d "docs/outputs/issues" ]; then
+            echo "Found findings directory"
+
+            # Read all findings and create consolidated issues (max 15)
+            FINDINGS=$(find docs/outputs/issues -name "*.md" -type f 2>/dev/null | head -15)
+
+            ISSUE_COUNT=0
+            for finding in $FINDINGS; do
+              if [ $ISSUE_COUNT -ge 15 ]; then
+                echo "Reached maximum 15 issues limit"
+                break
+              fi
+
+              # Extract metadata from finding file
+              TITLE=$(grep "^title:" "$finding" 2>/dev/null | head -1 | sed 's/title: //' | tr -d '"')
+              LABELS=$(grep "^labels:" "$finding" 2>/dev/null | head -1 | sed 's/labels: //' | tr -d '"')
+
+              if [ -n "$TITLE" ] && [ -n "$LABELS" ]; then
+                # Create GitHub issue
+                BODY=$(cat "$finding")
+                echo "Creating issue: $TITLE"
+
+                gh issue create \
+                  --title "$TITLE" \
+                  --body "$BODY" \
+                  --label "$LABELS,auto-generated,code-review" \
+                  --assignee "" 2>/dev/null || echo "Failed to create issue for $finding"
+
+                ISSUE_COUNT=$((ISSUE_COUNT + 1))
+              fi
+            done
+
+            echo "Created $ISSUE_COUNT GitHub issues from findings"
+
+            # Switch back to main branch
+            git checkout main
+          else
+            echo "No findings directory found"
+          fi
