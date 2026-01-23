@@ -143,7 +143,41 @@ jobs:
             5. **Error Handling**: Proper error propagation, no silent failures
             6. **Rust Specific**: Proper error types, async/await correctness, Decimal for financial calcs
 
-            Output only your review as a plain text comment to post on GitHub. Be concise but thorough.
+            Output your review as a plain text comment. Be concise but thorough.
+
+            **IMPORTANT:** If you find any critical issues (crashes, security vulnerabilities, or major bugs), include "CRITICAL_ISSUES_FOUND: true" in your output.
+
+      - name: Check for critical issues and trigger auto-fix
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+
+          # Check OpenCode's output for critical issues marker
+          if grep -q "CRITICAL_ISSUES_FOUND: true" "$GITHUB_WORKSPACE/opencode-output.txt" 2>/dev/null || \
+             grep -q "CRITICAL_ISSUES_FOUND: true" "$GITHUB_WORKSPACE/opencode.log" 2>/dev/null; then
+
+            echo "Critical issues detected! Triggering auto-fix..."
+
+            # Create issue for auto-fix
+            ISSUE_BODY="## Critical Issues Found in PR #$PR_NUM
+
+            OpenCode review detected critical issues that need immediate fixing. Please analyze the PR and implement necessary fixes.
+
+            ## Context
+            - PR: #$PR_NUM
+            - Review triggered by: auto-review workflow
+            - Source: review complaints
+
+            /oc fix"
+
+            gh issue create \
+              --title "fix: critical issues in PR #$PR_NUM" \
+              --body "$ISSUE_BODY" \
+              --label "bug,urgent,auto-generated"
+
+          fi
 
       - name: Post review comment
         if: github.event_name == 'pull_request'

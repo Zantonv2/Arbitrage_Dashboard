@@ -100,12 +100,17 @@ jobs:
 
             ## Your Task
             1. Read and understand the issue
-            2. Implement the fix in the codebase
-            3. Add/update tests if needed
-            4. Run: cargo check --all-features --all-targets
-            5. Run: cargo test --all-features --all-targets
-            6. Commit with message: "fix: resolve issue #${{ env.ISSUE_NUM }}"
-            7. Push the branch
+            2. Analyze the issue type:
+               - If title contains "PR #" and mentions "review complaints" or "critical issues": This is fixing review complaints
+               - Otherwise: This is fixing a reported issue
+            3. Implement the fix in the codebase
+            4. Add/update tests if needed
+            5. Run: cargo check --all-features --all-targets
+            6. Run: cargo test --all-features --all-targets
+            7. Commit with appropriate message:
+               - For review complaints: "fix: address review complaints from PR #X"
+               - For regular issues: "fix: resolve issue #${{ env.ISSUE_NUM }}"
+            8. Push the branch
 
             ## Output
             Summarize what was fixed. If you cannot fix it completely, explain why.
