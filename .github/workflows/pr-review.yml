@@ -1,12 +1,5 @@
 name: PR Review
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - '**.rs'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '!.github/**'
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -111,11 +104,9 @@ jobs:
             "https://api.github.com/repos/${REPO}/issues/${PR_NUM}/comments"
 
   review-on-pr:
-    name: Review PR on event
+    name: Review PR on comment
     runs-on: ubuntu-latest
-    if: >
-      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
-      contains(github.event.comment.body, '/oc review')
+    if: contains(github.event.comment.body, '/oc review')
     steps:
       - uses: actions/checkout@v4
         with:
