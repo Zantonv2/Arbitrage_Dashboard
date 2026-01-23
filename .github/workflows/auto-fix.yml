@@ -121,10 +121,6 @@ jobs:
             --head "$BRANCH_NAME" \
             --base main || true
 
-      - name: Trigger auto-review
-        run: |
-          gh pr comment "$BRANCH_NAME" --body "/oc review" || true
-
       - name: Update issue
         run: |
           gh issue edit ${{ matrix.issue }} --add-label "in-progress" 2>/dev/null || true
