@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.action == 'opened'
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Add /oc review comment
         env:
           GITHUB_TOKEN: ${{ github.token }}
