@@ -1,6 +1,6 @@
 name: PR Review
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '**.rs'
@@ -71,27 +71,32 @@ jobs:
           echo "BODY=$(gh pr view $PR_NUM --json body -q '.body')" >> $GITHUB_OUTPUT
           echo "DIFF=$(gh pr diff $PR_NUM)" >> $GITHUB_OUTPUT
 
-      - name: Install and run OpenCode CLI
+      - name: Run OpenCode for analysis
+        uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          npm install -g opencode
-          opencode run --model opencode/minimax-m2.1-free --share false <<'EOF'
-          Review pull request #${{ steps.pr-details.outputs.NUMBER }}: ${{ steps.pr-details.outputs.TITLE }}
-          
-          PR Description: ${{ steps.pr-details.outputs.BODY }}
-          
-          ## Review Checklist
-          1. Bugs & Glitches: unwrap/panic calls, race conditions
-          2. Performance: bottlenecks, unnecessary allocations
-          3. Code Quality: bad practices, magic numbers, poor naming
-          4. Security: hardcoded secrets, missing input validation
-          5. Error Handling: proper error propagation
-          6. Rust Specific: Decimal for financial calcs, async/await correctness
-          
-          Output your review as a concise summary.
-          EOF
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr-details.outputs.NUMBER }}
+          PR_TITLE: ${{ steps.pr-details.outputs.TITLE }}
+          PR_BODY: ${{ steps.pr-details.outputs.BODY }}
+          PR_DIFF: ${{ steps.pr-details.outputs.DIFF }}
+        with:
+          model: opencode/minimax-m2.1-free
+          share: false
+          prompt: |
+            Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
+
+            PR Description: ${{ env.PR_BODY }}
+
+            ## Review Checklist
+            1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions
+            2. **Performance**: Bottlenecks, unnecessary allocations, missing caches
+            3. **Code Quality**: Bad practices, magic numbers, poor naming, duplication
+            4. **Security**: Hardcoded secrets, missing input validation
+            5. **Error Handling**: Proper error propagation, no silent failures
+            6. **Rust Specific**: Proper error types, async/await correctness, Decimal for financial calcs
+
+            Output only your review as a plain text comment to post on GitHub. Be concise but thorough.
 
       - name: Post review comment
         env:
@@ -99,7 +104,6 @@ jobs:
         run: |
           PR_NUM=${{ steps.pr-details.outputs.NUMBER }}
           REPO="${{ github.repository }}"
-          # Get OpenCode's review from the step output (if available) or post a placeholder
           curl -s -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
@@ -117,29 +121,29 @@ jobs:
         with:
           persist-credentials: true
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install and run OpenCode CLI
+      - name: Run OpenCode for analysis
+        uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          npm install -g opencode
-          opencode run --model opencode/minimax-m2.1-free --share false <<'EOF'
-          Review pull request #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
-          
-          PR Description: ${{ github.event.pull_request.body }}
-          
-          ## Review Checklist
-          1. Bugs & Glitches: unwrap/panic calls, race conditions
-          2. Performance: bottlenecks, unnecessary allocations
-          3. Code Quality: bad practices, magic numbers, poor naming
-          4. Security: hardcoded secrets, missing input validation
-          5. Error Handling: proper error propagation
-          6. Rust Specific: Decimal for financial calcs, async/await correctness
-          
-          Output your review as a concise summary.
-          EOF
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        with:
+          model: opencode/minimax-m2.1-free
+          share: false
+          prompt: |
+            Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
+
+            ## Review Checklist
+            1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions
+            2. **Performance**: Bottlenecks, unnecessary allocations, missing caches
+            3. **Code Quality**: Bad practices, magic numbers, poor naming, duplication
+            4. **Security**: Hardcoded secrets, missing input validation
+            5. **Error Handling**: Proper error propagation, no silent failures
+            6. **Rust Specific**: Proper error types, async/await correctness, Decimal for financial calcs
+
+            Output only your review as a plain text comment to post on GitHub. Be concise but thorough.
 
       - name: Post review comment
         if: github.event_name == 'pull_request'
