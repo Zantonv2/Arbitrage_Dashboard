@@ -88,3 +88,38 @@ pub enum ArbitrageError {
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 }
+
+impl ArbitrageError {
+    pub fn sanitize(&self) -> &'static str {
+        match self {
+            Self::Exchange(_) => "Exchange error occurred",
+            Self::ExchangeConnection(_) => "Exchange connection failed",
+            Self::ConnectionFailed(_) => "Connection failed",
+            Self::WebSocketError(_) => "WebSocket error occurred",
+            Self::HttpError(_) => "HTTP request failed",
+            Self::RateLimitExceeded(_) => "Rate limit exceeded",
+            Self::AuthenticationFailed(_) => "Authentication failed",
+            Self::InvalidSymbol(_) => "Invalid symbol",
+            Self::ParsingError(_) => "Parsing error occurred",
+            Self::ExchangeApiError { .. } => "Exchange API error occurred",
+            Self::Timeout(_) => "Operation timed out",
+            Self::Normalization(_) => "Normalization error occurred",
+            Self::Calculation(_) => "Calculation error occurred",
+            Self::Storage(_) => "Storage error occurred",
+            Self::Execution(_) => "Execution error occurred",
+            Self::Configuration(_) => "Configuration error occurred",
+            Self::Validation(_) => "Validation error occurred",
+            Self::Network(_) => "Network error occurred",
+            Self::CircuitBreakerOpen(_) => "Service temporarily unavailable",
+            Self::Http(_) => "HTTP request error",
+            Self::Io(_) => "IO error occurred",
+            Self::Database(_) => "Database error occurred",
+            Self::BroadcastSend(_) => "Broadcast error occurred",
+            Self::Serialization(_) => "Serialization error occurred",
+            Self::Decimal(_) => "Decimal conversion error",
+            Self::Uuid(_) => "UUID generation error",
+            Self::Generic(_) => "An error occurred",
+            Self::NotImplemented(_) => "Feature not implemented",
+        }
+    }
+}
