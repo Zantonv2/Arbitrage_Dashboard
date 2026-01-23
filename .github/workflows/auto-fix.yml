@@ -107,10 +107,11 @@ jobs:
             4. Add/update tests if needed
             5. Run: cargo check --all-features --all-targets
             6. Run: cargo test --all-features --all-targets
-            7. Commit with appropriate message:
+            7. Use @fix-issue-validator to validate the implementation quality
+            8. Commit with appropriate message:
                - For review complaints: "fix: address review complaints from PR #X"
                - For regular issues: "fix: resolve issue #${{ env.ISSUE_NUM }}"
-            8. Push the branch
+            9. Push the branch
 
             ## Output
             Summarize what was fixed. If you cannot fix it completely, explain why.

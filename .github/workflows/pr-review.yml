@@ -126,6 +126,13 @@ jobs:
           prompt: |
             Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
 
+            Use specialized agents for thorough review:
+            - @critical-1: Check for panics, unwraps, OOB access, division by zero
+            - @security-1: Check for auth bypass, injection, crypto failures
+            - @performance-1: Check for memory leaks, slow algorithms, missing caches
+            - @reliability-1: Check error handling, resource leaks
+            - @testing-1: Check test coverage and edge cases
+
             ## Review Checklist
             1. **Bugs & Glitches**: Potential bugs, unwrap/panic calls, race conditions
             2. **Performance**: Bottlenecks, unnecessary allocations, missing caches

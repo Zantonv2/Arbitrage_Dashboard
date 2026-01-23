@@ -36,43 +36,15 @@ jobs:
           prompt: |
             ${{ github.event_name == 'issue_comment' && 'Scan the entire codebase for issues immediately.' || 'Perform a comprehensive code review of the entire codebase.' }}
 
-            ## Review Focus Areas
+            Use these specialized agents for thorough analysis:
+            - @critical-1: Find panics, unwraps, OOB access, division by zero
+            - @security-1: Find auth bypass, injection, crypto failures, secrets
+            - @performance-1: Find memory leaks, slow algorithms, missing caches
+            - @reliability-1: Find missing error handling, poor errors, resource leaks
+            - @testing-1: Find missing tests, low coverage, untested edge cases
+            - @tech-debt-1: Find code duplication, dead code, magic numbers, poor naming
 
-            ### Bugs & Glitches
-            - unwrap()/expect() on external data
-            - Division by zero, missing error handling
-            - Race conditions, invalid state transitions
-
-            ### Performance
-            - Unnecessary cloning, O(n²) algorithms
-            - Memory leaks, missing caches
-            - Blocking in async code
-
-            ### Code Quality
-            - Magic numbers, poor naming
-            - Code duplication (>3 lines)
-            - Dead code, functions >50 lines
-            - Missing docs on public APIs
-
-            ### Order Book Validation
-            - Check bids >= asks (no arbitrage within single exchange)
-
-            ### Technical Debt
-            - TODO/FIXME comments
-            - Hardcoded values, missing tests
-
-            ### Security
-            - Hardcoded secrets
-            - Missing input validation
-            - Unsafe operations
-
-            ## Rust-Specific
-            - f64 instead of Decimal
-            - Proper error types (thiserror)
-            - Async/await correctness
-            - Concurrency primitives (Mutex vs RwLock vs DashMap)
-
-            ## Output
+            ## Output Format
             For each issue found, create a GitHub issue with:
             ```yaml
             ---
@@ -89,10 +61,6 @@ jobs:
             ```
 
             Priority: P1 (bugs/security), P2 (performance/tests), P3 (quality/refactoring).
-
-            IMPORTANT: Save ALL findings to individual files in docs/outputs/issues/ directory first.
-            Then consolidate similar issues and create maximum 15 GitHub issues total.
-            For each consolidated issue, run: gh issue create --title "TITLE" --body "BODY" --label "LABELS"
             Output summary: how many issues created by category and priority.
 
       - name: Create GitHub Issues from Findings
