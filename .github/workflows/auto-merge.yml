@@ -1,0 +1,109 @@
+name: Auto-Merge Safe PRs
+on:
+  schedule:
+    - cron: "0 17 * * *" # Daily at 5 PM UTC (8 PM Moscow)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (no actual merges)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  auto-merge:
+    name: Auto-Merge Safe PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Find and merge safe PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          echo "🔍 Finding auto-generated PRs to merge..."
+
+          # Get all open PRs with auto-generated label
+          PR_LIST=$(gh pr list --state open --label "auto-generated" --json number,title,mergeable,statusCheckRollup | jq -c '.[]')
+
+          MERGED_COUNT=0
+          SKIPPED_COUNT=0
+
+          for pr in $PR_LIST; do
+            PR_NUM=$(echo $pr | jq -r '.number')
+            PR_TITLE=$(echo $pr | jq -r '.title')
+
+            echo "📋 Checking PR #$PR_NUM: $PR_TITLE"
+
+            # Skip if contains /no-merge in title or comments
+            if echo "$PR_TITLE" | grep -q "/no-merge" || gh pr view $PR_NUM --json comments | jq -r '.comments[].body' | grep -q "/no-merge"; then
+              echo "⏭️  Skipped - /no-merge flag found"
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
+
+            # Check CI status
+            CI_STATE=$(echo $pr | jq -r '.statusCheckRollup.state')
+            if [ "$CI_STATE" != "SUCCESS" ]; then
+              echo "⏭️  Skipped - CI not passed (status: $CI_STATE)"
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
+
+            # Check mergeable status
+            MERGEABLE=$(echo $pr | jq -r '.mergeable')
+            if [ "$MERGEABLE" != "MERGEABLE" ]; then
+              echo "⏭️  Skipped - Not mergeable (status: $MERGEABLE)"
+              gh pr comment $PR_NUM --body "⚠️ **Auto-merge blocked** - Merge conflicts or other issues detected."
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
+
+            # Additional safety check - ensure PR is recent (< 7 days old)
+            CREATED_AT=$(gh pr view $PR_NUM --json createdAt | jq -r '.createdAt')
+            CREATED_TS=$(date -d "$CREATED_AT" +%s)
+            NOW_TS=$(date +%s)
+            AGE_DAYS=$(( (NOW_TS - CREATED_TS) / 86400 ))
+
+            if [ $AGE_DAYS -gt 7 ]; then
+              echo "⏭️  Skipped - PR too old ($AGE_DAYS days)"
+              SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+              continue
+            fi
+
+            # All checks passed - merge the PR
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "🧪 DRY RUN: Would merge PR #$PR_NUM"
+            else
+              echo "🚀 Merging PR #$PR_NUM..."
+
+              if gh pr merge $PR_NUM --squash --delete-branch=false; then
+                echo "✅ Successfully merged PR #$PR_NUM"
+                gh pr comment $PR_NUM --body "✅ **Auto-merged** - All safety checks passed, changes integrated successfully."
+                MERGED_COUNT=$((MERGED_COUNT + 1))
+              else
+                echo "❌ Failed to merge PR #$PR_NUM"
+                gh pr comment $PR_NUM --body "❌ **Auto-merge failed** - Manual intervention required."
+              fi
+            fi
+          done
+
+          # Summary
+          echo ""
+          echo "📊 Auto-Merge Summary:"
+          echo "✅ Merged: $MERGED_COUNT PRs"
+          echo "⏭️  Skipped: $SKIPPED_COUNT PRs"
+          echo "🔄 Dry Run: $DRY_RUN"
+
+          # Create summary comment on any recent merged PR
+          if [ $MERGED_COUNT -gt 0 ] && [ "$DRY_RUN" != "true" ]; then
+            echo "Daily auto-merge completed: $MERGED_COUNT PRs merged, $SKIPPED_COUNT skipped." >> $GITHUB_STEP_SUMMARY
+          fi
