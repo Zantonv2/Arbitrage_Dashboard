@@ -1,7 +1,7 @@
 name: Auto-Fix Issues
 on:
   schedule:
-    - cron: "0 10 * * *" # Daily at 10 AM UTC
+    - cron: "0 11 * * *" # Daily at 11 AM UTC (2 hours after code review)
   issue_comment:
     types: [created]
   workflow_dispatch:
