@@ -7,6 +7,7 @@ use crate::utils::{
     format_symbol, parse_decimal, parse_json_with_retry, parse_symbol, parse_timestamp,
     ExponentialBackoff, SymbolFormat,
 };
+
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
@@ -58,7 +59,6 @@ pub struct BybitConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     parsing_failures: Arc<AtomicU64>,
 }
 
@@ -93,7 +93,6 @@ impl BybitConnector {
             status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
             stats: Arc::new(Mutex::new(stats)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
-            ws_handle: Arc::new(Mutex::new(None)),
             parsing_failures: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -275,9 +274,6 @@ impl ExchangeConnector for BybitConnector {
             .await;
         });
 
-        // Store the handle
-        *self.ws_handle.lock().await = Some(handle);
-
         // Wait for connection to establish (increased from 100ms for reliability)
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -289,11 +285,6 @@ impl ExchangeConnector for BybitConnector {
 
         // Update status
         *self.status.write().await = ConnectionStatus::Disconnected;
-
-        // Cancel WebSocket task if running
-        if let Some(handle) = self.ws_handle.lock().await.take() {
-            handle.abort();
-        }
 
         // Clear subscribed symbols
         self.subscribed_symbols.write().await.clear();

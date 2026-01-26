@@ -6,6 +6,7 @@ use crate::connector::{
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
@@ -31,7 +32,7 @@ struct KrakenSubscription {
     subscription: KrakenSubscriptionDetails,
 }
 
-/// Kraken subscription details
+/// Kraken subscription details - used for order book subscriptions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct KrakenSubscriptionDetails {
     name: String,
@@ -39,9 +40,8 @@ struct KrakenSubscriptionDetails {
     depth: Option<u32>,
 }
 
-/// Kraken WebSocket response message
+/// Kraken WebSocket response message - used for parsing responses
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct KrakenWsResponse {
     event: Option<String>,
     status: Option<String>,
@@ -62,8 +62,6 @@ pub struct KrakenConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
-    ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Default for KrakenConnector {
@@ -97,7 +95,6 @@ impl KrakenConnector {
             status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
             stats: Arc::new(Mutex::new(stats)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
-            ws_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -236,9 +233,6 @@ impl ExchangeConnector for KrakenConnector {
             .await;
         });
 
-        // Store the handle
-        *self.ws_handle.lock().await = Some(handle);
-
         // Wait for connection to establish (increased from 100ms for reliability)
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -250,11 +244,6 @@ impl ExchangeConnector for KrakenConnector {
 
         // Update status
         *self.status.write().await = ConnectionStatus::Disconnected;
-
-        // Cancel WebSocket task if running
-        if let Some(handle) = self.ws_handle.lock().await.take() {
-            handle.abort();
-        }
 
         // Clear subscribed symbols
         self.subscribed_symbols.write().await.clear();

@@ -10,6 +10,7 @@ pub mod mock;
 pub mod rate_limiter;
 pub mod rest_client;
 pub mod utils;
+pub mod websocket_common;
 pub mod websocket_pool;
 
 // Re-exports

@@ -4,7 +4,8 @@ use crate::connector::{
 };
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+use crate::utils::{format_symbol, parse_decimal, parse_symbol, SymbolFormat};
+
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
@@ -22,31 +23,11 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, warn};
 
-/// MEXC WebSocket subscription message
+/// MEXC WebSocket subscription message - used for order book subscriptions
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct MexcSubscription {
     method: String,
     params: Vec<String>,
-}
-
-/// MEXC WebSocket response message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct MexcWsResponse {
-    id: Option<u64>,
-    code: Option<i32>,
-    msg: Option<String>,
-}
-
-/// MEXC WebSocket market data message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct MexcMarketData {
-    c: Option<String>,
-    d: Option<Value>,
-    s: Option<String>,
-    t: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -54,8 +35,6 @@ pub struct MEXCConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
-    ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Default for MEXCConnector {
@@ -82,7 +61,6 @@ impl MEXCConnector {
             base,
             client,
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
-            ws_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -93,6 +71,8 @@ impl MEXCConnector {
     pub fn symbol_from_mexc(&self, mexc_symbol: &str) -> Result<Symbol> {
         parse_symbol(mexc_symbol, SymbolFormat::NoSeparator)
     }
+
+
 }
 
 #[async_trait]
@@ -712,234 +692,9 @@ impl ExchangeConnector for MEXCConnector {
     }
 }
 
-#[allow(dead_code)]
 impl MEXCConnector {
-    /// Main WebSocket connection task with reconnection logic
-    async fn websocket_task(
-        ws_url: String,
-        event_sender: broadcast::Sender<ConnectionEvent>,
-        status: Arc<RwLock<ConnectionStatus>>,
-        stats: Arc<Mutex<ConnectorStats>>,
-        subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-        config: ConnectorConfig,
-    ) {
-        let mut backoff =
-            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
-
-        loop {
-            match Self::connect_websocket(&ws_url).await {
-                Ok((ws_stream, _)) => {
-                    info!("MEXC WebSocket connected successfully");
-                    backoff.reset();
-
-                    // Update status to connected
-                    *status.write().await = ConnectionStatus::Connected;
-
-                    // Send status change event
-                    let _ = event_sender.send(ConnectionEvent::StatusChange {
-                        exchange: ExchangeId::MEXC,
-                        old_status: ConnectionStatus::Connecting,
-                        new_status: ConnectionStatus::Connected,
-                        timestamp: chrono::Utc::now(),
-                    });
-
-                    // Handle WebSocket messages
-                    if let Err(e) = Self::handle_websocket_connection(
-                        ws_stream,
-                        &event_sender,
-                        &status,
-                        &stats,
-                        &subscribed_symbols,
-                        &config,
-                    )
-                    .await
-                    {
-                        error!("MEXC WebSocket connection error: {}", e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to connect to MEXC WebSocket: {}", e);
-
-                    // Update status to error
-                    *status.write().await =
-                        ConnectionStatus::Error("WebSocket connection failed".to_string());
-
-                    // Send error event
-                    let _ = event_sender.send(ConnectionEvent::Error {
-                        exchange: ExchangeId::MEXC,
-                        error: format!("WebSocket connection failed: {}", e),
-                        timestamp: chrono::Utc::now(),
-                    });
-                }
-            }
-
-            // Check if we should continue reconnecting
-            let current_status = status.read().await;
-            if *current_status == ConnectionStatus::Disconnected {
-                break;
-            }
-
-            // Wait before reconnecting
-            let delay = backoff.next_delay();
-            warn!("MEXC WebSocket reconnecting in {:?}", delay);
-            tokio::time::sleep(delay).await;
-        }
-    }
-
-    /// Establish WebSocket connection
-    async fn connect_websocket(
-        ws_url: &str,
-    ) -> Result<(
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
-    )> {
-        let (ws_stream, response) = connect_async(ws_url).await.map_err(|e| {
-            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                "WebSocket connection failed: {}",
-                e
-            ))
-        })?;
-
-        Ok((ws_stream, response))
-    }
-
-    /// Handle WebSocket connection and messages
-    async fn handle_websocket_connection(
-        mut ws_stream: tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        event_sender: &broadcast::Sender<ConnectionEvent>,
-        status: &Arc<RwLock<ConnectionStatus>>,
-        stats: &Arc<Mutex<ConnectorStats>>,
-        subscribed_symbols: &Arc<RwLock<Vec<Symbol>>>,
-        _config: &ConnectorConfig,
-    ) -> Result<()> {
-        let mut last_subscription_check = std::time::Instant::now();
-        let mut current_subscriptions: Vec<String> = Vec::with_capacity(64);
-        let mut last_ping = std::time::Instant::now();
-
-        loop {
-            if last_subscription_check.elapsed() > Duration::from_secs(5) {
-                let symbols = subscribed_symbols.read().await;
-                let mut new_params = Vec::with_capacity(symbols.len());
-
-                for symbol in symbols.iter() {
-                    let mexc_symbol = Self::symbol_to_mexc_static(symbol);
-                    let channel = format!("spot@public.bookTicker.v3.api@{}", mexc_symbol);
-
-                    if !current_subscriptions.contains(&channel) {
-                        new_params.push(channel.clone());
-                        current_subscriptions.push(channel);
-                    }
-                }
-
-                if !new_params.is_empty() {
-                    let subscription = MexcSubscription {
-                        method: "SUBSCRIPTION".to_string(),
-                        params: new_params,
-                    };
-
-                    let msg = serde_json::to_string(&subscription).map_err(|e| {
-                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                            "Failed to serialize: {}",
-                            e
-                        ))
-                    })?;
-
-                    debug!("Sending MEXC subscription: {}", msg);
-                    ws_stream
-                        .send(Message::Text(msg.into()))
-                        .await
-                        .map_err(|e| {
-                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                                "Failed to send: {}",
-                                e
-                            ))
-                        })?;
-                }
-
-                last_subscription_check = std::time::Instant::now();
-            }
-
-            if last_ping.elapsed() > Duration::from_secs(25) {
-                let ping_msg = r#"{"method":"PING"}"#;
-                ws_stream
-                    .send(Message::Text(ping_msg.into()))
-                    .await
-                    .map_err(|e| {
-                        arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                            "Failed to send ping: {}",
-                            e
-                        ))
-                    })?;
-                last_ping = std::time::Instant::now();
-            }
-
-            match tokio::time::timeout(Duration::from_secs(30), ws_stream.next()).await {
-                Ok(Some(Ok(message))) => {
-                    {
-                        let mut stats_guard = stats.lock().await;
-                        stats_guard.messages_received += 1;
-                        stats_guard.last_update = chrono::Utc::now();
-                    }
-
-                    match message {
-                        Message::Text(text) => {
-                            if let Err(e) = Self::handle_text_message(&text, event_sender).await {
-                                warn!("Failed to handle MEXC message: {}", e);
-                            }
-                        }
-                        Message::Ping(data) => {
-                            ws_stream.send(Message::Pong(data)).await.map_err(|e| {
-                                arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                                    "Failed to send pong: {}",
-                                    e
-                                ))
-                            })?;
-                        }
-                        Message::Close(_) => {
-                            info!("MEXC WebSocket connection closed by server");
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(Some(Err(e))) => {
-                    error!("MEXC WebSocket error: {}", e);
-                    break;
-                }
-                Ok(None) => {
-                    info!("MEXC WebSocket stream ended");
-                    break;
-                }
-                Err(_) => {
-                    warn!("MEXC WebSocket timeout, sending ping");
-                    let ping_msg = r#"{"method":"PING"}"#;
-                    ws_stream
-                        .send(Message::Text(ping_msg.into()))
-                        .await
-                        .map_err(|e| {
-                            arbitrage_core::ArbitrageError::ExchangeConnection(format!(
-                                "Failed to send ping: {}",
-                                e
-                            ))
-                        })?;
-                }
-            }
-
-            let current_status = status.read().await;
-            if *current_status == ConnectionStatus::Disconnected {
-                break;
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle incoming text messages
-    async fn handle_text_message(
+    /// Handle incoming text messages for MEXC
+    fn handle_text_message(
         text: &str,
         event_sender: &broadcast::Sender<ConnectionEvent>,
     ) -> Result<()> {

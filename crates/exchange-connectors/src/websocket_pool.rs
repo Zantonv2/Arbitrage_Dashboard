@@ -101,8 +101,6 @@ struct WebSocketPoolInner {
     message_sender: mpsc::UnboundedSender<WebSocketMessage>,
     event_sender: broadcast::Sender<WebSocketEvent>,
     heartbeat_interval_ms: u64,
-    #[allow(dead_code)]
-    last_heartbeat: Arc<DashMap<(), Instant>>,
     message_queue: Arc<DashMap<usize, (String, Instant)>>,
     queue_counter: Arc<DashMap<(), usize>>,
 }
@@ -126,7 +124,6 @@ impl WebSocketPool {
             message_sender,
             event_sender,
             heartbeat_interval_ms: 30000,
-            last_heartbeat: Arc::new(DashMap::new()),
             message_queue: Arc::new(DashMap::new()),
             queue_counter: Arc::new(DashMap::new()),
         });

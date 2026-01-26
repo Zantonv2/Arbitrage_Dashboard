@@ -6,6 +6,7 @@ use crate::connector::{
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{parse_decimal, ExponentialBackoff};
+
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
@@ -23,24 +24,21 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, warn};
 
-/// Bitstamp WebSocket subscription message
+/// Bitstamp WebSocket subscription message - used for order book subscriptions
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct BitstampSubscription {
     event: String,
     data: BitstampSubscriptionData,
 }
 
-/// Bitstamp subscription data
+/// Bitstamp subscription data - used for order book subscriptions
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 struct BitstampSubscriptionData {
     channel: String,
 }
 
-/// Bitstamp WebSocket response message
+/// Bitstamp WebSocket response message - used for parsing responses
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct BitstampWsResponse {
     event: Option<String>,
     channel: Option<String>,
@@ -52,8 +50,6 @@ pub struct BitstampConnector {
     pub base: ConnectorBase,
     client: Client,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    #[allow(dead_code)]
-    ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Default for BitstampConnector {
@@ -80,7 +76,6 @@ impl BitstampConnector {
             base,
             client,
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
-            ws_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -525,70 +520,10 @@ impl ExchangeConnector for BitstampConnector {
     }
 }
 
-#[allow(dead_code)]
 impl BitstampConnector {
-    /// Main WebSocket connection task with reconnection logic
-    async fn websocket_task(
-        ws_url: String,
-        event_sender: broadcast::Sender<ConnectionEvent>,
-        status: Arc<RwLock<ConnectionStatus>>,
-        stats: Arc<Mutex<ConnectorStats>>,
-        subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-        config: ConnectorConfig,
-    ) {
-        let mut backoff =
-            ExponentialBackoff::new(Duration::from_millis(1000), Duration::from_millis(30000));
-
-        loop {
-            match Self::connect_websocket(&ws_url).await {
-                Ok((ws_stream, _)) => {
-                    info!("Bitstamp WebSocket connected successfully");
-                    backoff.reset();
-
-                    *status.write().await = ConnectionStatus::Connected;
-
-                    let _ = event_sender.send(ConnectionEvent::StatusChange {
-                        exchange: ExchangeId::Bitstamp,
-                        old_status: ConnectionStatus::Connecting,
-                        new_status: ConnectionStatus::Connected,
-                        timestamp: chrono::Utc::now(),
-                    });
-
-                    if let Err(e) = Self::handle_websocket_connection(
-                        ws_stream,
-                        &event_sender,
-                        &status,
-                        &stats,
-                        &subscribed_symbols,
-                        &config,
-                    )
-                    .await
-                    {
-                        error!("Bitstamp WebSocket connection error: {}", e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to connect to Bitstamp WebSocket: {}", e);
-                    *status.write().await =
-                        ConnectionStatus::Error("WebSocket connection failed".to_string());
-                    let _ = event_sender.send(ConnectionEvent::Error {
-                        exchange: ExchangeId::Bitstamp,
-                        error: format!("WebSocket connection failed: {}", e),
-                        timestamp: chrono::Utc::now(),
-                    });
-                }
-            }
-
-            let current_status = status.read().await;
-            if *current_status == ConnectionStatus::Disconnected {
-                break;
-            }
-
-            let delay = backoff.next_delay();
-            warn!("Bitstamp WebSocket reconnecting in {:?}", delay);
-            tokio::time::sleep(delay).await;
-        }
-    }
+    // NOTE: WebSocket functionality is intentionally not implemented for Bitstamp
+    // as it's not currently used in the system. The websocket_task implementation
+    // was removed to reduce code duplication and dead code.
 
     async fn connect_websocket(
         ws_url: &str,

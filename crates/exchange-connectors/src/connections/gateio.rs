@@ -6,6 +6,7 @@ use crate::connector::{
 };
 use crate::events::{ConnectionEvent, MarketDataEvent};
 use crate::utils::{format_symbol, parse_decimal, parse_symbol, ExponentialBackoff, SymbolFormat};
+
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
     Result,
@@ -23,22 +24,12 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{debug, error, info, warn};
 
-/// Gate.io WebSocket subscription message
+/// Gate.io WebSocket subscription message - used for order book subscriptions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GateioSubscription {
     method: String,
     params: Vec<String>,
     id: u64,
-}
-
-/// Gate.io WebSocket response message
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-struct GateioWsResponse {
-    method: Option<String>,
-    params: Option<Value>,
-    id: Option<u64>,
-    error: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -49,7 +40,6 @@ pub struct GateioConnector {
     status: Arc<RwLock<ConnectionStatus>>,
     stats: Arc<Mutex<ConnectorStats>>,
     subscribed_symbols: Arc<RwLock<Vec<Symbol>>>,
-    ws_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Default for GateioConnector {
@@ -83,7 +73,6 @@ impl GateioConnector {
             status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
             stats: Arc::new(Mutex::new(stats)),
             subscribed_symbols: Arc::new(RwLock::new(Vec::new())),
-            ws_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -204,7 +193,6 @@ impl ExchangeConnector for GateioConnector {
             .await;
         });
 
-        *self.ws_handle.lock().await = Some(handle);
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         Ok(())
@@ -213,10 +201,6 @@ impl ExchangeConnector for GateioConnector {
     async fn disconnect(&mut self) -> Result<()> {
         info!("Disconnecting from Gate.io WebSocket");
         *self.status.write().await = ConnectionStatus::Disconnected;
-
-        if let Some(handle) = self.ws_handle.lock().await.take() {
-            handle.abort();
-        }
 
         self.subscribed_symbols.write().await.clear();
         Ok(())
