@@ -117,12 +117,8 @@ pub struct ArbitrageEngine {
     signal_sender: broadcast::Sender<Signal>,
 
     // Core modules
-    #[allow(dead_code)]
-    normalizer: Arc<Normalizer>,
     confidence_scorer: Arc<ConfidenceScorer>,
     size_calculator: Arc<SizeCalculator>,
-    #[allow(dead_code)]
-    execution_preparer: Arc<ExecutionPreparer>,
     storage: Arc<StorageService>,
 
     // Configuration
@@ -155,10 +151,8 @@ impl ArbitrageEngine {
             funding_rates: Arc::new(DashMap::new()),
             signal_cache: Arc::new(DashMap::new()),
             signal_sender,
-            normalizer,
             confidence_scorer,
             size_calculator,
-            execution_preparer,
             storage,
             config,
             execution_mode: ExecutionMode::default(),

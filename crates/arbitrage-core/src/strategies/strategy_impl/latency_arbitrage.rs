@@ -31,9 +31,6 @@ use std::sync::Arc;
 /// - Historical price movement patterns
 pub struct LatencyArbitrageStrategy {
     config: StrategyConfig,
-    #[allow(dead_code)]
-    /// Track price history for staleness detection
-    price_history: HashMap<(ExchangeId, Symbol), Vec<(DateTime<Utc>, Decimal)>>,
 }
 
 impl LatencyArbitrageStrategy {
@@ -63,16 +60,12 @@ impl LatencyArbitrageStrategy {
                 risk_limits: RiskLimits::default(),
                 custom_params,
             },
-            price_history: HashMap::new(),
         }
     }
 
     /// Create with custom configuration
     pub fn with_config(config: StrategyConfig) -> Self {
-        Self {
-            config,
-            price_history: HashMap::new(),
-        }
+        Self { config }
     }
 
     /// Get exchanges ordered by typical latency (fastest first)

@@ -125,3 +125,62 @@ Reviewers will check:
 - Search existing issues and PRs
 - Ask in issue comments for clarification
 - Tag questions with `question` label
+
+## Code Maintenance
+
+### Dead Code Management
+
+To prevent accumulation of dead code and maintain code quality:
+
+#### Quarterly Dead Code Audit
+Every quarter, perform a comprehensive dead code audit:
+
+1. **Audit Process:**
+   ```bash
+   # Find all dead code instances
+   grep -r "#\[allow(dead_code)\]" --include="*.rs" | wc -l
+   grep -r "#\[allow(dead_code)\]" --include="*.rs"
+   ```
+
+2. **Classification:**
+   - **Remove**: Truly unused functions, fields, imports
+   - **Document**: Intentionally kept code with future use plans
+   - **Refactor**: Dead code that should be integrated
+
+3. **Acceptance Criteria:**
+   - Reduce total `#[allow(dead_code)]` instances by 30+ per year
+   - Remove or use at least 10 unused functions per audit
+   - Document any remaining dead code with clear rationale
+   - Update contribution guidelines with audit process
+
+4. **Tracking:**
+   - Create GitHub issue for quarterly audit tracking
+   - Document findings in technical debt documentation
+   - Update development metrics
+
+#### Pre-commit Prevention
+Configure pre-commit hooks to catch dead code:
+```bash
+# Add to .pre-commit-config.yaml
+- repo: local
+  hooks:
+    - id: check-dead-code
+      name: Check for dead code
+      entry: bash -c 'grep -r "#\[allow(dead_code)\]" --include="*.rs" . || true'
+      language: system
+```
+
+#### Code Review Guidelines
+When reviewing PRs, check for:
+- New `#[allow(dead_code)]` additions require justification
+- Unused imports and variables should be removed
+- Experimental code should be feature-gated
+- Documentation for intentionally kept dead code
+
+### Technical Debt Tracking
+
+Track dead code reduction as part of technical debt:
+- Use labels: `tech-debt`, `dead-code`, `cleanup`
+- Prioritize dead code removal in quarterly planning
+- Measure reduction in code metrics
+- Update architectural documentation when removing unused code

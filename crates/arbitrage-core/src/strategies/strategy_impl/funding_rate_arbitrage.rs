@@ -51,8 +51,11 @@ impl FundingRateArbitrageStrategy {
         Self { config }
     }
 
-    #[allow(dead_code)]
     /// Get supported exchanges for funding rate arbitrage
+    ///
+    /// This utility function identifies exchanges that support perpetual contracts
+    /// with funding rates. Currently used for validation but could be expanded
+    /// for dynamic exchange discovery or feature flagging.
     fn get_supported_exchanges(&self) -> Vec<ExchangeId> {
         ExchangeCapabilities::get_funding_rate_exchanges()
     }

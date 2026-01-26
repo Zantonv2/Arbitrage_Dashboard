@@ -69,8 +69,7 @@ pub struct Normalizer {
     symbol_mappings: HashMap<Symbol, SymbolMapping>,
     exchange_symbol_index: HashMap<(ExchangeId, String), Symbol>,
     fee_schedules: HashMap<ExchangeId, FeeSchedule>,
-    #[allow(dead_code)]
-    stablecoin_groups: Vec<StablecoinGroup>,
+
     stablecoin_index: HashMap<String, Vec<String>>,
 }
 
@@ -84,7 +83,6 @@ impl Normalizer {
             symbol_mappings: HashMap::with_capacity(1024),
             exchange_symbol_index: HashMap::with_capacity(2048),
             fee_schedules: HashMap::with_capacity(32),
-            stablecoin_groups,
             stablecoin_index,
         }
     }
