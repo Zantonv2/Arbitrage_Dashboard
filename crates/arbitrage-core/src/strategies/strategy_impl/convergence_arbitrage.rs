@@ -8,7 +8,7 @@ use crate::strategies::strategies_specifics::{StrategyLimits, StrategyUtils};
 use crate::strategies::{
     FilterContext, MarketBundle, RawSignal, RiskLimits, Strategy, StrategyConfig, TradeLeg,
 };
-use crate::{ExchangeId, Result, Side, Symbol};
+use crate::{ArbitrageError, ExchangeId, Result, Side, Symbol};
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -70,12 +70,110 @@ impl ConvergenceArbitrageStrategy {
         strategy
     }
 
-    /// Get current mid price for a symbol
+    /// Validate that a price is safe for trading calculations
+    fn is_valid_price(price: Decimal) -> bool {
+        // Price must be positive and not zero
+        // Decimal doesn't have is_finite() method, so we check for reasonable bounds
+        if !price.is_sign_positive() || price.is_zero() {
+            return false;
+        }
+
+        // Check for reasonable price bounds (prevent extreme values)
+        // Maximum reasonable price: $1,000,000
+        let max_reasonable_price = Decimal::from(1000000);
+        if price > max_reasonable_price {
+            return false;
+        }
+
+        // Minimum reasonable price: $0.000001
+        let min_reasonable_price = Decimal::new(1, 6); // 6 decimal places
+        if price < min_reasonable_price {
+            return false;
+        }
+
+        true
+    }
+
+    /// Validate market data quality to prevent false signals
+    fn validate_market_data_quality(&self, market_data: &MarketBundle) -> Result<()> {
+        let mut total_tickers = 0;
+        let mut invalid_tickers = 0;
+
+        for ((exchange, symbol), ticker) in &market_data.tickers {
+            total_tickers += 1;
+
+            // Validate bid/ask prices
+            if !Self::is_valid_price(ticker.bid) || !Self::is_valid_price(ticker.ask) {
+                invalid_tickers += 1;
+                tracing::warn!(
+                    "Invalid ticker data for {}@{}: bid={}, ask={}",
+                    exchange,
+                    symbol,
+                    ticker.bid,
+                    ticker.ask
+                );
+                continue;
+            }
+
+            // Validate bid <= ask (no negative spread)
+            if ticker.bid > ticker.ask {
+                invalid_tickers += 1;
+                tracing::warn!(
+                    "Negative spread for {}@{}: bid={} > ask={}",
+                    exchange,
+                    symbol,
+                    ticker.bid,
+                    ticker.ask
+                );
+                continue;
+            }
+
+            // Validate reasonable spread (not too wide, indicating stale data)
+            let spread = ticker.ask - ticker.bid;
+            let spread_pct = spread / ticker.bid * Decimal::from(100);
+            if spread_pct > Decimal::from(10) {
+                // 10% spread threshold
+                tracing::warn!(
+                    "Wide spread for {}@{}: {}% (possibly stale data)",
+                    exchange,
+                    symbol,
+                    spread_pct
+                );
+            }
+        }
+
+        // If more than 50% of tickers are invalid, reject the market data
+        if total_tickers > 0 && (invalid_tickers as f64 / total_tickers as f64) > 0.5 {
+            return Err(ArbitrageError::Validation(format!(
+                "Too many invalid tickers: {}/{}",
+                invalid_tickers, total_tickers
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get current mid price for a symbol with validation
     fn get_current_price(&self, market_data: &MarketBundle, symbol: &Symbol) -> Option<Decimal> {
         // Try to get from any available exchange
         for ((_, sym), ticker) in &market_data.tickers {
             if **sym == *symbol {
-                return Some((ticker.bid + ticker.ask) / Decimal::from(2));
+                // Validate both bid and ask prices
+                if !Self::is_valid_price(ticker.bid) || !Self::is_valid_price(ticker.ask) {
+                    continue;
+                }
+
+                // Ensure bid <= ask to prevent arbitrage within single exchange
+                if ticker.bid > ticker.ask {
+                    continue;
+                }
+
+                let mid_price = (ticker.bid + ticker.ask) / Decimal::from(2);
+
+                // Final validation of calculated price
+                if Self::is_valid_price(mid_price) {
+                    return Some(mid_price);
+                }
             }
         }
         None
@@ -128,6 +226,9 @@ impl Strategy for ConvergenceArbitrageStrategy {
     fn detect(&self, market_data: &MarketBundle) -> Result<Vec<RawSignal>> {
         debug!("Convergence arbitrage scanning market data");
 
+        // Validate market data quality first to prevent false signals
+        self.validate_market_data_quality(market_data)?;
+
         // For convergence arbitrage, we'll use a simplified approach that doesn't require
         // maintaining historical state. In a real implementation, correlation analysis
         // would be done by an external service.
@@ -137,14 +238,15 @@ impl Strategy for ConvergenceArbitrageStrategy {
         // Get all unique symbols
         let symbols = market_data.get_all_symbols();
 
-        // Pre-index symbols by quote currency for O(1) lookup within groups
+        // Pre-index symbols by quote currency with capacity pre-allocation
         // This reduces complexity from O(n²) to O(n log n) for opportunity detection
         let mut symbols_by_quote: HashMap<String, Vec<std::sync::Arc<crate::types::Symbol>>> =
-            HashMap::new();
+            HashMap::with_capacity(symbols.len() / 2); // Estimate capacity
+
         for symbol in &symbols {
             symbols_by_quote
                 .entry(symbol.quote.clone())
-                .or_default()
+                .or_insert_with(Vec::new)
                 .push(symbol.clone());
         }
 
@@ -155,9 +257,9 @@ impl Strategy for ConvergenceArbitrageStrategy {
                 continue;
             }
 
-            // Get current prices for all symbols in this group
+            // Get current prices for all symbols in this group with pre-allocated capacity
             let mut symbol_prices: Vec<(&std::sync::Arc<crate::types::Symbol>, Decimal)> =
-                Vec::new();
+                Vec::with_capacity(quote_symbols.len());
             for sym in quote_symbols {
                 if let Some(price) = self.get_current_price(market_data, sym) {
                     symbol_prices.push((sym, price));
@@ -169,7 +271,15 @@ impl Strategy for ConvergenceArbitrageStrategy {
             }
 
             // Sort by price for efficient sampling - O(n log n)
-            symbol_prices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            // Safe comparison that handles NaN/invalid values
+            symbol_prices.sort_by(
+                |a, b| match (a.1.is_sign_positive(), b.1.is_sign_positive()) {
+                    (true, true) => a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal),
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    (false, false) => std::cmp::Ordering::Equal,
+                },
+            );
 
             // O(n) comparison strategy: only compare extreme and median symbols
             // This reduces O(n²) to O(n) while maintaining signal quality
@@ -219,12 +329,16 @@ impl Strategy for ConvergenceArbitrageStrategy {
                         continue;
                     }
 
-                    if price2.is_zero() {
+                    // Validate prices using the helper function
+                    if !Self::is_valid_price(price1) || !Self::is_valid_price(price2) {
                         continue;
                     }
 
-                    // Calculate current ratio
-                    let current_ratio = price1 / price2;
+                    // Calculate current ratio with overflow protection
+                    let current_ratio = match price1.checked_div(price2) {
+                        Some(ratio) => ratio,
+                        None => continue, // Skip if division fails (overflow)
+                    };
 
                     // Use a simple heuristic: if ratio is very different from 1.0, it might be an opportunity
                     let ratio_deviation = (current_ratio - Decimal::ONE).abs();
@@ -326,10 +440,9 @@ impl Strategy for ConvergenceArbitrageStrategy {
             return Ok(false);
         }
 
-        debug_assert!(
-            signal.legs.len() >= 2,
-            "Signal should have at least 2 legs for convergence arbitrage"
-        );
+        if signal.legs.len() < 2 {
+            return Ok(false);
+        }
 
         let long_leg = &signal.legs[0];
         let short_leg = &signal.legs[1];

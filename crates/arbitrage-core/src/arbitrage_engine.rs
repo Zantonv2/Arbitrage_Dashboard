@@ -711,15 +711,22 @@ impl ArbitrageEngine {
         true
     }
 
-    /// Update signal cache for deduplication
+    /// Update signal cache for deduplication with atomic race condition protection
     fn update_signal_cache(&self, key: &OpportunityKey, _signal: &Signal, profit_bps: i32) {
-        self.signal_cache.insert(
-            key.clone(),
-            CachedSignal {
-                last_updated: Utc::now(),
-                profit_bps,
-            },
-        );
+        let now = Utc::now();
+        
+        // Use entry API to prevent race conditions
+        self.signal_cache.entry(key.clone()).and_modify(|cached| {
+            // Only update if new data is newer or profit changed significantly
+            let profit_change = (profit_bps - cached.profit_bps).abs();
+            if now > cached.last_updated || profit_change >= self.profit_change_threshold_bps {
+                cached.last_updated = now;
+                cached.profit_bps = profit_bps;
+            }
+        }).or_insert(CachedSignal {
+            last_updated: now,
+            profit_bps,
+        });
     }
 
     /// Emit signal to subscribers
