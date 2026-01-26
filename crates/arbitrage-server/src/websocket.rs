@@ -167,7 +167,7 @@ mod tests {
         let client = manager.get_client(&client_id).await;
         assert!(client.is_some());
         
-        let non_existent = manager.get_client("non_existent".to_string()).await;
+        let non_existent = manager.get_client("non_existent").await;
         assert!(non_existent.is_none());
     }
 
@@ -189,7 +189,7 @@ mod tests {
         assert!(updated_client.last_ping > original_ping);
         
         // Test updating non-existent client
-        let not_updated = manager.update_ping("non_existent".to_string()).await;
+        let not_updated = manager.update_ping("non_existent").await;
         assert!(!not_updated);
     }
 
@@ -291,8 +291,8 @@ mod tests {
         assert_eq!(client.last_ping, 1234567890);
     }
 
-    #[test]
-    fn test_websocket_manager_default() {
+    #[tokio::test]
+    async fn test_websocket_manager_default() {
         let manager = WebSocketManager::default();
         assert_eq!(manager.get_client_count().await, 0);
     }

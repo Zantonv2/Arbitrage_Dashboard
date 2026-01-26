@@ -104,10 +104,56 @@ impl Default for ServerConfig {
 }
 
 fn get_master_key_from_env() -> String {
-    std::env::var("MASTER_KEY").unwrap_or_else(|_| {
-        eprintln!("Warning: MASTER_KEY environment variable not set. Using default key for development only.");
-        "default_master_key_change_in_production_32".to_string()
-    })
+    match std::env::var("MASTER_KEY") {
+        Ok(key) => {
+            // Validate key strength and length
+            if key.len() < 32 {
+                eprintln!(
+                    "Error: MASTER_KEY must be at least 32 characters long. Current length: {}",
+                    key.len()
+                );
+                std::process::exit(1);
+            }
+            if !is_strong_key(&key) {
+                eprintln!("Error: MASTER_KEY is too weak. Must contain mix of uppercase, lowercase, numbers, and special characters.");
+                std::process::exit(1);
+            }
+            key
+        }
+        Err(_) => {
+            // Check if we're in development mode
+            if std::env::var("RUST_ENV").unwrap_or_default() == "development" {
+                eprintln!("Warning: Using development MASTER_KEY. NOT SAFE FOR PRODUCTION.");
+                generate_development_key()
+            } else {
+                eprintln!("Error: MASTER_KEY environment variable must be set in production");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+fn is_strong_key(key: &str) -> bool {
+    let has_upper = key.chars().any(|c| c.is_uppercase());
+    let has_lower = key.chars().any(|c| c.is_lowercase());
+    let has_digit = key.chars().any(|c| c.is_ascii_digit());
+    let has_special = key.chars().any(|c| !c.is_alphanumeric());
+
+    has_upper && has_lower && has_digit && has_special
+}
+
+fn generate_development_key() -> String {
+    // Generate a cryptographically secure development key
+    use rand::{rng, Rng};
+    const CHARSET: &[u8] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
+    let mut rng = rng();
+    (0..64)
+        .map(|_| {
+            let idx = rng.random_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
 }
 
 fn default_encrypted_string() -> EncryptedString {

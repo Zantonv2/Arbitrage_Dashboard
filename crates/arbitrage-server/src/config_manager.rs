@@ -121,6 +121,7 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct ConfigManager {
     config: AppConfig,
     config_path: Option<String>,
@@ -449,7 +450,7 @@ level = "debug"
 
         let mut config = AppConfig::default();
         config.server.port = 8081;
-        config.security.jwt_secret = "saved_secret_32_chars_long_test";
+        config.security.jwt_secret = "saved_secret_32_chars_long_test".to_string();
 
         let manager = ConfigManager::with_config(config);
         manager.save_to_file(&config_path)?;
@@ -482,7 +483,7 @@ level = "debug"
     #[test]
     fn test_validate_secure_config() -> Result<()> {
         let mut config = AppConfig::default();
-        config.security.jwt_secret = "very_secure_secret_at_least_32_characters_long";
+        config.security.jwt_secret = "very_secure_secret_at_least_32_characters_long".to_string();
         config.server.port = 8080;
         config.server.max_connections = 5000;
         config.rate_limit.max_requests = 500;
@@ -501,7 +502,7 @@ level = "debug"
         let mut config = AppConfig::default();
         config.server.port = 9090;
         config.server.workers = 8;
-        config.security.jwt_secret = "custom_secret";
+        config.security.jwt_secret = "custom_secret".to_string();
 
         let manager = ConfigManager::with_config(config);
         let overrides = manager.get_overridden_settings();

@@ -1,13 +1,13 @@
 use arbitrage_core::{
     strategies::{
-        base::FundingRate, base::Strategy, base::Ticker, cex_arbitrage::CexArbitrageStrategy,
+        base::FundingRate, cex_arbitrage::CexArbitrageStrategy,
         convergence_arbitrage::ConvergenceArbitrageStrategy,
         cross_exchange_arbitrage::CrossExchangeArbitrageStrategy,
         funding_rate_arbitrage::FundingRateArbitrageStrategy,
         hedged_funding::HedgedFundingStrategy, latency_arbitrage::LatencyArbitrageStrategy,
         new_listing_arbitrage::NewListingArbitrageStrategy, registry::StrategyRegistry,
         spot_perp_arbitrage::SpotPerpArbitrageStrategy, spread_capture::SpreadCaptureStrategy,
-        stablecoin_arbitrage::StablecoinArbitrageStrategy,
+        stablecoin_arbitrage::StablecoinArbitrageStrategy, Strategy, Ticker,
     },
     types::{
         exchange_constants::ALL_EXCHANGES, ExchangeId, OrderBook, OrderBookLevel, OrderType, Side,
