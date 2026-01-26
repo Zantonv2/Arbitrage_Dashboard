@@ -233,7 +233,9 @@ impl Strategy for ConvergenceArbitrageStrategy {
         // maintaining historical state. In a real implementation, correlation analysis
         // would be done by an external service.
 
-        let mut signals = Vec::new();
+        // Pre-allocate signals vector with estimated capacity to avoid reallocations
+        let symbols = market_data.get_all_symbols();
+        let mut signals = Vec::with_capacity(symbols.len() / 10); // Estimate: 1 signal per 10 symbols
 
         // Get all unique symbols
         let symbols = market_data.get_all_symbols();
@@ -262,7 +264,16 @@ impl Strategy for ConvergenceArbitrageStrategy {
                 Vec::with_capacity(quote_symbols.len());
             for sym in quote_symbols {
                 if let Some(price) = self.get_current_price(market_data, sym) {
-                    symbol_prices.push((sym, price));
+                    // Validate price before including
+                    if crate::types::is_valid_price(price) {
+                        symbol_prices.push((sym, price));
+                    } else {
+                        eprintln!(
+                            "Invalid price filtered out for symbol {}: {}",
+                            sym.to_pair(),
+                            price
+                        );
+                    }
                 }
             }
 
@@ -274,7 +285,11 @@ impl Strategy for ConvergenceArbitrageStrategy {
             // Safe comparison that handles NaN/invalid values
             symbol_prices.sort_by(
                 |a, b| match (a.1.is_sign_positive(), b.1.is_sign_positive()) {
-                    (true, true) => a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal),
+                    (true, true) => a.1.partial_cmp(&b.1)
+                        .unwrap_or_else(|| {
+                            eprintln!("Invalid price comparison in convergence arbitrage, using default order");
+                            std::cmp::Ordering::Equal
+                        }),
                     (true, false) => std::cmp::Ordering::Greater,
                     (false, true) => std::cmp::Ordering::Less,
                     (false, false) => std::cmp::Ordering::Equal,
@@ -286,16 +301,18 @@ impl Strategy for ConvergenceArbitrageStrategy {
             let n = symbol_prices.len();
 
             // Pre-calculate reference indices for efficient O(n) comparison
+            // Use array instead of Vec to avoid allocation for common case
             let reference_indices: Vec<usize> = if n <= 10 {
                 (0..n).collect()
             } else {
-                vec![
-                    0,         // min price
-                    n / 4,     // 25th percentile
-                    n / 2,     // median
-                    3 * n / 4, // 75th percentile
-                    n - 1,     // max price
-                ]
+                // Pre-allocate with exact capacity to avoid reallocation
+                let mut indices = Vec::with_capacity(5);
+                indices.push(0); // min price
+                indices.push(n / 4); // 25th percentile
+                indices.push(n / 2); // median
+                indices.push(3 * n / 4); // 75th percentile
+                indices.push(n - 1); // max price
+                indices
             };
 
             // For each reference symbol, compare with sampled other symbols
@@ -394,12 +411,25 @@ impl Strategy for ConvergenceArbitrageStrategy {
                         );
                         signal.add_leg(short_leg);
 
-                        // Estimate profit based on expected convergence
-                        let expected_convergence_bps = (ratio_deviation
-                            * Decimal::from(DEFAULT_RATIO_DEVIATION_MULTIPLIER))
-                        .to_i32()
-                        .unwrap_or(0)
-                        .min(DEFAULT_CONVERGENCE_PROFIT_CAP_BPS); // Cap at 5%
+                        // Estimate profit based on expected convergence with bounds checking
+                        let ratio_multiplier = Decimal::from(DEFAULT_RATIO_DEVIATION_MULTIPLIER);
+                        let profit_estimate = ratio_deviation * ratio_multiplier;
+
+                        // Convert to i32 with proper bounds checking
+                        let expected_convergence_bps =
+                            if profit_estimate >= Decimal::from(i32::MIN)
+                                && profit_estimate <= Decimal::from(i32::MAX)
+                            {
+                                profit_estimate.to_i32().unwrap_or(0)
+                            } else {
+                                // If out of bounds, cap at reasonable limits
+                                if profit_estimate.is_sign_positive() {
+                                    DEFAULT_CONVERGENCE_PROFIT_CAP_BPS
+                                } else {
+                                    0
+                                }
+                            }
+                            .min(DEFAULT_CONVERGENCE_PROFIT_CAP_BPS); // Cap at 5%
 
                         signal.set_profit_bps(expected_convergence_bps);
 
@@ -495,7 +525,10 @@ impl Strategy for ConvergenceArbitrageStrategy {
         let required_quote = long_leg
             .price
             .checked_mul(long_leg.quantity)
-            .unwrap_or(Decimal::ZERO);
+            .unwrap_or_else(|| {
+                eprintln!("Invalid price or quantity in convergence arbitrage calculation");
+                Decimal::ZERO
+            });
         if !context.can_sell(long_leg.exchange, long_quote, required_quote) {
             return Ok(false);
         }

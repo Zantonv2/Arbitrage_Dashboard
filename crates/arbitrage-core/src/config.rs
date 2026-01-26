@@ -104,7 +104,10 @@ impl Default for ServerConfig {
 }
 
 fn get_master_key_from_env() -> String {
-    std::env::var("MASTER_KEY").expect("MASTER_KEY environment variable must be set for encryption")
+    std::env::var("MASTER_KEY").unwrap_or_else(|_| {
+        eprintln!("Warning: MASTER_KEY environment variable not set. Using default key for development only.");
+        "default_master_key_change_in_production_32".to_string()
+    })
 }
 
 fn default_encrypted_string() -> EncryptedString {

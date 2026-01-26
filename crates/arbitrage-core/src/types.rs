@@ -166,6 +166,117 @@ impl std::fmt::Display for Side {
     }
 }
 
+// Market Data Validation
+
+/// Validates that a price is within reasonable bounds for trading
+///
+/// # Arguments
+/// * `price` - The price to validate
+///
+/// # Returns
+/// `true` if the price is valid for trading, `false` otherwise
+///
+/// Price is considered valid if:
+/// - Positive (> 0)
+/// - Not NaN or infinite
+/// - Within reasonable market bounds (between 1e-12 and 1e12)
+pub fn is_valid_price(price: Decimal) -> bool {
+    if price <= Decimal::ZERO {
+        return false;
+    }
+
+    // Check for reasonable bounds (prevent extreme values)
+    // Use try_new in function instead of const to avoid const eval issues
+    let min_reasonable_price = Decimal::try_new(1, 12).unwrap(); // 1e-12
+    let max_reasonable_price =
+        Decimal::try_new(1, 0).unwrap() * Decimal::try_new(1000000000000, 0).unwrap(); // 1e12
+
+    price >= min_reasonable_price && price <= max_reasonable_price
+}
+
+/// Validates that a quantity is valid for trading
+///
+/// # Arguments
+/// * `quantity` - The quantity to validate
+///
+/// # Returns
+/// `true` if the quantity is valid for trading, `false` otherwise
+///
+/// Quantity is considered valid if:
+/// - Positive (> 0)
+/// - Not NaN or infinite
+/// - Within reasonable bounds (between 1e-12 and 1e15)
+pub fn is_valid_quantity(quantity: Decimal) -> bool {
+    if quantity <= Decimal::ZERO {
+        return false;
+    }
+
+    // Check for reasonable bounds
+    let min_reasonable_quantity = Decimal::try_new(1, 12).unwrap(); // 1e-12
+    let max_reasonable_quantity =
+        Decimal::try_new(1, 0).unwrap() * Decimal::try_new(1000000000000000, 0).unwrap(); // 1e15
+
+    quantity >= min_reasonable_quantity && quantity <= max_reasonable_quantity
+}
+
+/// Validates order book data quality before processing
+///
+/// # Arguments
+/// * `bids` - Vector of bid levels
+/// * `asks` - Vector of ask levels
+///
+/// # Returns
+/// `Result<(), String>` indicating if the order book is valid
+pub fn validate_order_book_quality(
+    bids: &[OrderBookLevel],
+    asks: &[OrderBookLevel],
+) -> Result<(), String> {
+    // Check basic structure
+    if bids.is_empty() && asks.is_empty() {
+        return Err("Order book has no bids or asks".to_string());
+    }
+
+    // Validate bid levels
+    for (i, bid) in bids.iter().enumerate().take(100) {
+        // Limit check to first 100 levels
+        if !is_valid_price(bid.price) {
+            return Err(format!("Invalid bid price at level {}: {}", i, bid.price));
+        }
+        if !is_valid_quantity(bid.quantity) {
+            return Err(format!(
+                "Invalid bid quantity at level {}: {}",
+                i, bid.quantity
+            ));
+        }
+    }
+
+    // Validate ask levels
+    for (i, ask) in asks.iter().enumerate().take(100) {
+        // Limit check to first 100 levels
+        if !is_valid_price(ask.price) {
+            return Err(format!("Invalid ask price at level {}: {}", i, ask.price));
+        }
+        if !is_valid_quantity(ask.quantity) {
+            return Err(format!(
+                "Invalid ask quantity at level {}: {}",
+                i, ask.quantity
+            ));
+        }
+    }
+
+    // Check for price ordering (best bid should be <= best ask)
+    if let (Some(best_bid), Some(best_ask)) = (bids.first(), asks.first()) {
+        if best_bid.price > best_ask.price {
+            return Err(format!(
+                "Order book crossed: best bid {} > best ask {}",
+                best_bid.price, best_ask.price
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Order type for trade execution.
 ///
 /// Defines how an order should be executed when submitted to an exchange.
@@ -593,6 +704,12 @@ impl OrderBook {
             return None;
         }
 
+        // Validate order book quality first
+        if let Err(e) = validate_order_book_quality(&[], &self.asks) {
+            eprintln!("Order book validation failed in vwap_buy: {}", e);
+            return None;
+        }
+
         let mut remaining_qty = target_quantity;
         let mut total_cost = Decimal::ZERO;
         let mut filled_qty = Decimal::ZERO;
@@ -602,6 +719,12 @@ impl OrderBook {
                 break;
             }
 
+            // Validate each level's price and quantity
+            if !is_valid_price(level.price) || !is_valid_quantity(level.quantity) {
+                eprintln!("Invalid price level detected in vwap_buy, skipping");
+                continue;
+            }
+
             let qty_from_level = remaining_qty.min(level.quantity);
             total_cost += qty_from_level * level.price;
             filled_qty += qty_from_level;
@@ -609,7 +732,10 @@ impl OrderBook {
         }
 
         if filled_qty > Decimal::ZERO {
-            let vwap = total_cost / filled_qty;
+            let vwap = match total_cost.checked_div(filled_qty) {
+                Some(result) => result,
+                None => return None, // Division by zero or overflow
+            };
             Some(VwapResult {
                 vwap_price: vwap,
                 filled_quantity: filled_qty,
@@ -640,6 +766,12 @@ impl OrderBook {
             return None;
         }
 
+        // Validate order book quality first
+        if let Err(e) = validate_order_book_quality(&self.bids, &[]) {
+            eprintln!("Order book validation failed in vwap_sell: {}", e);
+            return None;
+        }
+
         let mut remaining_qty = target_quantity;
         let mut total_revenue = Decimal::ZERO;
         let mut filled_qty = Decimal::ZERO;
@@ -649,6 +781,12 @@ impl OrderBook {
                 break;
             }
 
+            // Validate each level's price and quantity
+            if !is_valid_price(level.price) || !is_valid_quantity(level.quantity) {
+                eprintln!("Invalid price level detected in vwap_sell, skipping");
+                continue;
+            }
+
             let qty_from_level = remaining_qty.min(level.quantity);
             total_revenue += qty_from_level * level.price;
             filled_qty += qty_from_level;
@@ -656,7 +794,10 @@ impl OrderBook {
         }
 
         if filled_qty > Decimal::ZERO {
-            let vwap = total_revenue / filled_qty;
+            let vwap = match total_revenue.checked_div(filled_qty) {
+                Some(result) => result,
+                None => return None, // Division by zero or overflow
+            };
             Some(VwapResult {
                 vwap_price: vwap,
                 filled_quantity: filled_qty,
