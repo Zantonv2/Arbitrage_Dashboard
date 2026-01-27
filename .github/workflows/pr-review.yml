@@ -74,7 +74,7 @@ jobs:
           PR_BODY: ${{ steps.pr-details.outputs.BODY }}
           PR_DIFF: ${{ steps.pr-details.outputs.DIFF }}
         with:
-          model: opencode/big-pickle
+          model: opencode/grok-code
           share: false
           prompt: |
             Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
@@ -124,9 +124,9 @@ jobs:
           model: opencode/big-pickle
           share: false
           prompt: |
-            Review pull request #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
+            Review pull request OR latest comment about fix in #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
 
-            Use specialized agents for thorough review:
+            Use specialized agents IN PARALLEL for thorough review:
             - @critical-1: Check for panics, unwraps, OOB access, division by zero
             - @security-1: Check for auth bypass, injection, crypto failures
             - @performance-1: Check for memory leaks, slow algorithms, missing caches
