@@ -31,12 +31,12 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: opencode/big-pickle
+          model: opencode/grok-code
           share: false
           prompt: |
             ${{ github.event_name == 'issue_comment' && 'Scan the entire codebase for issues immediately.' || 'Perform a comprehensive code review of the entire codebase.' }}
 
-            Use these specialized agents for thorough analysis:
+            Use these specialized agents IN PARALLEL for thorough analysis:
             - @critical-1: Find panics, unwraps, OOB access, division by zero
             - @security-1: Find auth bypass, injection, crypto failures, secrets
             - @performance-1: Find memory leaks, slow algorithms, missing caches
