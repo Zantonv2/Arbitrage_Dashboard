@@ -47,14 +47,14 @@ use tracing::debug;
 /// ```
 pub struct HedgedFundingStrategy {
     config: StrategyConfig,
-    #[allow(dead_code)]
     /// Track funding rate history for prediction
+    /// TODO: Replace with external funding rate history service
     funding_history: HashMap<(ExchangeId, Symbol), Vec<(DateTime<Utc>, Decimal)>>,
-    #[allow(dead_code)]
     /// Track hedge effectiveness metrics
+    /// TODO: Replace with external hedge analytics service
     hedge_ratios: HashMap<Symbol, Decimal>,
-    #[allow(dead_code)]
     /// Position tracking for risk management
+    /// TODO: Replace with external position management service
     current_positions: HashMap<(ExchangeId, Symbol), Decimal>,
 }
 
@@ -128,8 +128,8 @@ impl HedgedFundingStrategy {
         strategy
     }
 
-    #[allow(dead_code)]
     /// Update funding rate history for prediction
+    /// TODO: Integrate with external funding rate history service
     fn update_funding_history(&mut self, market_data: &MarketBundle) {
         let current_time = market_data.timestamp;
 
@@ -149,8 +149,8 @@ impl HedgedFundingStrategy {
         }
     }
 
-    #[allow(dead_code)]
     /// Predict next funding rate based on history
+    /// TODO: Integrate with external funding rate prediction service
     fn predict_funding_rate(&self, exchange: ExchangeId, symbol: &Symbol) -> Option<Decimal> {
         let key = (exchange, symbol.clone());
         let history = self.funding_history.get(&key)?;
@@ -185,8 +185,8 @@ impl HedgedFundingStrategy {
         Some(predicted_rate)
     }
 
-    #[allow(dead_code)]
     /// Calculate optimal hedge ratio for a symbol
+    /// TODO: Integrate with external hedge ratio optimization service
     fn calculate_hedge_ratio(&mut self, symbol: &Symbol, _market_data: &MarketBundle) -> Decimal {
         // Check if we have a cached ratio
         if let Some(cached_ratio) = self.hedge_ratios.get(symbol) {
@@ -212,8 +212,8 @@ impl HedgedFundingStrategy {
         target_ratio
     }
 
-    #[allow(dead_code)]
     /// Calculate basis risk between perpetual and spot
+    /// TODO: Integrate with external basis risk analysis service
     fn calculate_basis_risk(
         &self,
         market_data: &MarketBundle,
@@ -240,8 +240,8 @@ impl HedgedFundingStrategy {
         Some(basis.abs())
     }
 
-    #[allow(dead_code)]
     /// Find optimal hedge exchange for a perpetual position
+    /// TODO: Integrate with external exchange selection service
     fn find_optimal_hedge_exchange(
         &self,
         market_data: &MarketBundle,
@@ -291,8 +291,8 @@ impl HedgedFundingStrategy {
         }
     }
 
-    #[allow(dead_code)]
     /// Calculate position size based on risk limits
+    /// TODO: Integrate with external position sizing service
     fn calculate_position_size(
         &self,
         funding_rate: &FundingRate,
@@ -330,8 +330,8 @@ impl HedgedFundingStrategy {
         Ok(max_quantity.min(available_quantity))
     }
 
-    #[allow(dead_code)]
     /// Get current exposure for a symbol across all exchanges
+    /// TODO: Integrate with external position tracking service
     fn get_current_exposure(&self, symbol: &Symbol) -> Decimal {
         self.current_positions
             .iter()
@@ -375,149 +375,6 @@ impl HedgedFundingStrategy {
         time_to_funding >= min_time_hours
     }
 
-    #[allow(dead_code)]
-    /// Find hedged funding opportunities
-    fn find_hedged_funding_opportunities(&mut self, market_data: &MarketBundle) -> Vec<RawSignal> {
-        let mut signals = Vec::new();
-
-        // Update funding history
-        self.update_funding_history(market_data);
-
-        for ((exchange, symbol), funding_rate) in &market_data.funding_rates {
-            // Skip if exchange doesn't support funding rates
-            if !ExchangeCapabilities::supports_funding_rates(*exchange) {
-                continue;
-            }
-
-            // Check if funding rate is attractive
-            if !self.is_funding_rate_attractive(funding_rate) {
-                continue;
-            }
-
-            // Check timing
-            if !self.has_sufficient_time_to_funding(funding_rate) {
-                continue;
-            }
-
-            // Find optimal hedge exchange
-            let hedge_exchange =
-                match self.find_optimal_hedge_exchange(market_data, *exchange, symbol) {
-                    Some(ex) => ex,
-                    None => continue,
-                };
-
-            // Calculate position size
-            let position_size = match self.calculate_position_size(funding_rate, market_data) {
-                Ok(size) => size,
-                Err(_) => continue,
-            };
-
-            if position_size <= Decimal::ZERO {
-                continue;
-            }
-
-            // Calculate hedge ratio
-            let hedge_ratio = self.calculate_hedge_ratio(symbol, market_data);
-            let hedge_size = position_size * hedge_ratio;
-
-            // Get prices
-            let perp_price = market_data
-                .get_ticker(*exchange, symbol)
-                .map(|t| (t.bid + t.ask) / Decimal::from(2));
-            let spot_price = market_data
-                .get_ticker(hedge_exchange, symbol)
-                .map(|t| (t.bid + t.ask) / Decimal::from(2));
-
-            let (perp_price, spot_price) = match (perp_price, spot_price) {
-                (Some(p1), Some(p2)) => (p1, p2),
-                _ => continue,
-            };
-
-            // Determine position sides based on funding rate sign
-            let (perp_side, spot_side) = if funding_rate.rate > Decimal::ZERO {
-                // Positive funding: shorts pay longs
-                // Go long perpetual (receive funding), short spot (hedge)
-                (Side::Buy, Side::Sell)
-            } else {
-                // Negative funding: longs pay shorts
-                // Go short perpetual (receive funding), long spot (hedge)
-                (Side::Sell, Side::Buy)
-            };
-
-            // Calculate expected profit
-            let funding_bps = (funding_rate.rate.abs() * Decimal::from(BASIS_POINTS_DIVISOR))
-                .to_i32()
-                .unwrap_or(0);
-
-            // Subtract estimated costs (fees, basis risk)
-            let estimated_costs_bps = SLIPPIER_TIER_1_BPS; // 0.1% estimated costs
-            let net_profit_bps = funding_bps - estimated_costs_bps;
-
-            if net_profit_bps < self.config.min_profit_bps {
-                continue;
-            }
-
-            // Create hedged funding signal
-            let mut signal = RawSignal::new(self.id(), symbol.clone());
-
-            // Perpetual leg
-            let perp_leg = TradeLeg::new(
-                *exchange,
-                symbol.clone(),
-                perp_side,
-                perp_price,
-                position_size,
-            );
-            signal.add_leg(perp_leg);
-
-            // Spot hedge leg
-            let spot_leg = TradeLeg::new(
-                hedge_exchange,
-                symbol.clone(),
-                spot_side,
-                spot_price,
-                hedge_size,
-            );
-            signal.add_leg(spot_leg);
-
-            signal.set_profit_bps(net_profit_bps);
-
-            // Add metadata
-            signal.add_metadata("funding_rate", json!(funding_rate.rate.to_string()));
-            signal.add_metadata("perp_exchange", json!(exchange.to_string()));
-            signal.add_metadata("hedge_exchange", json!(hedge_exchange.to_string()));
-            signal.add_metadata("hedge_ratio", json!(hedge_ratio.to_string()));
-            signal.add_metadata(
-                "time_to_funding_hours",
-                json!((funding_rate.next_funding - Utc::now()).num_seconds() as f64 / 3600.0),
-            );
-            signal.add_metadata(
-                "predicted_funding",
-                json!(self
-                    .predict_funding_rate(*exchange, symbol)
-                    .map(|r| r.to_string())
-                    .unwrap_or_else(|| "N/A".to_string())),
-            );
-            signal.add_metadata(
-                "basis_risk_bps",
-                json!(self
-                    .calculate_basis_risk(market_data, *exchange, hedge_exchange, symbol)
-                    .map(|r| (r * Decimal::from(BASIS_POINTS_DIVISOR))
-                        .to_i32()
-                        .unwrap_or(0))
-                    .unwrap_or(0)),
-            );
-
-            signals.push(signal);
-
-            debug!(
-                "Hedged funding opportunity: {} perp@{} hedge@{} rate={} profit={}bps",
-                symbol, exchange, hedge_exchange, funding_rate.rate, net_profit_bps
-            );
-        }
-
-        signals
-    }
 }
 
 impl Default for HedgedFundingStrategy {

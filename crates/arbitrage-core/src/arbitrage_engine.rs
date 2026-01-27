@@ -117,11 +117,13 @@ pub struct ArbitrageEngine {
     signal_sender: broadcast::Sender<Signal>,
 
     // Core modules
-    #[allow(dead_code)]
+    /// Normalizer for market data standardization
+    /// TODO: Integrate normalizer into signal processing pipeline
     normalizer: Arc<Normalizer>,
     confidence_scorer: Arc<ConfidenceScorer>,
     size_calculator: Arc<SizeCalculator>,
-    #[allow(dead_code)]
+    /// Execution preparer for trade preparation
+    /// TODO: Integrate execution preparer into signal execution pipeline
     execution_preparer: Arc<ExecutionPreparer>,
     storage: Arc<StorageService>,
 

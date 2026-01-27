@@ -112,6 +112,35 @@ Reviewers will check:
 - Code follows coding standards
 - Documentation updated for public APIs
 - Commit messages follow conventions
+- No new `#[allow(dead_code)]` annotations without justification
+
+### Dead Code Management
+
+To maintain code quality and prevent accumulation of unused code:
+
+**Quarterly Dead Code Audit** (every 3 months):
+1. Search for all `#[allow(dead_code)]` annotations:
+   ```bash
+   grep -r "#\[allow(dead_code)\]" --include="*.rs" .
+   ```
+2. For each instance, determine if the code is:
+   - **Actively used**: Remove the annotation
+   - **Planned for integration**: Add TODO comment with timeline
+   - **Truly unused**: Remove the code entirely
+3. Document findings in a cleanup report
+4. Target: Keep `#[allow(dead_code)]` instances under 10 total
+
+**Guidelines for New Code**:
+- Avoid `#[allow(dead_code)]` annotations
+- If temporarily needed, add TODO comment with removal plan
+- Remove dead code during development, don't commit it
+- Use feature flags for experimental code instead of dead code annotations
+
+**When Dead Code is Acceptable**:
+- Temporary development scaffolding (with TODO and timeline)
+- Code planned for external service integration (documented)
+- Generated code that cannot be modified
+- Test utilities used only in specific test configurations
 
 ### Issue Tracking
 
