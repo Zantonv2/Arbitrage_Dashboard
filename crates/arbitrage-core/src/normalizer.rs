@@ -69,7 +69,8 @@ pub struct Normalizer {
     symbol_mappings: HashMap<Symbol, SymbolMapping>,
     exchange_symbol_index: HashMap<(ExchangeId, String), Symbol>,
     fee_schedules: HashMap<ExchangeId, FeeSchedule>,
-    #[allow(dead_code)]
+    /// Stablecoin groups for normalization
+    /// TODO: Replace with external stablecoin classification service
     stablecoin_groups: Vec<StablecoinGroup>,
     stablecoin_index: HashMap<String, Vec<String>>,
 }

@@ -31,8 +31,8 @@ use std::sync::Arc;
 /// - Historical price movement patterns
 pub struct LatencyArbitrageStrategy {
     config: StrategyConfig,
-    #[allow(dead_code)]
     /// Track price history for staleness detection
+    /// TODO: Replace with external price staleness detection service
     price_history: HashMap<(ExchangeId, Symbol), Vec<(DateTime<Utc>, Decimal)>>,
 }
 

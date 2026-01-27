@@ -51,12 +51,6 @@ impl FundingRateArbitrageStrategy {
         Self { config }
     }
 
-    #[allow(dead_code)]
-    /// Get supported exchanges for funding rate arbitrage
-    fn get_supported_exchanges(&self) -> Vec<ExchangeId> {
-        ExchangeCapabilities::get_funding_rate_exchanges()
-    }
-
     /// Calculate annualized funding rate return
     fn calculate_annualized_return(&self, funding_rate: &FundingRate) -> Result<Decimal> {
         // Funding typically occurs every 8 hours (3 times per day)

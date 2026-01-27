@@ -37,14 +37,14 @@ use tracing::debug;
 /// - Volume and volatility indicators
 pub struct ConvergenceArbitrageStrategy {
     config: StrategyConfig,
-    #[allow(dead_code)]
     /// Historical price data for correlation analysis
+    /// TODO: Replace with external price history service
     price_history: HashMap<(ExchangeId, Symbol), Vec<(DateTime<Utc>, Decimal)>>,
-    #[allow(dead_code)]
     /// Correlation coefficients between asset pairs
+    /// TODO: Replace with external correlation analysis service
     correlations: HashMap<(Symbol, Symbol), Decimal>,
-    #[allow(dead_code)]
     /// Z-score thresholds for mean reversion
+    /// TODO: Replace with external statistical analysis service
     z_score_cache: HashMap<(Symbol, Symbol), Decimal>,
 }
 
@@ -75,8 +75,8 @@ impl ConvergenceArbitrageStrategy {
         strategy
     }
 
-    #[allow(dead_code)]
     /// Update price history for correlation analysis
+    /// TODO: Integrate with external price history service
     fn update_price_history(&mut self, market_data: &MarketBundle) {
         let current_time = market_data.timestamp;
 
@@ -104,8 +104,8 @@ impl ConvergenceArbitrageStrategy {
         }
     }
 
-    #[allow(dead_code)]
     /// Calculate correlation between two symbols
+    /// TODO: Integrate with external correlation analysis service
     fn calculate_correlation(&self, symbol1: &Symbol, symbol2: &Symbol) -> Option<Decimal> {
         // Get price series for both symbols (using first available exchange)
         let prices1 = self.get_price_series(symbol1)?;
@@ -152,8 +152,8 @@ impl ConvergenceArbitrageStrategy {
         Decimal::try_from(correlation).ok()
     }
 
-    #[allow(dead_code)]
     /// Get price series for a symbol (from any exchange)
+    /// TODO: Integrate with external price history service
     fn get_price_series(&self, symbol: &Symbol) -> Option<Vec<(DateTime<Utc>, Decimal)>> {
         // Find the exchange with the most data for this symbol
         let mut best_series: Option<Vec<(DateTime<Utc>, Decimal)>> = None;
@@ -169,8 +169,8 @@ impl ConvergenceArbitrageStrategy {
         best_series
     }
 
-    #[allow(dead_code)]
     /// Calculate returns from price series
+    /// TODO: Integrate with external analytics service
     fn calculate_returns(&self, prices: &[(DateTime<Utc>, Decimal)]) -> Vec<Decimal> {
         let mut returns = Vec::new();
 
@@ -187,8 +187,8 @@ impl ConvergenceArbitrageStrategy {
         returns
     }
 
-    #[allow(dead_code)]
     /// Calculate Z-score for price divergence
+    /// TODO: Integrate with external statistical analysis service
     fn calculate_z_score(
         &self,
         symbol1: &Symbol,
@@ -243,222 +243,6 @@ impl ConvergenceArbitrageStrategy {
         // Calculate Z-score
         let z_score = (current_ratio - mean) / std_dev;
         Some(z_score)
-    }
-
-    #[allow(dead_code)]
-    /// Find convergence opportunities
-    fn find_convergence_opportunities(&mut self, market_data: &MarketBundle) -> Vec<RawSignal> {
-        let mut signals = Vec::new();
-
-        // Update price history
-        self.update_price_history(market_data);
-
-        // Get all unique symbols
-        let symbols = market_data.get_all_symbols();
-
-        // Pre-index symbols by quote currency for O(1) lookup within groups
-        // This reduces complexity from O(n²) to O(n log n) for opportunity detection
-        let mut symbols_by_quote: HashMap<String, Vec<std::sync::Arc<crate::types::Symbol>>> =
-            HashMap::new();
-        for symbol in &symbols {
-            symbols_by_quote
-                .entry(symbol.quote.clone())
-                .or_default()
-                .push(symbol.clone());
-        }
-
-        // For each quote currency group, use optimized pair selection
-        // instead of O(n²) nested loops
-        for (_, quote_symbols) in &symbols_by_quote {
-            if quote_symbols.len() < 2 {
-                continue;
-            }
-
-            // Get current prices for all symbols in this group
-            let mut symbol_prices: Vec<(&std::sync::Arc<crate::types::Symbol>, Decimal)> =
-                Vec::new();
-            for sym in quote_symbols {
-                if let Some(price) = self.get_current_price(market_data, sym) {
-                    symbol_prices.push((sym, price));
-                }
-            }
-
-            if symbol_prices.len() < 2 {
-                continue;
-            }
-
-            // Sort by price for efficient sampling - O(n log n)
-            symbol_prices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
-            // O(n) comparison strategy: only compare extreme and median symbols
-            // This reduces O(n²) to O(n) while maintaining signal quality
-            let n = symbol_prices.len();
-
-            // Pre-calculate reference indices for efficient O(n) comparison
-            let reference_indices: Vec<usize> = if n <= 10 {
-                (0..n).collect()
-            } else {
-                vec![
-                    0,         // min price
-                    n / 4,     // 25th percentile
-                    n / 2,     // median
-                    3 * n / 4, // 75th percentile
-                    n - 1,     // max price
-                ]
-            };
-
-            // For each reference symbol, compare with sampled other symbols
-            for &ref_idx in &reference_indices {
-                if ref_idx >= n {
-                    continue;
-                }
-
-                let symbol1 = &symbol_prices[ref_idx].0;
-
-                // Sample other symbols for comparison
-                let sample_count = std::cmp::min(10, n.saturating_sub(1));
-                let step = if n > sample_count {
-                    (n as f64 / sample_count as f64).ceil() as usize
-                } else {
-                    1
-                };
-
-                for j in (0..n).step_by(step) {
-                    if j == ref_idx {
-                        continue;
-                    }
-
-                    let symbol2 = &symbol_prices[j].0;
-
-                    // Skip if symbols have the same base
-                    if symbol1.base == symbol2.base {
-                        continue;
-                    }
-
-                    // Calculate correlation
-                    let correlation = match self.calculate_correlation(symbol1, symbol2) {
-                        Some(corr) => corr,
-                        None => continue,
-                    };
-
-                    let min_correlation = self
-                        .config
-                        .custom_params
-                        .get("min_correlation")
-                        .and_then(|v| v.as_f64())
-                        .and_then(|f| Decimal::try_from(f).ok())
-                        .unwrap_or_else(|| Decimal::new(7, 1)); // 0.7
-
-                    // Skip if correlation is too low
-                    if correlation.abs() < min_correlation {
-                        continue;
-                    }
-
-                    let price1 = self.get_current_price(market_data, symbol1);
-                    let price2 = self.get_current_price(market_data, symbol2);
-
-                    let (price1, price2) = match (price1, price2) {
-                        (Some(p1), Some(p2)) => (p1, p2),
-                        _ => continue,
-                    };
-
-                    if price2.is_zero() {
-                        continue;
-                    }
-
-                    // Calculate current ratio and Z-score
-                    let current_ratio = price1 / price2;
-                    let z_score = match self.calculate_z_score(symbol1, symbol2, current_ratio) {
-                        Some(z) => z,
-                        None => continue,
-                    };
-
-                    let z_threshold = self
-                        .config
-                        .custom_params
-                        .get("z_score_entry_threshold")
-                        .and_then(|v| v.as_f64())
-                        .and_then(|f| Decimal::try_from(f).ok())
-                        .unwrap_or_else(|| Decimal::from(2));
-
-                    // Check if Z-score indicates divergence
-                    if z_score.abs() < z_threshold {
-                        continue;
-                    }
-
-                    // Determine trade direction
-                    let (long_symbol, short_symbol, long_price, short_price) =
-                        if z_score > Decimal::ZERO {
-                            // Ratio is above mean - short symbol1, long symbol2
-                            (symbol2, symbol1, price2, price1)
-                        } else {
-                            // Ratio is below mean - long symbol1, short symbol2
-                            (symbol1, symbol2, price1, price2)
-                        };
-
-                    // Find exchanges with both symbols
-                    let common_exchanges =
-                        self.find_common_exchanges(market_data, long_symbol, short_symbol);
-
-                    for exchange in common_exchanges {
-                        // Calculate position sizes
-                        let position_value = self.config.max_exposure
-                            / Decimal::from(DEFAULT_CONVERGENCE_POSITION_DIVISOR); // 25% of max exposure
-                        let long_quantity = position_value / long_price;
-                        let short_quantity = position_value / short_price;
-
-                        // Create convergence signal
-                        let mut signal = RawSignal::new(self.id(), (**long_symbol).clone().into());
-
-                        // Long leg
-                        let long_leg = TradeLeg::new(
-                            exchange,
-                            (**long_symbol).clone().into(),
-                            Side::Buy,
-                            long_price,
-                            long_quantity,
-                        );
-                        signal.add_leg(long_leg);
-
-                        // Short leg
-                        let short_leg = TradeLeg::new(
-                            exchange,
-                            (**short_symbol).clone().into(),
-                            Side::Sell,
-                            short_price,
-                            short_quantity,
-                        );
-                        signal.add_leg(short_leg);
-
-                        // Estimate profit based on expected convergence
-                        let expected_convergence_bps = (z_score.abs()
-                            * Decimal::from(DEFAULT_CONVERGENCE_PROFIT_MULTIPLIER))
-                        .to_i32()
-                        .unwrap_or(0)
-                        .min(DEFAULT_CONVERGENCE_PROFIT_CAP_BPS); // Cap at 5%
-
-                        signal.set_profit_bps(expected_convergence_bps);
-
-                        // Add metadata
-                        signal.add_metadata("pair_correlation", json!(correlation.to_string()));
-                        signal.add_metadata("z_score", json!(z_score.to_string()));
-                        signal.add_metadata("current_ratio", json!(current_ratio.to_string()));
-                        signal.add_metadata("long_symbol", json!(long_symbol.to_pair()));
-                        signal.add_metadata("short_symbol", json!(short_symbol.to_pair()));
-                        signal.add_metadata("convergence_type", json!("mean_reversion"));
-
-                        signals.push(signal);
-
-                        debug!(
-                            "Convergence arbitrage: {} vs {} correlation={} z_score={} profit={}bps",
-                            long_symbol, short_symbol, correlation, z_score, expected_convergence_bps
-                        );
-                    }
-                }
-            }
-        }
-
-        signals
     }
 
     /// Get current mid price for a symbol
