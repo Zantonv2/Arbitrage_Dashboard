@@ -143,6 +143,11 @@ impl Strategy for LatencyArbitrageStrategy {
                 continue;
             }
 
+            // Check for zero price to prevent division by zero
+            if min_price <= Decimal::ZERO || max_price <= Decimal::ZERO {
+                continue;
+            }
+
             // Calculate price difference
             let price_diff_bps = ((max_price - min_price) / min_price * Decimal::from(10000))
                 .to_i32()

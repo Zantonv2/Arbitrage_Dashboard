@@ -626,9 +626,28 @@ impl LoginRequest {
             errors.push("username must be alphanumeric".to_string());
         }
 
-        // Validate password: minimum 8 chars
-        if self.password.len() < 8 {
-            errors.push("password must be at least 8 characters".to_string());
+        // Validate password: strong password requirements
+        if self.password.len() < 12 {
+            errors.push("password must be at least 12 characters".to_string());
+        } else if self.password.len() > 128 {
+            errors.push("password must be at most 128 characters".to_string());
+        } else {
+            // Check for at least one uppercase letter
+            if !self.password.chars().any(|c| c.is_uppercase()) {
+                errors.push("password must contain at least one uppercase letter".to_string());
+            }
+            // Check for at least one lowercase letter
+            if !self.password.chars().any(|c| c.is_lowercase()) {
+                errors.push("password must contain at least one lowercase letter".to_string());
+            }
+            // Check for at least one digit
+            if !self.password.chars().any(|c| c.is_ascii_digit()) {
+                errors.push("password must contain at least one digit".to_string());
+            }
+            // Check for at least one special character
+            if !self.password.chars().any(|c| !c.is_alphanumeric()) {
+                errors.push("password must contain at least one special character".to_string());
+            }
         }
 
         if errors.is_empty() {
@@ -663,8 +682,29 @@ pub async fn login(
         }));
     }
 
-    let admin_username = std::env::var("ADMIN_USERNAME").expect("ADMIN_USERNAME environment variable must be set");
-    let admin_password = std::env::var("ADMIN_PASSWORD").expect("ADMIN_PASSWORD environment variable must be set");
+    let admin_username = match std::env::var("ADMIN_USERNAME") {
+        Ok(username) => username,
+        Err(_) => {
+            return Ok(Json(LoginResponse {
+                success: false,
+                token: None,
+                expires_at: None,
+                message: "Server configuration error: ADMIN_USERNAME not set".to_string(),
+            }));
+        }
+    };
+    
+    let admin_password = match std::env::var("ADMIN_PASSWORD") {
+        Ok(password) => password,
+        Err(_) => {
+            return Ok(Json(LoginResponse {
+                success: false,
+                token: None,
+                expires_at: None,
+                message: "Server configuration error: ADMIN_PASSWORD not set".to_string(),
+            }));
+        }
+    };
 
     if request.username == admin_username && request.password == admin_password {
         let secret = state.jwt_secret.as_str();

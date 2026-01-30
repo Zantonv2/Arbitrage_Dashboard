@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arbitrage_core::strategies::base::{
+use arbitrage_core::strategies::{
     FilterContext, FundingRate, MarketBundle, Ticker,
 };
 use arbitrage_core::strategies::{HedgedFundingStrategy, Strategy};

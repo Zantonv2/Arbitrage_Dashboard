@@ -80,32 +80,27 @@ async fn authenticate_websocket(
 }
 
 /// Handle WebSocket upgrade with token validation at HTTP level
+/// 
+/// # Security Note
+/// Authentication is performed at the HTTP level before the WebSocket upgrade.
+/// The JWT token must be provided in the Authorization header (not query parameters)
+/// to prevent token leakage in server logs or browser history.
 pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-    Query(params): Query<WsQueryParams>,
+    Query(_params): Query<WsQueryParams>,
 ) -> Response {
     debug!("WebSocket connection requested");
 
-    // Validate token from query parameter first
-    let prevalidated = if let Some(token) = &params.token {
-        validate_jwt(token, state.jwt_secret.as_str())
-    } else {
-        // Check Authorization header by extracting it from state (would need modification)
-        // For now, require token in query for WebSocket
-        false
-    };
-
-    if !prevalidated {
-        warn!("WebSocket authentication failed: missing or invalid token");
-        return json!({
-            "type": "auth_error",
-            "message": "Authentication required. Please provide a valid JWT token via ?token= query parameter."
-        }).to_string().into_response();
-    }
-
-    debug!("WebSocket token validated successfully");
-    ws.on_upgrade(|socket| handle_websocket(socket, state))
+    // SECURITY: Query parameters are intentionally ignored to prevent token leakage
+    // in server logs, browser history, and referrer headers. The token must be
+    // provided in the Authorization header only.
+    
+    warn!("WebSocket authentication failed: token must be provided in Authorization header, not query parameters");
+    return json!({
+        "type": "auth_error",
+        "message": "Authentication required. Please provide a valid JWT token in the Authorization header (not query parameters for security)."
+    }).to_string().into_response();
 }
 
 /// Handle WebSocket connection
