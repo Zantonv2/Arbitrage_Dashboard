@@ -84,32 +84,25 @@ pub async fn websocket_handler(
 }
 
 /// Handle WebSocket connection
+///
+/// # Security Note
+/// This function is called AFTER successful JWT authentication at the HTTP level.
+/// The `websocket_handler` function validates the Authorization header and only
+/// upgrades to WebSocket for authenticated requests. This function assumes
+/// authentication has already been performed.
 async fn handle_websocket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let client_id = uuid::Uuid::new_v4();
 
     info!("WebSocket client connected: {}", client_id);
 
-    // Authentication is validated at HTTP level in websocket_handler
-    // This flag tracks if we should proceed with the connection
-    // The pre-validation in websocket_handler ensures token is valid before upgrade
-    let authenticated = true;
-
-    if !authenticated {
-        let error_msg = json!({
-            "type": "auth_error",
-            "message": "Authentication required. Please provide a valid JWT token."
-        });
-        if let Err(e) = sender
-            .send(Message::Text(error_msg.to_string().into()))
-            .await
-        {
-            error!("Failed to send auth error message: {}", e);
-        }
-        return;
-    }
-
-    info!("WebSocket client authenticated: {}", client_id);
+    // SECURITY: Authentication is performed at HTTP level in websocket_handler.
+    // Only authenticated connections reach this function. The pre-validation ensures
+    // the JWT token was valid before the WebSocket upgrade occurred.
+    info!(
+        "WebSocket client authenticated (pre-validated at HTTP level): {}",
+        client_id
+    );
 
     // Subscribe to signals
     let mut signal_receiver = state.arbitrage_engine.subscribe();

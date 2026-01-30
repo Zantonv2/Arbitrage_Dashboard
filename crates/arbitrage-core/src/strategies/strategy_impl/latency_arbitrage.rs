@@ -155,9 +155,19 @@ impl Strategy for LatencyArbitrageStrategy {
                 _ => continue, // Skip if division failed or result is negative
             };
 
-            let price_diff_bps = (price_diff_ratio * Decimal::from(10000))
-                .to_i32()
-                .unwrap_or(0);
+            // Convert to basis points with overflow protection
+            let price_diff_bps = match (price_diff_ratio * Decimal::from(10000)).to_i32() {
+                Some(val) => val,
+                None => {
+                    // Log error but don't panic - skip this signal
+                    tracing::warn!(
+                        "Price difference overflow for {}: ratio={}",
+                        symbol,
+                        price_diff_ratio
+                    );
+                    continue;
+                }
+            };
 
             // Check if the difference is significant enough for latency arbitrage
             let min_latency_spread_bps = self

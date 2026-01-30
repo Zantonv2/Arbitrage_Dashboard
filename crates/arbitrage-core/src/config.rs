@@ -99,9 +99,17 @@ pub struct ServerConfig {
 fn default_jwt_secret() -> String {
     // SECURITY: In production, JWT_SECRET must be set. For tests, use a test-only default.
     std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+        // Compile-time check: only allow test default in test builds
         if cfg!(test) {
-            // Test-only default - never used in production
-            "test-jwt-secret-for-unit-tests-only".to_string()
+            // Additional runtime check: verify we're actually in test mode
+            // This prevents the test default from being used in production
+            if std::env::var("RUST_TEST_THREADS").is_ok() || cfg!(debug_assertions) {
+                "test-jwt-secret-for-unit-tests-only".to_string()
+            } else {
+                panic!(
+                    "JWT_SECRET must be set in environment. Test default blocked in non-test runtime."
+                )
+            }
         } else {
             panic!(
                 "JWT_SECRET must be set in environment. This is a critical security requirement."
