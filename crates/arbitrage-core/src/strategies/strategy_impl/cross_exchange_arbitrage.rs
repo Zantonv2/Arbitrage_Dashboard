@@ -1,3 +1,4 @@
+use crate::market_utils;
 use crate::strategies::strategies_specifics::{
     ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
@@ -59,66 +60,6 @@ impl CrossExchangeArbitrageStrategy {
     /// Get supported exchanges for cross-exchange arbitrage
     fn get_supported_exchanges(&self) -> Vec<ExchangeId> {
         ExchangeCapabilities::get_cex_arbitrage_exchanges()
-    }
-
-    /// Find the best bid (highest price to sell at) across all exchanges
-    fn find_best_bid(
-        &self,
-        market_data: &MarketBundle,
-        symbol: &Symbol,
-    ) -> Option<(ExchangeId, Decimal, Decimal)> {
-        let mut best_bid: Option<(ExchangeId, Decimal, Decimal)> = None;
-
-        for exchange in self.get_supported_exchanges() {
-            if let Some(order_book) = market_data.get_order_book(exchange, symbol) {
-                if let Some(best_bid_level) = order_book.best_bid() {
-                    match best_bid {
-                        None => {
-                            best_bid =
-                                Some((exchange, best_bid_level.price, best_bid_level.quantity))
-                        }
-                        Some((_, current_price, _)) => {
-                            if best_bid_level.price > current_price {
-                                best_bid =
-                                    Some((exchange, best_bid_level.price, best_bid_level.quantity));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        best_bid
-    }
-
-    /// Find the best ask (lowest price to buy at) across all exchanges
-    fn find_best_ask(
-        &self,
-        market_data: &MarketBundle,
-        symbol: &Symbol,
-    ) -> Option<(ExchangeId, Decimal, Decimal)> {
-        let mut best_ask: Option<(ExchangeId, Decimal, Decimal)> = None;
-
-        for exchange in self.get_supported_exchanges() {
-            if let Some(order_book) = market_data.get_order_book(exchange, symbol) {
-                if let Some(best_ask_level) = order_book.best_ask() {
-                    match best_ask {
-                        None => {
-                            best_ask =
-                                Some((exchange, best_ask_level.price, best_ask_level.quantity))
-                        }
-                        Some((_, current_price, _)) => {
-                            if best_ask_level.price < current_price {
-                                best_ask =
-                                    Some((exchange, best_ask_level.price, best_ask_level.quantity));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        best_ask
     }
 
     /// Calculate gross profit percentage before fees
@@ -388,8 +329,12 @@ impl Strategy for CrossExchangeArbitrageStrategy {
         );
 
         for symbol in symbols {
-            // Find best bid and ask across all exchanges
-            let best_bid = match self.find_best_bid(market_data, &symbol) {
+            // Find best bid and ask across all exchanges using market_utils
+            let best_bid = match market_utils::find_best_bid(
+                market_data,
+                &symbol,
+                &self.get_supported_exchanges(),
+            ) {
                 Some(bid) => bid,
                 None => {
                     debug!("No bids found for {}", symbol);
@@ -397,7 +342,11 @@ impl Strategy for CrossExchangeArbitrageStrategy {
                 }
             };
 
-            let best_ask = match self.find_best_ask(market_data, &symbol) {
+            let best_ask = match market_utils::find_best_ask(
+                market_data,
+                &symbol,
+                &self.get_supported_exchanges(),
+            ) {
                 Some(ask) => ask,
                 None => {
                     debug!("No asks found for {}", symbol);
@@ -405,8 +354,21 @@ impl Strategy for CrossExchangeArbitrageStrategy {
                 }
             };
 
-            let (sell_exchange, sell_price, sell_quantity) = best_bid;
-            let (buy_exchange, buy_price, buy_quantity) = best_ask;
+            let (sell_exchange, sell_price) = best_bid;
+            let (buy_exchange, buy_price) = best_ask;
+
+            // Get quantities from order books
+            let sell_quantity = market_data
+                .get_order_book(sell_exchange, &symbol)
+                .and_then(|ob| ob.best_bid())
+                .map(|level| level.quantity)
+                .unwrap_or(Decimal::ZERO);
+
+            let buy_quantity = market_data
+                .get_order_book(buy_exchange, &symbol)
+                .and_then(|ob| ob.best_ask())
+                .map(|level| level.quantity)
+                .unwrap_or(Decimal::ZERO);
 
             // Skip if same exchange
             if buy_exchange == sell_exchange {

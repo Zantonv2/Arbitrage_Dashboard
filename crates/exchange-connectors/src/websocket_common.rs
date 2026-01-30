@@ -1,5 +1,5 @@
 //! Shared WebSocket functionality for all exchange connectors
-//! 
+//!
 //! This module provides common WebSocket connection handling utilities to reduce
 //! code duplication across connectors.
 
@@ -40,7 +40,10 @@ impl WebSocketReconnector {
 
     /// Handle WebSocket connection error with common pattern
     pub async fn handle_connection_error(&self, error_message: &str) {
-        error!("Failed to connect to {} WebSocket: {}", self.exchange_id, error_message);
+        error!(
+            "Failed to connect to {} WebSocket: {}",
+            self.exchange_id, error_message
+        );
 
         // Update status to error
         *self.status.write().await =

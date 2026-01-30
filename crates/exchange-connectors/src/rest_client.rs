@@ -394,9 +394,13 @@ mod tests {
 
         let mut mock = Mock::given(method("GET"))
             .and(path("/api/test"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": "test_value"
-            })).set_delay(Duration::from_secs(10)));
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({
+                        "data": "test_value"
+                    }))
+                    .set_delay(Duration::from_secs(10)),
+            );
 
         mock.mount(&mock_server).await;
 

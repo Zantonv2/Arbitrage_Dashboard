@@ -89,7 +89,7 @@ jobs:
           ISSUE_TITLE: ${{ steps.issue-info.outputs.TITLE }}
           ISSUE_BODY: ${{ steps.issue-info.outputs.BODY }}
         with:
-          model: opencode/big-pickle
+          model: opencode/kimi-k2.5-free
           share: false
           prompt: |
             Fix issue #${{ env.ISSUE_NUM }} in the Arbitrage Dashboard project.

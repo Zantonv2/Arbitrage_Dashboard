@@ -257,3 +257,115 @@ async fn test_multiple_orderbook_updates() -> Result<()> {
 
     Ok(())
 }
+
+/// Test JWT secret validation - production requires JWT_SECRET environment variable
+#[tokio::test]
+async fn test_jwt_secret_validation() {
+    // In test mode, the default JWT secret should be available
+    // This verifies the test-only default is working correctly
+    let config = Config::default();
+
+    // The test default should be used in test builds
+    assert!(
+        !config.server.jwt_secret.is_empty(),
+        "JWT secret should not be empty in test mode"
+    );
+
+    // Verify it's the test default (only in test builds)
+    if cfg!(test) {
+        assert_eq!(
+            config.server.jwt_secret, "test-jwt-secret-for-unit-tests-only",
+            "Test mode should use test-only JWT secret"
+        );
+    }
+}
+
+/// Test that JWT token can be validated for WebSocket authentication
+#[tokio::test]
+async fn test_jwt_token_validation_for_websocket() {
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    // Create a test JWT token with the test secret
+    let test_secret = "test-jwt-secret-for-unit-tests-only";
+    let claims = serde_json::json!({
+        "sub": "test-user",
+        "exp": chrono::Utc::now().timestamp() + 3600,
+        "iat": chrono::Utc::now().timestamp(),
+    });
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(test_secret.as_bytes()),
+    );
+
+    assert!(
+        token.is_ok(),
+        "Should be able to create JWT token with test secret"
+    );
+
+    let token_str = token.unwrap();
+    assert!(!token_str.is_empty(), "Token should not be empty");
+
+    // Verify token can be decoded with the same secret
+    use jsonwebtoken::{decode, DecodingKey, Validation};
+    let decoded = decode::<serde_json::Value>(
+        &token_str,
+        &DecodingKey::from_secret(test_secret.as_bytes()),
+        &Validation::default(),
+    );
+
+    assert!(
+        decoded.is_ok(),
+        "Should be able to decode JWT token with test secret"
+    );
+}
+
+/// Test WebSocket authentication rejects invalid tokens
+#[tokio::test]
+async fn test_websocket_rejects_invalid_token() {
+    use jsonwebtoken::{decode, DecodingKey, Validation};
+
+    // Try to validate an invalid token
+    let invalid_token = "invalid.token.here";
+    let test_secret = "test-jwt-secret-for-unit-tests-only";
+
+    let result = decode::<serde_json::Value>(
+        invalid_token,
+        &DecodingKey::from_secret(test_secret.as_bytes()),
+        &Validation::default(),
+    );
+
+    assert!(result.is_err(), "Invalid token should be rejected");
+}
+
+/// Test WebSocket authentication rejects tokens with wrong secret
+#[tokio::test]
+async fn test_websocket_rejects_wrong_secret() {
+    use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+
+    // Create a token with one secret
+    let claims = serde_json::json!({
+        "sub": "test-user",
+        "exp": chrono::Utc::now().timestamp() + 3600,
+    });
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret("wrong-secret".as_bytes()),
+    )
+    .unwrap();
+
+    // Try to validate with different secret
+    let result = decode::<serde_json::Value>(
+        &token,
+        &DecodingKey::from_secret("test-jwt-secret-for-unit-tests-only".as_bytes()),
+        &Validation::default(),
+    );
+
+    assert!(
+        result.is_err(),
+        "Token with wrong secret should be rejected"
+    );
+}
