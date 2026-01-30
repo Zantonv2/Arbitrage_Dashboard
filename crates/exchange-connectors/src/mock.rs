@@ -122,7 +122,10 @@ impl ExchangeConnector for MockConnector {
         let books = match self.order_books.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!("Mutex poisoned for order_books: {:?} - returning empty book", e);
+                tracing::error!(
+                    "Mutex poisoned for order_books: {:?} - returning empty book",
+                    e
+                );
                 return Ok(OrderBook::new(
                     self.config.exchange_id,
                     symbol.clone(),
@@ -166,7 +169,10 @@ impl ExchangeConnector for MockConnector {
         let tickers = match self.tickers.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!("Mutex poisoned for tickers: {:?} - returning empty result", e);
+                tracing::error!(
+                    "Mutex poisoned for tickers: {:?} - returning empty result",
+                    e
+                );
                 return Ok(HashMap::new());
             }
         };

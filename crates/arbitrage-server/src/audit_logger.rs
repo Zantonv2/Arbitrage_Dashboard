@@ -34,11 +34,7 @@ pub struct AuditEntry {
 }
 
 impl AuditEntry {
-    pub fn new(
-        decision: AuditDecision,
-        status: &str,
-        details: &str,
-    ) -> Self {
+    pub fn new(decision: AuditDecision, status: &str, details: &str) -> Self {
         Self {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -95,12 +91,7 @@ impl AuditLogger {
         entries.push(entry);
     }
 
-    pub async fn log_decision(
-        &self,
-        decision: AuditDecision,
-        status: &str,
-        details: &str,
-    ) {
+    pub async fn log_decision(&self, decision: AuditDecision, status: &str, details: &str) {
         let entry = AuditEntry::new(decision, status, details);
         self.log(entry).await;
     }
@@ -138,10 +129,7 @@ impl AuditLogger {
         entries[start..].to_vec()
     }
 
-    pub async fn get_entries_by_decision(
-        &self,
-        decision: AuditDecision,
-    ) -> Vec<AuditEntry> {
+    pub async fn get_entries_by_decision(&self, decision: AuditDecision) -> Vec<AuditEntry> {
         self.entries
             .lock()
             .await

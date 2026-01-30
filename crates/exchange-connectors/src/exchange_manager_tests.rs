@@ -28,7 +28,10 @@ mod tests {
 
         manager.initialize().await.unwrap();
 
-        assert!(manager.is_healthy(), "Manager should be healthy after initialize");
+        assert!(
+            manager.is_healthy(),
+            "Manager should be healthy after initialize"
+        );
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -36,9 +39,15 @@ mod tests {
         manager.shutdown(5).await;
         let elapsed = start.elapsed();
 
-        assert!(elapsed < Duration::from_secs(5), 
-            "Shutdown took longer than 5s: {:?}", elapsed);
-        assert!(!manager.is_healthy(), "Manager should not be healthy after shutdown");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "Shutdown took longer than 5s: {:?}",
+            elapsed
+        );
+        assert!(
+            !manager.is_healthy(),
+            "Manager should not be healthy after shutdown"
+        );
     }
 
     #[tokio::test]
@@ -54,10 +63,16 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        assert!(manager.is_healthy(), "Manager should be healthy before shutdown");
+        assert!(
+            manager.is_healthy(),
+            "Manager should be healthy before shutdown"
+        );
         manager.shutdown(1).await;
 
-        assert!(!manager.is_healthy(), "Manager should not be healthy after shutdown");
+        assert!(
+            !manager.is_healthy(),
+            "Manager should not be healthy after shutdown"
+        );
     }
 
     #[tokio::test]
@@ -73,10 +88,16 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        assert!(manager.is_healthy(), "Manager should be healthy before shutdown");
+        assert!(
+            manager.is_healthy(),
+            "Manager should be healthy before shutdown"
+        );
         manager.shutdown(1).await;
 
-        assert!(!manager.is_healthy(), "Manager should not be healthy after shutdown");
+        assert!(
+            !manager.is_healthy(),
+            "Manager should not be healthy after shutdown"
+        );
     }
 
     #[tokio::test]
@@ -92,11 +113,20 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        assert!(manager.is_healthy(), "Manager should be healthy before first shutdown");
+        assert!(
+            manager.is_healthy(),
+            "Manager should be healthy before first shutdown"
+        );
         manager.shutdown(1).await;
-        assert!(!manager.is_healthy(), "Manager should not be healthy after first shutdown");
+        assert!(
+            !manager.is_healthy(),
+            "Manager should not be healthy after first shutdown"
+        );
         manager.shutdown(1).await;
-        assert!(!manager.is_healthy(), "Manager should not be healthy after second shutdown");
+        assert!(
+            !manager.is_healthy(),
+            "Manager should not be healthy after second shutdown"
+        );
     }
 
     #[tokio::test]
@@ -122,7 +152,10 @@ mod tests {
         manager.shutdown(5).await;
         let elapsed = start.elapsed();
 
-        assert!(elapsed < Duration::from_secs(5), 
-            "Shutdown with multiple exchanges took longer than 5s: {:?}", elapsed);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "Shutdown with multiple exchanges took longer than 5s: {:?}",
+            elapsed
+        );
     }
 }

@@ -374,11 +374,8 @@ pub async fn prepare_execution(
                 &stored_signal.signal.buy_exchange.to_string(),
                 &stored_signal.signal.sell_exchange.to_string(),
             )
-            .with_profit(
-                &instruction.expected_profit.to_string(),
-                None,
-            );
-            
+            .with_profit(&instruction.expected_profit.to_string(), None);
+
             state.audit_logger.log(audit_entry).await;
 
             let response = PrepareExecutionResponse {
@@ -436,7 +433,7 @@ pub async fn prepare_execution(
                 &format!("Failed to prepare execution: {}", e),
             )
             .with_opportunity(signal_uuid, &stored_signal.signal.symbol.to_pair());
-            
+
             state.audit_logger.log(audit_entry).await;
 
             warn!("Failed to prepare execution: {}", e);
@@ -693,7 +690,7 @@ pub async fn login(
             }));
         }
     };
-    
+
     let admin_password = match std::env::var("ADMIN_PASSWORD") {
         Ok(password) => password,
         Err(_) => {

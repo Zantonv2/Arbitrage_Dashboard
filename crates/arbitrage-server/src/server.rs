@@ -141,7 +141,7 @@ fn get_client_ip(req: &Request<Body>) -> String {
 pub fn validate_jwt(token: &str, secret: &str) -> bool {
     let mut validation = Validation::default();
     validation.validate_exp = true;
-    
+
     jsonwebtoken::decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -169,7 +169,9 @@ pub fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::e
 
 fn get_jwt_secret(config: &Config) -> Result<String, Box<dyn std::error::Error>> {
     // Priority: config.toml > environment variable > error
-    if !config.server.jwt_secret.is_empty() && config.server.jwt_secret != "insecure-default-change-me" {
+    if !config.server.jwt_secret.is_empty()
+        && config.server.jwt_secret != "insecure-default-change-me"
+    {
         Ok(config.server.jwt_secret.clone())
     } else {
         match std::env::var(JWT_SECRET_ENV) {
@@ -183,11 +185,19 @@ fn get_jwt_secret(config: &Config) -> Result<String, Box<dyn std::error::Error>>
 }
 
 fn create_error_response(status_code: StatusCode, message: &str) -> impl IntoResponse {
-    let response = http::Response::builder()
-        .status(status_code)
-        .body(Body::from(message.to_string()))
-        .expect("Failed to create HTTP response builder");
-    response
+    // Use safe response building without .expect()
+    let body = Body::from(message.to_string());
+    match http::Response::builder().status(status_code).body(body) {
+        Ok(response) => response,
+        Err(e) => {
+            // Log the error and return a minimal safe response
+            error!(
+                "Failed to create HTTP response: {}. Returning minimal error response.",
+                e
+            );
+            http::Response::new(Body::from("Internal Server Error"))
+        }
+    }
 }
 
 /// Main server struct
@@ -409,7 +419,10 @@ impl ArbitrageServer {
             .route("/signals", get(routes::get_signals))
             .route("/signals/{id}", get(routes::get_signal))
             // Order books
-            .route("/orderbooks/{exchange}/{symbol}", get(routes::get_orderbook))
+            .route(
+                "/orderbooks/{exchange}/{symbol}",
+                get(routes::get_orderbook),
+            )
             // Execution
             .route("/executions/prepare", post(routes::prepare_execution))
             .route("/executions/confirm", post(routes::confirm_execution))

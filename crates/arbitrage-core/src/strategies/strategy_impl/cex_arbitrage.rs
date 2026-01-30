@@ -325,7 +325,11 @@ impl Strategy for CexArbitrageStrategy {
             }
 
             // Find best bid and ask across all exchanges using market_utils
-            let best_bid = match market_utils::find_best_bid(market_data, &symbol, &self.get_supported_exchanges()) {
+            let best_bid = match market_utils::find_best_bid(
+                market_data,
+                &symbol,
+                &self.get_supported_exchanges(),
+            ) {
                 Some(bid) => {
                     println!("Best bid for {}: {} @ {}", symbol, bid.0, bid.1);
                     bid
@@ -337,7 +341,11 @@ impl Strategy for CexArbitrageStrategy {
                 }
             };
 
-            let best_ask = match market_utils::find_best_ask(market_data, &symbol, &self.get_supported_exchanges()) {
+            let best_ask = match market_utils::find_best_ask(
+                market_data,
+                &symbol,
+                &self.get_supported_exchanges(),
+            ) {
                 Some(ask) => {
                     println!("Best ask for {}: {} @ {}", symbol, ask.0, ask.1);
                     ask

@@ -3,6 +3,7 @@
 //! Connects exchange data feeds to the arbitrage engine.
 //! Handles WebSocket connections, market data processing, and signal detection.
 
+use crate::audit_logger::{AuditDecision, AuditEntry, AuditLogger};
 use arbitrage_core::{
     arbitrage_engine::ArbitrageEngine,
     config::Config,
@@ -12,7 +13,6 @@ use arbitrage_core::{
     types::Symbol,
     Result,
 };
-use crate::audit_logger::{AuditDecision, AuditEntry, AuditLogger};
 use exchange_connectors::{
     events::{ConnectionEvent, MarketDataEvent},
     ExchangeManager, ExchangeManagerConfig,
@@ -76,8 +76,10 @@ impl ArbitrageBridge {
         };
         let symbol_manager = Arc::new(Mutex::new(SymbolManager::new(symbol_manager_config)));
 
-        info!("📋 Symbol Manager initialized with {} core symbols", 
-              symbol_manager.lock().await.get_active_symbols().len());
+        info!(
+            "📋 Symbol Manager initialized with {} core symbols",
+            symbol_manager.lock().await.get_active_symbols().len()
+        );
 
         Ok(Self {
             exchange_manager,
@@ -148,14 +150,24 @@ impl ArbitrageBridge {
                 interval.tick().await;
 
                 info!("🔍 Refreshing symbol discovery...");
-                
-                match symbol_manager.lock().await.refresh_discovered_symbols().await {
+
+                match symbol_manager
+                    .lock()
+                    .await
+                    .refresh_discovered_symbols()
+                    .await
+                {
                     Ok(_) => {
                         let active_symbols = symbol_manager.lock().await.get_active_symbols();
                         info!("📊 Now monitoring {} symbols", active_symbols.len());
-                        
+
                         // Resubscribe to updated symbol list
-                        if let Err(e) = exchange_manager.lock().await.subscribe_symbols(&active_symbols).await {
+                        if let Err(e) = exchange_manager
+                            .lock()
+                            .await
+                            .subscribe_symbols(&active_symbols)
+                            .await
+                        {
                             warn!("Failed to resubscribe to symbols: {}", e);
                         }
                     }
@@ -181,8 +193,14 @@ impl ArbitrageBridge {
             let mut event_receiver = exchange_manager.lock().await.get_event_receiver();
 
             while let Ok(event) = event_receiver.recv().await {
-                if let Err(e) =
-                    Self::handle_event(&event, &arbitrage_engine, &strategy_registry, &symbol_manager, &audit_logger).await
+                if let Err(e) = Self::handle_event(
+                    &event,
+                    &arbitrage_engine,
+                    &strategy_registry,
+                    &symbol_manager,
+                    &audit_logger,
+                )
+                .await
                 {
                     warn!("Event handling error: {}", e);
                 }
@@ -200,7 +218,14 @@ impl ArbitrageBridge {
     ) -> Result<()> {
         match event {
             ConnectionEvent::MarketData(market_event) => {
-                Self::handle_market_data(market_event, engine, registry, symbol_manager, audit_logger).await
+                Self::handle_market_data(
+                    market_event,
+                    engine,
+                    registry,
+                    symbol_manager,
+                    audit_logger,
+                )
+                .await
             }
             ConnectionEvent::StatusChange {
                 exchange,
@@ -214,7 +239,7 @@ impl ArbitrageBridge {
                 exchange, error, ..
             } => {
                 error!("❌ {} error: {}", exchange, error);
-                
+
                 // Log error to audit
                 let audit_entry = AuditEntry::new(
                     AuditDecision::ErrorOccurred,
@@ -222,7 +247,7 @@ impl ArbitrageBridge {
                     &format!("Exchange {} error: {}", exchange, error),
                 );
                 audit_logger.log(audit_entry).await;
-                
+
                 Ok(())
             }
             _ => Ok(()),
@@ -252,30 +277,55 @@ impl ArbitrageBridge {
                     volume_24h_usd: Decimal::ZERO, // Would need ticker data
                     price_usd: order_book.mid_price().unwrap_or(Decimal::ZERO),
                     spread_bps: {
-                        let best_bid = order_book.best_bid().map(|l| l.price).unwrap_or(Decimal::ZERO);
-                        let best_ask = order_book.best_ask().map(|l| l.price).unwrap_or(Decimal::ZERO);
+                        let best_bid = order_book
+                            .best_bid()
+                            .map(|l| l.price)
+                            .unwrap_or(Decimal::ZERO);
+                        let best_ask = order_book
+                            .best_ask()
+                            .map(|l| l.price)
+                            .unwrap_or(Decimal::ZERO);
                         let mid = order_book.mid_price().unwrap_or(Decimal::ONE);
-                        ((best_ask - best_bid) / mid * Decimal::from(10000)).to_i64().unwrap_or(0) as u32
+                        ((best_ask - best_bid) / mid * Decimal::from(10000))
+                            .to_i64()
+                            .unwrap_or(0) as u32
                     },
                     is_active: true,
                     timestamp: order_book.timestamp,
                     depth_analysis: OrderBookDepth {
                         level_1_volume_usd: {
-                            let bid_size = order_book.best_bid().map(|l| l.quantity).unwrap_or(Decimal::ZERO);
-                            let ask_size = order_book.best_ask().map(|l| l.quantity).unwrap_or(Decimal::ZERO);
+                            let bid_size = order_book
+                                .best_bid()
+                                .map(|l| l.quantity)
+                                .unwrap_or(Decimal::ZERO);
+                            let ask_size = order_book
+                                .best_ask()
+                                .map(|l| l.quantity)
+                                .unwrap_or(Decimal::ZERO);
                             (bid_size + ask_size) * order_book.mid_price().unwrap_or(Decimal::ZERO)
                         },
                         depth_01_percent_usd: Decimal::ZERO, // Would need full book
                         depth_05_percent_usd: Decimal::ZERO,
                         max_order_size_usd: {
-                            let bid_size = order_book.best_bid().map(|l| l.quantity).unwrap_or(Decimal::ZERO);
-                            let ask_size = order_book.best_ask().map(|l| l.quantity).unwrap_or(Decimal::ZERO);
+                            let bid_size = order_book
+                                .best_bid()
+                                .map(|l| l.quantity)
+                                .unwrap_or(Decimal::ZERO);
+                            let ask_size = order_book
+                                .best_ask()
+                                .map(|l| l.quantity)
+                                .unwrap_or(Decimal::ZERO);
                             bid_size.max(ask_size) * order_book.mid_price().unwrap_or(Decimal::ZERO)
                         },
                     },
                 };
-                
-                if let Err(e) = symbol_manager.lock().await.update_market_data(market_info).await {
+
+                if let Err(e) = symbol_manager
+                    .lock()
+                    .await
+                    .update_market_data(market_info)
+                    .await
+                {
                     debug!("Symbol manager update error: {}", e);
                 }
 
@@ -306,7 +356,10 @@ impl ArbitrageBridge {
                     exchange: ticker.exchange,
                     volume_24h_usd: ticker.volume_24h * ticker.last_price,
                     price_usd: ticker.last_price,
-                    spread_bps: ((ticker.ask_price - ticker.bid_price) / ticker.last_price * Decimal::from(10000)).to_i64().unwrap_or(0) as u32,
+                    spread_bps: ((ticker.ask_price - ticker.bid_price) / ticker.last_price
+                        * Decimal::from(10000))
+                    .to_i64()
+                    .unwrap_or(0) as u32,
                     is_active: true,
                     timestamp: ticker.timestamp,
                     depth_analysis: OrderBookDepth {
@@ -316,8 +369,13 @@ impl ArbitrageBridge {
                         max_order_size_usd: Decimal::ZERO,
                     },
                 };
-                
-                if let Err(e) = symbol_manager.lock().await.update_market_data(market_info).await {
+
+                if let Err(e) = symbol_manager
+                    .lock()
+                    .await
+                    .update_market_data(market_info)
+                    .await
+                {
                     debug!("Symbol manager update error: {}", e);
                 }
             }

@@ -62,8 +62,6 @@ impl CrossExchangeArbitrageStrategy {
         ExchangeCapabilities::get_cex_arbitrage_exchanges()
     }
 
-
-
     /// Calculate gross profit percentage before fees
     fn calculate_gross_profit_bps(&self, buy_price: Decimal, sell_price: Decimal) -> Result<i32> {
         if buy_price.is_zero() {
@@ -332,7 +330,11 @@ impl Strategy for CrossExchangeArbitrageStrategy {
 
         for symbol in symbols {
             // Find best bid and ask across all exchanges using market_utils
-            let best_bid = match market_utils::find_best_bid(market_data, &symbol, &self.get_supported_exchanges()) {
+            let best_bid = match market_utils::find_best_bid(
+                market_data,
+                &symbol,
+                &self.get_supported_exchanges(),
+            ) {
                 Some(bid) => bid,
                 None => {
                     debug!("No bids found for {}", symbol);
@@ -340,7 +342,11 @@ impl Strategy for CrossExchangeArbitrageStrategy {
                 }
             };
 
-            let best_ask = match market_utils::find_best_ask(market_data, &symbol, &self.get_supported_exchanges()) {
+            let best_ask = match market_utils::find_best_ask(
+                market_data,
+                &symbol,
+                &self.get_supported_exchanges(),
+            ) {
                 Some(ask) => ask,
                 None => {
                     debug!("No asks found for {}", symbol);
@@ -357,7 +363,7 @@ impl Strategy for CrossExchangeArbitrageStrategy {
                 .and_then(|ob| ob.best_bid())
                 .map(|level| level.quantity)
                 .unwrap_or(Decimal::ZERO);
-            
+
             let buy_quantity = market_data
                 .get_order_book(buy_exchange, &symbol)
                 .and_then(|ob| ob.best_ask())

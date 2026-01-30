@@ -152,7 +152,7 @@ impl OrderExecutor {
             .exchange_manager
             .is_exchange_connected(&instruction.buy_order.exchange)
             .await;
-            
+
         let sell_connected = self
             .exchange_manager
             .is_exchange_connected(&instruction.sell_order.exchange)
@@ -174,9 +174,9 @@ impl OrderExecutor {
 
         // Check balance/allowance for both orders (if available)
         // This is a placeholder - in production, would check actual balances
-        debug!("Preparation complete for {} → {}", 
-            instruction.buy_order.exchange, 
-            instruction.sell_order.exchange
+        debug!(
+            "Preparation complete for {} → {}",
+            instruction.buy_order.exchange, instruction.sell_order.exchange
         );
 
         Ok(())
@@ -244,10 +244,16 @@ impl OrderExecutor {
             (Ok(buy_order), Err(sell_error)) => {
                 // Buy succeeded, sell failed - rollback buy
                 let (rollback_performed, rollback_error) = if self.config.enable_rollback {
-                    match self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order).await {
+                    match self
+                        .rollback_buy_order(&instruction.buy_order.exchange, &buy_order)
+                        .await
+                    {
                         Ok(success) => (success, None),
                         Err(e) => {
-                            error!("Buy order rollback failed for signal {}: {}", instruction.signal_id, e);
+                            error!(
+                                "Buy order rollback failed for signal {}: {}",
+                                instruction.signal_id, e
+                            );
                             (false, Some(e.to_string()))
                         }
                     }
@@ -256,7 +262,10 @@ impl OrderExecutor {
                 };
 
                 let error_msg = if let Some(rb_err) = rollback_error {
-                    format!("Sell order failed: {}. Rollback also failed: {}", sell_error, rb_err)
+                    format!(
+                        "Sell order failed: {}. Rollback also failed: {}",
+                        sell_error, rb_err
+                    )
                 } else {
                     format!("Sell order failed: {}", sell_error)
                 };
@@ -275,10 +284,16 @@ impl OrderExecutor {
             (Err(buy_error), Ok(sell_order)) => {
                 // Sell succeeded, buy failed - rollback sell
                 let (rollback_performed, rollback_error) = if self.config.enable_rollback {
-                    match self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order).await {
+                    match self
+                        .rollback_sell_order(&instruction.sell_order.exchange, &sell_order)
+                        .await
+                    {
                         Ok(success) => (success, None),
                         Err(e) => {
-                            error!("Sell order rollback failed for signal {}: {}", instruction.signal_id, e);
+                            error!(
+                                "Sell order rollback failed for signal {}: {}",
+                                instruction.signal_id, e
+                            );
                             (false, Some(e.to_string()))
                         }
                     }
@@ -287,7 +302,10 @@ impl OrderExecutor {
                 };
 
                 let error_msg = if let Some(rb_err) = rollback_error {
-                    format!("Buy order failed: {}. Rollback also failed: {}", buy_error, rb_err)
+                    format!(
+                        "Buy order failed: {}. Rollback also failed: {}",
+                        buy_error, rb_err
+                    )
                 } else {
                     format!("Buy order failed: {}", buy_error)
                 };
@@ -385,7 +403,11 @@ impl OrderExecutor {
     }
 
     /// Rollback buy order by placing offsetting sell
-    async fn rollback_buy_order(&self, exchange: &ExchangeId, buy_order: &OrderResponse) -> Result<bool> {
+    async fn rollback_buy_order(
+        &self,
+        exchange: &ExchangeId,
+        buy_order: &OrderResponse,
+    ) -> Result<bool> {
         warn!("🔄 Rolling back buy order: {}", buy_order.order_id);
 
         let rollback_request = OrderRequest {
@@ -411,7 +433,11 @@ impl OrderExecutor {
     }
 
     /// Rollback sell order by placing offsetting buy
-    async fn rollback_sell_order(&self, exchange: &ExchangeId, sell_order: &OrderResponse) -> Result<bool> {
+    async fn rollback_sell_order(
+        &self,
+        exchange: &ExchangeId,
+        sell_order: &OrderResponse,
+    ) -> Result<bool> {
         warn!("🔄 Rolling back sell order: {}", sell_order.order_id);
 
         let rollback_request = OrderRequest {

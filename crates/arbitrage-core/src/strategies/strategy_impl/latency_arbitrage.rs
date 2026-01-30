@@ -143,13 +143,19 @@ impl Strategy for LatencyArbitrageStrategy {
                 continue;
             }
 
-            // Check for zero price to prevent division by zero
-            if min_price <= Decimal::ZERO || max_price <= Decimal::ZERO {
+            // Check for zero or invalid prices to prevent division by zero and ensure valid calculations
+            if min_price <= Decimal::ZERO || max_price <= Decimal::ZERO || max_price <= min_price {
                 continue;
             }
 
-            // Calculate price difference
-            let price_diff_bps = ((max_price - min_price) / min_price * Decimal::from(10000))
+            // Calculate price difference with safe arithmetic
+            // Use checked_div to prevent any potential division issues
+            let price_diff_ratio = match (max_price - min_price).checked_div(min_price) {
+                Some(ratio) if ratio >= Decimal::ZERO => ratio,
+                _ => continue, // Skip if division failed or result is negative
+            };
+
+            let price_diff_bps = (price_diff_ratio * Decimal::from(10000))
                 .to_i32()
                 .unwrap_or(0);
 

@@ -1,26 +1,18 @@
-use crate::server::{validate_jwt, AppState};
+use crate::server::AppState;
 use axum::{
     extract::{
-        Query,
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Query, State,
     },
     response::{IntoResponse, Response},
 };
 use futures_util::{sink::SinkExt, stream::StreamExt};
+use http::StatusCode;
 use jsonwebtoken::{DecodingKey, Validation};
 use serde::Deserialize;
 use serde_json::json;
-use std::fmt;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
-
-const WS_AUTH_TIMEOUT_SECS: u64 = 10;
-
-#[derive(Debug, Deserialize)]
-struct WsAuthMessage {
-    token: String,
-}
 
 #[derive(Debug, Deserialize)]
 struct ClientMessage {
@@ -35,17 +27,6 @@ pub struct WsQueryParams {
     pub token: Option<String>,
 }
 
-#[derive(Debug)]
-struct WebSocketAuthError;
-
-impl fmt::Display for WebSocketAuthError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "WebSocket authentication error")
-    }
-}
-
-impl std::error::Error for WebSocketAuthError {}
-
 fn validate_ws_token(token: &str, secret: &str) -> bool {
     jsonwebtoken::decode::<crate::server::Claims>(
         token,
@@ -55,32 +36,8 @@ fn validate_ws_token(token: &str, secret: &str) -> bool {
     .is_ok()
 }
 
-async fn authenticate_websocket(
-    receiver: &mut futures_util::stream::SplitStream<WebSocket>,
-    state: &AppState,
-) -> Result<bool, WebSocketAuthError> {
-    if let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                let auth_msg: WsAuthMessage =
-                    serde_json::from_str(&text).map_err(|_| WebSocketAuthError)?;
-                let secret = state.jwt_secret.as_str();
-                return Ok(validate_ws_token(&auth_msg.token, secret));
-            }
-            Ok(Message::Close(_)) => {
-                return Ok(false);
-            }
-            Err(_) => {
-                return Err(WebSocketAuthError);
-            }
-            _ => {}
-        }
-    }
-    Ok(false)
-}
-
 /// Handle WebSocket upgrade with token validation at HTTP level
-/// 
+///
 /// # Security Note
 /// Authentication is performed at the HTTP level before the WebSocket upgrade.
 /// The JWT token must be provided in the Authorization header (not query parameters)
@@ -89,18 +46,41 @@ pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Query(_params): Query<WsQueryParams>,
+    req: http::Request<axum::body::Body>,
 ) -> Response {
     debug!("WebSocket connection requested");
 
     // SECURITY: Query parameters are intentionally ignored to prevent token leakage
     // in server logs, browser history, and referrer headers. The token must be
     // provided in the Authorization header only.
-    
-    warn!("WebSocket authentication failed: token must be provided in Authorization header, not query parameters");
-    return json!({
-        "type": "auth_error",
-        "message": "Authentication required. Please provide a valid JWT token in the Authorization header (not query parameters for security)."
-    }).to_string().into_response();
+
+    // Extract and validate JWT token from Authorization header
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|auth_str| auth_str.strip_prefix("Bearer "));
+
+    let secret = state.jwt_secret.as_str();
+    let is_authenticated = token.is_some_and(|t| validate_ws_token(t, secret));
+
+    if !is_authenticated {
+        warn!(
+            "WebSocket authentication failed: invalid or missing JWT token in Authorization header"
+        );
+        return (
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "type": "auth_error",
+                "message": "Authentication required. Please provide a valid JWT token in the Authorization header."
+            }).to_string()
+        ).into_response();
+    }
+
+    debug!("WebSocket authentication successful, upgrading connection");
+
+    // Authentication successful - proceed with WebSocket upgrade
+    ws.on_upgrade(move |socket| handle_websocket(socket, state))
 }
 
 /// Handle WebSocket connection
