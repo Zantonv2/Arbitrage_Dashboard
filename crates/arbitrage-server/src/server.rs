@@ -167,14 +167,18 @@ pub fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::e
     )
 }
 
-fn get_jwt_secret(config: &Config) -> String {
+fn get_jwt_secret(config: &Config) -> Result<String, Box<dyn std::error::Error>> {
     // Priority: config.toml > environment variable > error
     if !config.server.jwt_secret.is_empty() && config.server.jwt_secret != "insecure-default-change-me" {
-        config.server.jwt_secret.clone()
+        Ok(config.server.jwt_secret.clone())
     } else {
-        std::env::var(JWT_SECRET_ENV).unwrap_or_else(|_| {
-            panic!("JWT_SECRET must be set either in config.toml [server] section or as environment variable")
-        })
+        match std::env::var(JWT_SECRET_ENV) {
+            Ok(secret) => Ok(secret),
+            Err(_) => {
+                error!("JWT_SECRET must be set either in config.toml [server] section or as environment variable");
+                Err("JWT_SECRET configuration missing. Set it in config.toml or as environment variable".into())
+            }
+        }
     }
 }
 
@@ -205,7 +209,7 @@ impl ArbitrageServer {
         let config_manager = ConfigManager::new(config_path)?;
         let config = Arc::new(config_manager.get_config().clone());
 
-        let jwt_secret = get_jwt_secret(&config);
+        let jwt_secret = get_jwt_secret(&config)?;
 
         // Initialize core components
         let (storage, normalizer, confidence_scorer, size_calculator, execution_preparer) =

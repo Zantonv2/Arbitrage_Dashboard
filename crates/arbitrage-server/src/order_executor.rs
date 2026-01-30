@@ -243,12 +243,22 @@ impl OrderExecutor {
             }
             (Ok(buy_order), Err(sell_error)) => {
                 // Buy succeeded, sell failed - rollback buy
-                let rollback_performed = if self.config.enable_rollback {
-                    self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order)
-                        .await
-                        .unwrap_or(false)
+                let (rollback_performed, rollback_error) = if self.config.enable_rollback {
+                    match self.rollback_buy_order(&instruction.buy_order.exchange, &buy_order).await {
+                        Ok(success) => (success, None),
+                        Err(e) => {
+                            error!("Buy order rollback failed for signal {}: {}", instruction.signal_id, e);
+                            (false, Some(e.to_string()))
+                        }
+                    }
                 } else {
-                    false
+                    (false, None)
+                };
+
+                let error_msg = if let Some(rb_err) = rollback_error {
+                    format!("Sell order failed: {}. Rollback also failed: {}", sell_error, rb_err)
+                } else {
+                    format!("Sell order failed: {}", sell_error)
                 };
 
                 Ok(ExecutionResult {
@@ -258,18 +268,28 @@ impl OrderExecutor {
                     sell_order: None,
                     actual_profit: None,
                     execution_time_ms: execution_time_ms.max(1),
-                    error_message: Some(format!("Sell order failed: {}", sell_error)),
+                    error_message: Some(error_msg),
                     rollback_performed,
                 })
             }
             (Err(buy_error), Ok(sell_order)) => {
                 // Sell succeeded, buy failed - rollback sell
-                let rollback_performed = if self.config.enable_rollback {
-                    self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order)
-                        .await
-                        .unwrap_or(false)
+                let (rollback_performed, rollback_error) = if self.config.enable_rollback {
+                    match self.rollback_sell_order(&instruction.sell_order.exchange, &sell_order).await {
+                        Ok(success) => (success, None),
+                        Err(e) => {
+                            error!("Sell order rollback failed for signal {}: {}", instruction.signal_id, e);
+                            (false, Some(e.to_string()))
+                        }
+                    }
                 } else {
-                    false
+                    (false, None)
+                };
+
+                let error_msg = if let Some(rb_err) = rollback_error {
+                    format!("Buy order failed: {}. Rollback also failed: {}", buy_error, rb_err)
+                } else {
+                    format!("Buy order failed: {}", buy_error)
                 };
 
                 Ok(ExecutionResult {
@@ -279,7 +299,7 @@ impl OrderExecutor {
                     sell_order: Some(sell_order),
                     actual_profit: None,
                     execution_time_ms: execution_time_ms.max(1),
-                    error_message: Some(format!("Buy order failed: {}", buy_error)),
+                    error_message: Some(error_msg),
                     rollback_performed,
                 })
             }

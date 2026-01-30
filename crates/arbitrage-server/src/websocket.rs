@@ -115,7 +115,9 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
 
     info!("WebSocket client connected: {}", client_id);
 
-    // Skip in-handler authentication since we validated at HTTP level
+    // Authentication is validated at HTTP level in websocket_handler
+    // This flag tracks if we should proceed with the connection
+    // The pre-validation in websocket_handler ensures token is valid before upgrade
     let authenticated = true;
 
     if !authenticated {

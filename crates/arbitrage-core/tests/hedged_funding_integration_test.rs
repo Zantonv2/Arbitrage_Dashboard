@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use arbitrage_core::strategies::base::{
-    FilterContext, FundingRate, MarketBundle, Strategy, Ticker,
+    FilterContext, FundingRate, MarketBundle, Ticker,
 };
-use arbitrage_core::strategies::HedgedFundingStrategy;
+use arbitrage_core::strategies::{HedgedFundingStrategy, Strategy};
+
 use arbitrage_core::{
     types::{ExchangeId, Symbol},
     Result,
