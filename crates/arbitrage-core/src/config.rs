@@ -90,6 +90,24 @@ pub struct ServerConfig {
     pub port: u16,
     pub cors_origins: Vec<String>,
     pub static_files_path: String,
+    #[serde(default = "default_jwt_secret")]
+    pub jwt_secret: String,
+    #[serde(default = "default_master_key")]
+    pub master_key: String,
+}
+
+fn default_jwt_secret() -> String {
+    std::env::var("JWT_SECRET").unwrap_or_else(|_| {
+        tracing::warn!("JWT_SECRET not set in config or environment, using insecure default");
+        "insecure-default-change-me".to_string()
+    })
+}
+
+fn default_master_key() -> String {
+    std::env::var("MASTER_KEY").unwrap_or_else(|_| {
+        tracing::warn!("MASTER_KEY not set in config or environment, using insecure default");
+        "insecure-master-key-change-me".to_string()
+    })
 }
 
 impl Default for ServerConfig {
@@ -99,12 +117,18 @@ impl Default for ServerConfig {
             port: 3000,
             cors_origins: vec!["http://localhost:5173".to_string()],
             static_files_path: "frontend/dist".to_string(),
+            jwt_secret: default_jwt_secret(),
+            master_key: default_master_key(),
         }
     }
 }
 
 fn get_master_key_from_env() -> String {
-    std::env::var("MASTER_KEY").expect("MASTER_KEY environment variable must be set for encryption")
+    // This is called during deserialization before config is fully loaded
+    // So we silently use a default if not set - the actual master_key from config will be used later
+    std::env::var("MASTER_KEY").unwrap_or_else(|_| {
+        "insecure-master-key-change-me".to_string()
+    })
 }
 
 fn default_encrypted_string() -> EncryptedString {

@@ -1,299 +1,293 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use crate::server::{validate_jwt, AppState};
+use axum::{
+    extract::{
+        Query,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
+    response::{IntoResponse, Response},
+};
+use futures_util::{sink::SinkExt, stream::StreamExt};
+use jsonwebtoken::{DecodingKey, Validation};
+use serde::Deserialize;
+use serde_json::json;
+use std::fmt;
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebSocketMessage {
-    pub id: String,
-    pub message_type: String,
-    pub data: serde_json::Value,
-    pub timestamp: u64,
+const WS_AUTH_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Debug, Deserialize)]
+struct WsAuthMessage {
+    token: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ConnectedClient {
-    pub id: String,
-    pub ip_address: String,
-    pub connected_at: u64,
-    pub last_ping: u64,
+#[derive(Debug, Deserialize)]
+struct ClientMessage {
+    #[serde(default)]
+    msg_type: String,
+    #[serde(default)]
+    r#type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WsQueryParams {
+    pub token: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct WebSocketManager {
-    clients: Arc<RwLock<HashMap<String, ConnectedClient>>>,
-    message_sender: broadcast::Sender<WebSocketMessage>,
-}
+struct WebSocketAuthError;
 
-impl WebSocketManager {
-    pub fn new() -> Self {
-        let (message_sender, _) = broadcast::channel(1000);
-        Self {
-            clients: Arc::new(RwLock::new(HashMap::new())),
-            message_sender,
-        }
-    }
-
-    pub async fn add_client(&self, ip_address: String) -> String {
-        let client_id = Uuid::new_v4().to_string();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let client = ConnectedClient {
-            id: client_id.clone(),
-            ip_address,
-            connected_at: now,
-            last_ping: now,
-        };
-
-        self.clients.write().await.insert(client_id.clone(), client);
-        client_id
-    }
-
-    pub async fn remove_client(&self, client_id: &str) -> bool {
-        self.clients.write().await.remove(client_id).is_some()
-    }
-
-    pub async fn get_client_count(&self) -> usize {
-        self.clients.read().await.len()
-    }
-
-    pub async fn get_client(&self, client_id: &str) -> Option<ConnectedClient> {
-        self.clients.read().await.get(client_id).cloned()
-    }
-
-    pub async fn update_ping(&self, client_id: &str) -> bool {
-        if let Some(client) = self.clients.write().await.get_mut(client_id) {
-            client.last_ping = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            true
-        } else {
-            false
-        }
-    }
-
-    pub async fn broadcast_message(&self, message_type: String, data: serde_json::Value) -> Result<usize, String> {
-        let message = WebSocketMessage {
-            id: Uuid::new_v4().to_string(),
-            message_type,
-            data,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        };
-
-        match self.message_sender.send(message.clone()) {
-            Ok(receiver_count) => Ok(receiver_count),
-            Err(e) => Err(format!("Failed to broadcast message: {}", e)),
-        }
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<WebSocketMessage> {
-        self.message_sender.subscribe()
-    }
-
-    pub async fn cleanup_stale_connections(&self, timeout_seconds: u64) -> usize {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let mut clients = self.clients.write().await;
-        let initial_count = clients.len();
-        
-        clients.retain(|_, client| now - client.last_ping <= timeout_seconds);
-        
-        initial_count - clients.len()
+impl fmt::Display for WebSocketAuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "WebSocket authentication error")
     }
 }
 
-impl Default for WebSocketManager {
-    fn default() -> Self {
-        Self::new()
-    }
+impl std::error::Error for WebSocketAuthError {}
+
+fn validate_ws_token(token: &str, secret: &str) -> bool {
+    jsonwebtoken::decode::<crate::server::Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .is_ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::time::{sleep, Duration};
+async fn authenticate_websocket(
+    receiver: &mut futures_util::stream::SplitStream<WebSocket>,
+    state: &AppState,
+) -> Result<bool, WebSocketAuthError> {
+    if let Some(msg) = receiver.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                let auth_msg: WsAuthMessage =
+                    serde_json::from_str(&text).map_err(|_| WebSocketAuthError)?;
+                let secret = state.jwt_secret.as_str();
+                return Ok(validate_ws_token(&auth_msg.token, secret));
+            }
+            Ok(Message::Close(_)) => {
+                return Ok(false);
+            }
+            Err(_) => {
+                return Err(WebSocketAuthError);
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
+}
 
-    #[tokio::test]
-    async fn test_websocket_manager_new() {
-        let manager = WebSocketManager::new();
-        assert_eq!(manager.get_client_count().await, 0);
+/// Handle WebSocket upgrade with token validation at HTTP level
+pub async fn websocket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(params): Query<WsQueryParams>,
+) -> Response {
+    debug!("WebSocket connection requested");
+
+    // Validate token from query parameter first
+    let prevalidated = if let Some(token) = &params.token {
+        validate_jwt(token, state.jwt_secret.as_str())
+    } else {
+        // Check Authorization header by extracting it from state (would need modification)
+        // For now, require token in query for WebSocket
+        false
+    };
+
+    if !prevalidated {
+        warn!("WebSocket authentication failed: missing or invalid token");
+        return json!({
+            "type": "auth_error",
+            "message": "Authentication required. Please provide a valid JWT token via ?token= query parameter."
+        }).to_string().into_response();
     }
 
-    #[tokio::test]
-    async fn test_add_client() {
-        let manager = WebSocketManager::new();
-        let client_id = manager.add_client("127.0.0.1".to_string()).await;
-        
-        assert!(!client_id.is_empty());
-        assert_eq!(manager.get_client_count().await, 1);
-        
-        let client = manager.get_client(&client_id).await.unwrap();
-        assert_eq!(client.ip_address, "127.0.0.1");
-        assert_eq!(client.id, client_id);
+    debug!("WebSocket token validated successfully");
+    ws.on_upgrade(|socket| handle_websocket(socket, state))
+}
+
+/// Handle WebSocket connection
+async fn handle_websocket(socket: WebSocket, state: AppState) {
+    let (mut sender, mut receiver) = socket.split();
+    let client_id = uuid::Uuid::new_v4();
+
+    info!("WebSocket client connected: {}", client_id);
+
+    // Skip in-handler authentication since we validated at HTTP level
+    let authenticated = true;
+
+    if !authenticated {
+        let error_msg = json!({
+            "type": "auth_error",
+            "message": "Authentication required. Please provide a valid JWT token."
+        });
+        if let Err(e) = sender
+            .send(Message::Text(error_msg.to_string().into()))
+            .await
+        {
+            error!("Failed to send auth error message: {}", e);
+        }
+        return;
     }
 
-    #[tokio::test]
-    async fn test_remove_client() {
-        let manager = WebSocketManager::new();
-        let client_id = manager.add_client("192.168.1.1".to_string()).await;
-        
-        assert_eq!(manager.get_client_count().await, 1);
-        
-        let removed = manager.remove_client(&client_id).await;
-        assert!(removed);
-        assert_eq!(manager.get_client_count().await, 0);
-        
-        // Test removing non-existent client
-        let removed_again = manager.remove_client(&client_id).await;
-        assert!(!removed_again);
+    info!("WebSocket client authenticated: {}", client_id);
+
+    // Subscribe to signals
+    let mut signal_receiver = state.arbitrage_engine.subscribe();
+
+    // Send welcome message
+    let welcome_msg = json!({
+        "type": "welcome",
+        "client_id": client_id.to_string(),
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    });
+
+    if let Err(e) = sender
+        .send(Message::Text(welcome_msg.to_string().into()))
+        .await
+    {
+        error!("Failed to send welcome message: {}", e);
+        return;
     }
 
-    #[tokio::test]
-    async fn test_get_client() {
-        let manager = WebSocketManager::new();
-        let client_id = manager.add_client("10.0.0.1".to_string()).await;
-        
-        let client = manager.get_client(&client_id).await;
-        assert!(client.is_some());
-        
-        let non_existent = manager.get_client("non_existent".to_string()).await;
-        assert!(non_existent.is_none());
+    // Spawn task to handle incoming messages from client
+    let state_clone = state.clone();
+    let client_receiver_task = tokio::spawn(async move {
+        while let Some(msg) = receiver.next().await {
+            match msg {
+                Ok(Message::Text(text)) => {
+                    debug!("Received message from client {}: {}", client_id, text);
+
+                    // Handle client messages (ping, subscribe, etc.)
+                    if let Err(e) = handle_client_message(&text, &state_clone).await {
+                        warn!("Error handling client message: {}", e);
+                    }
+                }
+                Ok(Message::Close(_)) => {
+                    info!("Client {} disconnected", client_id);
+                    break;
+                }
+                Ok(Message::Ping(_data)) => {
+                    debug!("Received ping from client {}", client_id);
+                    // Pong will be sent automatically by axum
+                }
+                Ok(Message::Pong(_)) => {
+                    debug!("Received pong from client {}", client_id);
+                }
+                Ok(Message::Binary(_)) => {
+                    warn!(
+                        "Received unexpected binary message from client {}",
+                        client_id
+                    );
+                }
+                Err(e) => {
+                    error!("WebSocket error for client {}: {}", client_id, e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Handle outgoing messages (signals, status updates)
+    let sender_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                // Forward signals to client
+                signal_result = signal_receiver.recv() => {
+                    match signal_result {
+                        Ok(signal) => {
+                            let signal_msg = json!({
+                                "type": "signal",
+                                "data": {
+                                    "id": signal.id.to_string(),
+                                    "symbol": signal.symbol.to_pair(),
+                                    "buy_exchange": signal.buy_exchange.to_string(),
+                                    "sell_exchange": signal.sell_exchange.to_string(),
+                                    "buy_price": signal.buy_price,
+                                    "sell_price": signal.sell_price,
+                                    "gross_profit_percent": signal.gross_profit_percent,
+                                    "net_profit_percent": signal.net_profit_percent,
+                                    "confidence": signal.confidence,
+                                    "recommended_size": signal.recommended_size,
+                                    "created_at": signal.created_at.to_rfc3339(),
+                                    "expires_at": signal.expires_at.to_rfc3339()
+                                },
+                                "timestamp": chrono::Utc::now().to_rfc3339()
+                            });
+
+                            if let Err(e) = sender.send(Message::Text(signal_msg.to_string().into())).await {
+                                error!("Failed to send signal to client {}: {}", client_id, e);
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!("Client {} lagged, skipped {} signals", client_id, skipped);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            info!("Signal channel closed for client {}", client_id);
+                            break;
+                        }
+                    }
+                }
+
+                // Send periodic heartbeat
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                    let heartbeat_msg = json!({
+                        "type": "heartbeat",
+                        "timestamp": chrono::Utc::now().to_rfc3339()
+                    });
+
+                    if let Err(e) = sender.send(Message::Text(heartbeat_msg.to_string().into())).await {
+                        error!("Failed to send heartbeat to client {}: {}", client_id, e);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Wait for either task to complete
+    tokio::select! {
+        _ = client_receiver_task => {
+            debug!("Client receiver task completed for {}", client_id);
+        }
+        _ = sender_task => {
+            debug!("Sender task completed for {}", client_id);
+        }
     }
 
-    #[tokio::test]
-    async fn test_update_ping() {
-        let manager = WebSocketManager::new();
-        let client_id = manager.add_client("127.0.0.1".to_string()).await;
-        
-        let original_client = manager.get_client(&client_id).await.unwrap();
-        let original_ping = original_client.last_ping;
-        
-        // Wait a bit to ensure timestamp difference
-        sleep(Duration::from_millis(10)).await;
-        
-        let updated = manager.update_ping(&client_id).await;
-        assert!(updated);
-        
-        let updated_client = manager.get_client(&client_id).await.unwrap();
-        assert!(updated_client.last_ping > original_ping);
-        
-        // Test updating non-existent client
-        let not_updated = manager.update_ping("non_existent".to_string()).await;
-        assert!(!not_updated);
+    info!("WebSocket connection closed for client {}", client_id);
+}
+
+/// Handle incoming message from client
+async fn handle_client_message(
+    message: &str,
+    _state: &AppState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client_msg: ClientMessage = serde_json::from_str(message)?;
+
+    let msg_type = if !client_msg.msg_type.is_empty() {
+        &client_msg.msg_type
+    } else {
+        &client_msg.r#type
+    };
+
+    match msg_type.as_str() {
+        "ping" => {
+            debug!("Received ping from client");
+        }
+        "subscribe" => {
+            debug!("Client subscription request: {:?}", client_msg);
+        }
+        "unsubscribe" => {
+            debug!("Client unsubscription request: {:?}", client_msg);
+        }
+        _ => {
+            warn!("Unknown message type: {}", msg_type);
+        }
     }
 
-    #[tokio::test]
-    async fn test_broadcast_message() {
-        let manager = WebSocketManager::new();
-        let mut receiver = manager.subscribe();
-        
-        let test_data = serde_json::json!({"message": "test"});
-        let result = manager.broadcast_message("test_type".to_string(), test_data.clone()).await;
-        
-        assert!(result.is_ok());
-        
-        // Check if message was received
-        let received = receiver.recv().await.unwrap();
-        assert_eq!(received.message_type, "test_type");
-        assert_eq!(received.data, test_data);
-        assert!(!received.id.is_empty());
-        assert!(received.timestamp > 0);
-    }
-
-    #[tokio::test]
-    async fn test_multiple_subscribers() {
-        let manager = WebSocketManager::new();
-        let mut receiver1 = manager.subscribe();
-        let mut receiver2 = manager.subscribe();
-        
-        let test_data = serde_json::json!({"broadcast": "test"});
-        let result = manager.broadcast_message("broadcast_test".to_string(), test_data).await;
-        
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 2); // Two subscribers
-        
-        // Both should receive the message
-        let msg1 = receiver1.recv().await.unwrap();
-        let msg2 = receiver2.recv().await.unwrap();
-        
-        assert_eq!(msg1.id, msg2.id);
-        assert_eq!(msg1.message_type, "broadcast_test");
-        assert_eq!(msg2.message_type, "broadcast_test");
-    }
-
-    #[tokio::test]
-    async fn test_cleanup_stale_connections() {
-        let manager = WebSocketManager::new();
-        
-        // Add clients
-        let client1 = manager.add_client("127.0.0.1".to_string()).await;
-        let client2 = manager.add_client("127.0.0.2".to_string()).await;
-        
-        assert_eq!(manager.get_client_count().await, 2);
-        
-        // Update ping for client2
-        manager.update_ping(&client2).await;
-        
-        // Wait a bit to make client1 stale
-        sleep(Duration::from_millis(10)).await;
-        
-        // Cleanup with very short timeout
-        let cleaned = manager.cleanup_stale_connections(0).await;
-        assert_eq!(cleaned, 1);
-        assert_eq!(manager.get_client_count().await, 1);
-        
-        // client2 should still exist
-        assert!(manager.get_client(&client2).await.is_some());
-        assert!(manager.get_client(&client1).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_websocket_message_serialization() {
-        let message = WebSocketMessage {
-            id: "test123".to_string(),
-            message_type: "test_type".to_string(),
-            data: serde_json::json!({"key": "value"}),
-            timestamp: 1234567890,
-        };
-        
-        let json = serde_json::to_string(&message).unwrap();
-        let deserialized: WebSocketMessage = serde_json::from_str(&json).unwrap();
-        
-        assert_eq!(deserialized.id, message.id);
-        assert_eq!(deserialized.message_type, message.message_type);
-        assert_eq!(deserialized.data, message.data);
-        assert_eq!(deserialized.timestamp, message.timestamp);
-    }
-
-    #[test]
-    fn test_connected_client_creation() {
-        let client = ConnectedClient {
-            id: "client123".to_string(),
-            ip_address: "192.168.1.1".to_string(),
-            connected_at: 1234567890,
-            last_ping: 1234567890,
-        };
-        
-        assert_eq!(client.id, "client123");
-        assert_eq!(client.ip_address, "192.168.1.1");
-        assert_eq!(client.connected_at, 1234567890);
-        assert_eq!(client.last_ping, 1234567890);
-    }
-
-    #[test]
-    fn test_websocket_manager_default() {
-        let manager = WebSocketManager::default();
-        assert_eq!(manager.get_client_count().await, 0);
-    }
+    Ok(())
 }

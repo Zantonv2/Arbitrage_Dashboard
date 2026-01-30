@@ -1,0 +1,630 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+   Material 3 + Liquid Glass Design System
+   ============================================================================ */
+
+@layer base {
+  :root {
+    /* ==========================================================================
+       Material 3 Color System - Light Theme
+       ========================================================================== */
+    
+    /* Primary Tonal Palette */
+    --md-sys-color-primary: #6750A4;
+    --md-sys-color-on-primary: #FFFFFF;
+    --md-sys-color-primary-container: #EADDFF;
+    --md-sys-color-on-primary-container: #21005D;
+    --md-sys-color-primary-fixed: #EADDFF;
+    --md-sys-color-on-primary-fixed: #21005D;
+    --md-sys-color-primary-fixed-dim: #D0BCFF;
+    --md-sys-color-on-primary-fixed-variant: #4F378B;
+    
+    /* Secondary Tonal Palette */
+    --md-sys-color-secondary: #625B71;
+    --md-sys-color-on-secondary: #FFFFFF;
+    --md-sys-color-secondary-container: #E8DEF8;
+    --md-sys-color-on-secondary-container: #1D192B;
+    --md-sys-color-secondary-fixed: #E8DEF8;
+    --md-sys-color-on-secondary-fixed: #1D192B;
+    --md-sys-color-secondary-fixed-dim: #CCC2DC;
+    --md-sys-color-on-secondary-fixed-variant: #4A4458;
+    
+    /* Tertiary Tonal Palette */
+    --md-sys-color-tertiary: #7D5260;
+    --md-sys-color-on-tertiary: #FFFFFF;
+    --md-sys-color-tertiary-container: #FFD8E4;
+    --md-sys-color-on-tertiary-container: #31111D;
+    --md-sys-color-tertiary-fixed: #FFD8E4;
+    --md-sys-color-on-tertiary-fixed: #31111D;
+    --md-sys-color-tertiary-fixed-dim: #EFB8C8;
+    --md-sys-color-on-tertiary-fixed-variant: #633B48;
+    
+    /* Error Colors */
+    --md-sys-color-error: #B3261E;
+    --md-sys-color-on-error: #FFFFFF;
+    --md-sys-color-error-container: #F9DEDC;
+    --md-sys-color-on-error-container: #410E0B;
+    
+    /* Surface Colors */
+    --md-sys-color-surface: #FEF7FF;
+    --md-sys-color-on-surface: #1D1B20;
+    --md-sys-color-on-surface-variant: #49454F;
+    --md-sys-color-surface-dim: #DED8E1;
+    --md-sys-color-surface-bright: #FEF7FF;
+    --md-sys-color-surface-container-lowest: #FFFFFF;
+    --md-sys-color-surface-container-low: #F7F2FA;
+    --md-sys-color-surface-container: #F3EDF7;
+    --md-sys-color-surface-container-high: #ECE6F0;
+    --md-sys-color-surface-container-highest: #E6E0E9;
+    
+    /* Outline Colors */
+    --md-sys-color-outline: #79747E;
+    --md-sys-color-outline-variant: #CAC4D0;
+    
+    /* Inverse Colors */
+    --md-sys-color-inverse-surface: #322F35;
+    --md-sys-color-inverse-on-surface: #F5EFF7;
+    --md-sys-color-inverse-primary: #D0BCFF;
+    
+    /* Shadow */
+    --md-sys-color-shadow: #000000;
+    --md-sys-color-scrim: #000000;
+    
+    /* ==========================================================================
+       Arbitrage-Specific Semantic Colors
+       ========================================================================== */
+    --color-profit: #2E7D32;
+    --color-profit-container: #C8E6C9;
+    --color-profit-light: #4CAF50;
+    --color-loss: #C62828;
+    --color-loss-container: #FFCDD2;
+    --color-loss-light: #EF5350;
+    --color-warning: #F9A825;
+    --color-warning-container: #FFF9C4;
+    --color-info: #1565C0;
+    --color-info-container: #BBDEFB;
+    
+    /* Exchange Brand Colors */
+    --color-okx: #0052FF;
+    --color-bybit: #F7A600;
+    --color-mexc: #1A5AFF;
+    --color-gateio: #3CB371;
+    --color-kraken: #5741D9;
+    --color-bitstamp: #00A6C2;
+    
+    /* ==========================================================================
+       Liquid Glass System - Light Theme
+       ========================================================================== */
+    --glass-background: rgba(255, 255, 255, 0.72);
+    --glass-background-subtle: rgba(255, 255, 255, 0.48);
+    --glass-border: rgba(255, 255, 255, 0.4);
+    --glass-border-strong: rgba(255, 255, 255, 0.6);
+    --glass-backdrop: blur(20px) saturate(180%);
+    --glass-backdrop-strong: blur(40px) saturate(200%);
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+    --glass-glow: 0 0 40px rgba(103, 80, 164, 0.15);
+    
+    /* ==========================================================================
+       Elevation System
+       ========================================================================== */
+    --elevation-0: 0px 0px 0px 0px rgba(0, 0, 0, 0);
+    --elevation-1: 0px 1px 3px 1px rgba(0, 0, 0, 0.15), 0px 1px 2px 0px rgba(0, 0, 0, 0.3);
+    --elevation-2: 0px 2px 6px 2px rgba(0, 0, 0, 0.15), 0px 1px 2px 0px rgba(0, 0, 0, 0.3);
+    --elevation-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px 0px rgba(0, 0, 0, 0.3);
+    --elevation-4: 0px 6px 10px 4px rgba(0, 0, 0, 0.15), 0px 2px 3px 0px rgba(0, 0, 0, 0.3);
+    --elevation-5: 0px 8px 12px 6px rgba(0, 0, 0, 0.15), 0px 4px 4px 0px rgba(0, 0, 0, 0.3);
+    
+    /* Glass Elevation */
+    --glass-elevation-1: var(--elevation-1), inset 0 0 0 1px var(--glass-border);
+    --glass-elevation-2: var(--elevation-2), inset 0 0 0 1px var(--glass-border-strong);
+    --glass-elevation-3: var(--elevation-3), inset 0 0 0 1px var(--glass-border-strong), var(--glass-glow);
+    
+    /* ==========================================================================
+       Shape System
+       ========================================================================== */
+    --shape-none: 0px;
+    --shape-extra-small: 4px;
+    --shape-small: 8px;
+    --shape-medium: 12px;
+    --shape-large: 16px;
+    --shape-extra-large: 28px;
+    --shape-full: 9999px;
+    
+    /* ==========================================================================
+       Typography System
+       ========================================================================== */
+    --font-brand: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    
+    /* Display */
+    --typography-display-large: 500 3.5rem/4rem var(--font-brand);
+    --typography-display-medium: 500 2.8rem/3.25rem var(--font-brand);
+    --typography-display-small: 500 2.25rem/2.75rem var(--font-brand);
+    
+    /* Headline */
+    --typography-headline-large: 400 2rem/2.5rem var(--font-brand);
+    --typography-headline-medium: 400 1.75rem/2.25rem var(--font-brand);
+    --typography-headline-small: 400 1.5rem/2rem var(--font-brand);
+    
+    /* Title */
+    --typography-title-large: 400 1.375rem/1.75rem var(--font-brand);
+    --typography-title-medium: 500 1rem/1.5rem var(--font-brand);
+    --typography-title-small: 500 0.875rem/1.25rem var(--font-brand);
+    
+    /* Body */
+    --typography-body-large: 400 1rem/1.5rem var(--font-brand);
+    --typography-body-medium: 400 0.875rem/1.25rem var(--font-brand);
+    --typography-body-small: 400 0.75rem/1rem var(--font-brand);
+    
+    /* Label */
+    --typography-label-large: 500 0.875rem/1.25rem var(--font-brand);
+    --typography-label-medium: 500 0.75rem/1rem var(--font-brand);
+    --typography-label-small: 500 0.6875rem/1rem var(--font-brand);
+    
+    /* ==========================================================================
+       Motion System
+       ========================================================================== */
+    --ease-standard: cubic-bezier(0.4, 0.0, 0.2, 1);
+    --ease-standard-decelerate: cubic-bezier(0.0, 0.0, 0.2, 1);
+    --ease-standard-accelerate: cubic-bezier(0.4, 0.0, 1, 1);
+    --ease-emphasized: cubic-bezier(0.2, 0.0, 0, 1);
+    --ease-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+    --ease-emphasized-accelerate: cubic-bezier(0.3, 0.0, 0.8, 0.15);
+    --ease-liquid: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-liquid-smooth: cubic-bezier(0.23, 1, 0.32, 1);
+    
+    --duration-instant: 0ms;
+    --duration-fast: 150ms;
+    --duration-normal: 300ms;
+    --duration-slow: 500ms;
+    --duration-emphasized: 700ms;
+    
+    /* ==========================================================================
+       Spacing System
+       ========================================================================== */
+    --space-0: 0px;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --space-10: 40px;
+    --space-12: 48px;
+    --space-16: 64px;
+    --space-20: 80px;
+    --space-24: 96px;
+    
+    /* ==========================================================================
+       State Layers
+       ========================================================================== */
+    --state-hover-opacity: 0.08;
+    --state-focus-opacity: 0.12;
+    --state-pressed-opacity: 0.12;
+    --state-dragged-opacity: 0.16;
+    --state-disabled-opacity: 0.38;
+    --state-disabled-container-opacity: 0.12;
+    
+    /* ==========================================================================
+       Layout
+       ========================================================================== */
+    --container-sm: 640px;
+    --container-md: 768px;
+    --container-lg: 1024px;
+    --container-xl: 1280px;
+    --container-2xl: 1536px;
+    
+    --sidebar-width: 280px;
+    --sidebar-collapsed-width: 72px;
+    --header-height: 64px;
+  }
+  
+  /* ============================================================================
+     Dark Theme
+     ============================================================================ */
+  .dark {
+    /* Primary Tonal Palette - Dark */
+    --md-sys-color-primary: #D0BCFF;
+    --md-sys-color-on-primary: #381E72;
+    --md-sys-color-primary-container: #4F378B;
+    --md-sys-color-on-primary-container: #EADDFF;
+    --md-sys-color-primary-fixed: #EADDFF;
+    --md-sys-color-on-primary-fixed: #21005D;
+    --md-sys-color-primary-fixed-dim: #D0BCFF;
+    --md-sys-color-on-primary-fixed-variant: #CCC2DC;
+    
+    /* Secondary Tonal Palette - Dark */
+    --md-sys-color-secondary: #CCC2DC;
+    --md-sys-color-on-secondary: #332D41;
+    --md-sys-color-secondary-container: #4A4458;
+    --md-sys-color-on-secondary-container: #E8DEF8;
+    --md-sys-color-secondary-fixed: #E8DEF8;
+    --md-sys-color-on-secondary-fixed: #1D192B;
+    --md-sys-color-secondary-fixed-dim: #CCC2DC;
+    --md-sys-color-on-secondary-fixed-variant: #CCC2DC;
+    
+    /* Tertiary Tonal Palette - Dark */
+    --md-sys-color-tertiary: #EFB8C8;
+    --md-sys-color-on-tertiary: #492532;
+    --md-sys-color-tertiary-container: #633B48;
+    --md-sys-color-on-tertiary-container: #FFD8E4;
+    --md-sys-color-tertiary-fixed: #FFD8E4;
+    --md-sys-color-on-tertiary-fixed: #31111D;
+    --md-sys-color-tertiary-fixed-dim: #EFB8C8;
+    --md-sys-color-on-tertiary-fixed-variant: #EFB8C8;
+    
+    /* Error Colors - Dark */
+    --md-sys-color-error: #F2B8B5;
+    --md-sys-color-on-error: #601410;
+    --md-sys-color-error-container: #8C1D18;
+    --md-sys-color-on-error-container: #F9DEDC;
+    
+    /* Surface Colors - Dark */
+    --md-sys-color-surface: #141218;
+    --md-sys-color-on-surface: #E6E0E9;
+    --md-sys-color-on-surface-variant: #CAC4D0;
+    --md-sys-color-surface-dim: #141218;
+    --md-sys-color-surface-bright: #3B383E;
+    --md-sys-color-surface-container-lowest: #0F0D13;
+    --md-sys-color-surface-container-low: #1D1B20;
+    --md-sys-color-surface-container: #211F26;
+    --md-sys-color-surface-container-high: #2B2930;
+    --md-sys-color-surface-container-highest: #36343B;
+    
+    /* Outline Colors - Dark */
+    --md-sys-color-outline: #938F99;
+    --md-sys-color-outline-variant: #49454F;
+    
+    /* Inverse Colors - Dark */
+    --md-sys-color-inverse-surface: #E6E0E9;
+    --md-sys-color-inverse-on-surface: #322F35;
+    --md-sys-color-inverse-primary: #6750A4;
+    
+    /* Liquid Glass - Dark */
+    --glass-background: rgba(30, 27, 36, 0.72);
+    --glass-background-subtle: rgba(30, 27, 36, 0.48);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --glass-border-strong: rgba(255, 255, 255, 0.15);
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    --glass-glow: 0 0 40px rgba(208, 188, 255, 0.1);
+  }
+  
+  /* ============================================================================
+     Base Styles
+     ============================================================================ */
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    font-family: var(--font-brand);
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color var(--duration-normal) var(--ease-standard),
+                color var(--duration-normal) var(--ease-standard);
+  }
+  
+  /* Focus visible styles for accessibility */
+  :focus-visible {
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: 2px;
+  }
+  
+  /* Reduced motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ============================================================================
+   Animation Keyframes
+   ============================================================================ */
+
+@keyframes ripple {
+  from {
+    transform: scale(0);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-live {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.4);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 8px rgba(46, 125, 50, 0);
+  }
+}
+
+@keyframes pulse-live-dark {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.4);
+  }
+  50% {
+    opacity: 0.8;
+    box-shadow: 0 0 0 8px rgba(76, 175, 80, 0);
+  }
+}
+
+@keyframes glass-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes slide-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ============================================================================
+   Utility Classes
+   ============================================================================ */
+
+@layer utilities {
+  /* Glass Utilities */
+  .glass {
+    background: var(--glass-background);
+    backdrop-filter: var(--glass-backdrop);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+  }
+  
+  .glass-subtle {
+    background: var(--glass-background-subtle);
+    backdrop-filter: var(--glass-backdrop);
+    -webkit-backdrop-filter: var(--glass-backdrop);
+    border: 1px solid var(--glass-border);
+  }
+  
+  .glass-strong {
+    background: var(--glass-background);
+    backdrop-filter: var(--glass-backdrop-strong);
+    -webkit-backdrop-filter: var(--glass-backdrop-strong);
+    border: 1px solid var(--glass-border-strong);
+  }
+  
+  /* Elevation Utilities */
+  .elevation-0 { box-shadow: var(--elevation-0); }
+  .elevation-1 { box-shadow: var(--elevation-1); }
+  .elevation-2 { box-shadow: var(--elevation-2); }
+  .elevation-3 { box-shadow: var(--elevation-3); }
+  .elevation-4 { box-shadow: var(--elevation-4); }
+  .elevation-5 { box-shadow: var(--elevation-5); }
+  
+  .glass-elevation-1 { box-shadow: var(--glass-elevation-1); }
+  .glass-elevation-2 { box-shadow: var(--glass-elevation-2); }
+  .glass-elevation-3 { box-shadow: var(--glass-elevation-3); }
+  
+  /* Shape Utilities */
+  .shape-none { border-radius: var(--shape-none); }
+  .shape-xs { border-radius: var(--shape-extra-small); }
+  .shape-sm { border-radius: var(--shape-small); }
+  .shape-md { border-radius: var(--shape-medium); }
+  .shape-lg { border-radius: var(--shape-large); }
+  .shape-xl { border-radius: var(--shape-extra-large); }
+  .shape-full { border-radius: var(--shape-full); }
+  
+  /* Typography Utilities */
+  .text-display-lg { font: var(--typography-display-large); }
+  .text-display-md { font: var(--typography-display-medium); }
+  .text-display-sm { font: var(--typography-display-small); }
+  .text-headline-lg { font: var(--typography-headline-large); }
+  .text-headline-md { font: var(--typography-headline-medium); }
+  .text-headline-sm { font: var(--typography-headline-small); }
+  .text-title-lg { font: var(--typography-title-large); }
+  .text-title-md { font: var(--typography-title-medium); }
+  .text-title-sm { font: var(--typography-title-small); }
+  .text-body-lg { font: var(--typography-body-large); }
+  .text-body-md { font: var(--typography-body-medium); }
+  .text-body-sm { font: var(--typography-body-small); }
+  .text-label-lg { font: var(--typography-label-large); }
+  .text-label-md { font: var(--typography-label-medium); }
+  .text-label-sm { font: var(--typography-label-small); }
+  
+  /* Animation Utilities */
+  .animate-ripple {
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .animate-ripple::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100px;
+    height: 100px;
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+    pointer-events: none;
+  }
+  
+  .animate-ripple:active::after {
+    animation: ripple 0.6s ease-out;
+  }
+  
+  .animate-pulse-live {
+    animation: pulse-live 2s ease-in-out infinite;
+  }
+  
+  .dark .animate-pulse-live {
+    animation: pulse-live-dark 2s ease-in-out infinite;
+  }
+  
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+  
+  .animate-slide-in {
+    animation: slide-in-up var(--duration-normal) var(--ease-emphasized-decelerate);
+  }
+  
+  .animate-fade-in {
+    animation: fade-in var(--duration-normal) var(--ease-standard);
+  }
+  
+  .animate-scale-in {
+    animation: scale-in var(--duration-normal) var(--ease-liquid);
+  }
+  
+  /* Transition Utilities */
+  .transition-fast {
+    transition: all var(--duration-fast) var(--ease-standard);
+  }
+  
+  .transition-normal {
+    transition: all var(--duration-normal) var(--ease-standard);
+  }
+  
+  .transition-slow {
+    transition: all var(--duration-slow) var(--ease-standard);
+  }
+  
+  .transition-liquid {
+    transition: all var(--duration-normal) var(--ease-liquid);
+  }
+  
+  /* State Layer Utilities */
+  .state-hover:hover {
+    background-color: rgba(var(--md-sys-color-on-surface-rgb), var(--state-hover-opacity));
+  }
+  
+  /* Surface Utilities */
+  .surface-container-lowest {
+    background-color: var(--md-sys-color-surface-container-lowest);
+  }
+  
+  .surface-container-low {
+    background-color: var(--md-sys-color-surface-container-low);
+  }
+  
+  .surface-container {
+    background-color: var(--md-sys-color-surface-container);
+  }
+  
+  .surface-container-high {
+    background-color: var(--md-sys-color-surface-container-high);
+  }
+  
+  .surface-container-highest {
+    background-color: var(--md-sys-color-surface-container-highest);
+  }
+  
+  /* Profit/Loss Utilities */
+  .text-profit {
+    color: var(--color-profit);
+  }
+  
+  .text-loss {
+    color: var(--color-loss);
+  }
+  
+  .bg-profit {
+    background-color: var(--color-profit);
+  }
+  
+  .bg-loss {
+    background-color: var(--color-loss);
+  }
+  
+  .bg-profit-container {
+    background-color: var(--color-profit-container);
+  }
+  
+  .bg-loss-container {
+    background-color: var(--color-loss-container);
+  }
+}
+
+/* ============================================================================
+   Scrollbar Styling
+   ============================================================================ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--md-sys-color-surface-container-low);
+  border-radius: var(--shape-small);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--md-sys-color-outline-variant);
+  border-radius: var(--shape-small);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--md-sys-color-outline);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--md-sys-color-outline-variant) var(--md-sys-color-surface-container-low);
+}

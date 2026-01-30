@@ -6,6 +6,7 @@ cargo_home/
 
 # IDE
 .kiro/
+.kilocode
 .vscode/
 .idea/
 *.swp
@@ -29,11 +30,13 @@ logs/
 # Workflow outputs
 outputs/
 output/
+plans/
 
 # Database
 data/
 *.db
 *.sqlite
+plans/
 
 # Configuration (contains sensitive data)
 config/config.toml

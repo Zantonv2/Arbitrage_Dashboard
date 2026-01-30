@@ -1,4 +1,5 @@
 use crate::constants::BASIS_POINTS_DIVISOR;
+use crate::market_utils;
 use crate::strategies::strategies_specifics::{
     CexArbitrageDefaults, ExchangeCapabilities, StrategyLimits,
 };
@@ -108,58 +109,6 @@ impl CexArbitrageStrategy {
     /// Get supported exchanges for CEX arbitrage
     fn get_supported_exchanges(&self) -> Vec<ExchangeId> {
         ExchangeCapabilities::get_cex_arbitrage_exchanges()
-    }
-
-    /// Find the best bid (highest price to sell at) across all exchanges
-    fn find_best_bid(
-        &self,
-        market_data: &MarketBundle,
-        symbol: &Symbol,
-    ) -> Option<(ExchangeId, Decimal)> {
-        let mut best_bid: Option<(ExchangeId, Decimal)> = None;
-
-        for exchange in self.get_supported_exchanges() {
-            if let Some(order_book) = market_data.get_order_book(exchange, symbol) {
-                if let Some(best_bid_level) = order_book.best_bid() {
-                    match best_bid {
-                        None => best_bid = Some((exchange, best_bid_level.price)),
-                        Some((_, current_best)) => {
-                            if best_bid_level.price > current_best {
-                                best_bid = Some((exchange, best_bid_level.price));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        best_bid
-    }
-
-    /// Find the best ask (lowest price to buy at) across all exchanges
-    fn find_best_ask(
-        &self,
-        market_data: &MarketBundle,
-        symbol: &Symbol,
-    ) -> Option<(ExchangeId, Decimal)> {
-        let mut best_ask: Option<(ExchangeId, Decimal)> = None;
-
-        for exchange in self.get_supported_exchanges() {
-            if let Some(order_book) = market_data.get_order_book(exchange, symbol) {
-                if let Some(best_ask_level) = order_book.best_ask() {
-                    match best_ask {
-                        None => best_ask = Some((exchange, best_ask_level.price)),
-                        Some((_, current_best)) => {
-                            if best_ask_level.price < current_best {
-                                best_ask = Some((exchange, best_ask_level.price));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        best_ask
     }
 
     /// Calculate gross profit percentage before fees
@@ -375,8 +324,8 @@ impl Strategy for CexArbitrageStrategy {
                 continue;
             }
 
-            // Find best bid and ask across all exchanges
-            let best_bid = match self.find_best_bid(market_data, &symbol) {
+            // Find best bid and ask across all exchanges using market_utils
+            let best_bid = match market_utils::find_best_bid(market_data, &symbol, &self.get_supported_exchanges()) {
                 Some(bid) => {
                     println!("Best bid for {}: {} @ {}", symbol, bid.0, bid.1);
                     bid
@@ -388,7 +337,7 @@ impl Strategy for CexArbitrageStrategy {
                 }
             };
 
-            let best_ask = match self.find_best_ask(market_data, &symbol) {
+            let best_ask = match market_utils::find_best_ask(market_data, &symbol, &self.get_supported_exchanges()) {
                 Some(ask) => {
                     println!("Best ask for {}: {} @ {}", symbol, ask.0, ask.1);
                     ask

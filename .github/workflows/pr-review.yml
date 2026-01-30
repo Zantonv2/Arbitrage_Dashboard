@@ -121,7 +121,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         with:
-          model: opencode/big-pickle
+          model: opencode/glm-4.7-free
           share: false
           prompt: |
             Review pull request OR latest comment about fix in #${{ env.PR_NUMBER }}: ${{ env.PR_TITLE }}
