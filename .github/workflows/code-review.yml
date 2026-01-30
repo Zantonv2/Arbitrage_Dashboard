@@ -31,7 +31,7 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: opencode/grok-code
+          model: opencode/minimax-m2.1-free
           share: false
           prompt: |
             ${{ github.event_name == 'issue_comment' && 'Scan the entire codebase for issues immediately.' || 'Perform a comprehensive code review of the entire codebase.' }}
