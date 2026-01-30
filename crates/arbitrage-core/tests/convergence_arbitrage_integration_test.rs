@@ -464,7 +464,11 @@ async fn test_convergence_arbitrage_performance_100_symbols() -> Result<()> {
     let signals = strategy.detect(&market_bundle)?;
     let elapsed = start.elapsed();
 
-    println!("100 symbols: {} signals detected in {:?}", signals.len(), elapsed);
+    println!(
+        "100 symbols: {} signals detected in {:?}",
+        signals.len(),
+        elapsed
+    );
 
     // Should complete in under 100ms
     assert!(
@@ -520,7 +524,11 @@ async fn test_convergence_arbitrage_performance_500_symbols() -> Result<()> {
     let signals = strategy.detect(&market_bundle)?;
     let elapsed = start.elapsed();
 
-    println!("500 symbols: {} signals detected in {:?}", signals.len(), elapsed);
+    println!(
+        "500 symbols: {} signals detected in {:?}",
+        signals.len(),
+        elapsed
+    );
 
     // Should complete in under 100ms
     assert!(
@@ -574,7 +582,11 @@ async fn test_convergence_arbitrage_performance_1000_symbols() -> Result<()> {
     let signals = strategy.detect(&market_bundle)?;
     let elapsed = start.elapsed();
 
-    println!("1000 symbols: {} signals detected in {:?}", signals.len(), elapsed);
+    println!(
+        "1000 symbols: {} signals detected in {:?}",
+        signals.len(),
+        elapsed
+    );
 
     // Should complete in under 100ms (key acceptance criterion)
     assert!(
@@ -646,9 +658,9 @@ async fn test_convergence_arbitrage_algorithm_quality() -> Result<()> {
 
     // Should detect at least the cheap/expensive pair
     let has_outlier_signal = signals.iter().any(|s| {
-        s.legs.iter().any(|leg| {
-            leg.symbol.base == "CHEAP" || leg.symbol.base == "EXPENSIVE"
-        })
+        s.legs
+            .iter()
+            .any(|leg| leg.symbol.base == "CHEAP" || leg.symbol.base == "EXPENSIVE")
     });
 
     assert!(
@@ -658,9 +670,10 @@ async fn test_convergence_arbitrage_algorithm_quality() -> Result<()> {
 
     // Normal pairs should not dominate signals
     for signal in &signals {
-        let has_normal_base = signal.legs.iter().any(|leg| {
-            ["BTC", "ETH", "SOL", "BNB"].contains(&leg.symbol.base.as_str())
-        });
+        let has_normal_base = signal
+            .legs
+            .iter()
+            .any(|leg| ["BTC", "ETH", "SOL", "BNB"].contains(&leg.symbol.base.as_str()));
 
         // If we have signals, at least some should involve outliers
         // (This is a soft assertion since optimization might miss some pairs)

@@ -461,7 +461,10 @@ impl ExchangeManager {
     }
 
     pub async fn shutdown(&mut self, timeout_secs: u64) {
-        info!("ExchangeManager shutting down with {}s timeout", timeout_secs);
+        info!(
+            "ExchangeManager shutting down with {}s timeout",
+            timeout_secs
+        );
         let _ = self.shutdown_sender.send(());
         let timeout_duration = Duration::from_secs(timeout_secs);
         let mut all_cleaned = true;

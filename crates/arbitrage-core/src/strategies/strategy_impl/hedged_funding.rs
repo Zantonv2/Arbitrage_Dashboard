@@ -374,7 +374,6 @@ impl HedgedFundingStrategy {
             (funding_rate.next_funding - Utc::now()).num_seconds() as f64 / 3600.0;
         time_to_funding >= min_time_hours
     }
-
 }
 
 impl Default for HedgedFundingStrategy {

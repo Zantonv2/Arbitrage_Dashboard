@@ -368,7 +368,10 @@ impl ParsingFailureTracker {
         let mut map = match self.failures.lock() {
             Ok(guard) => guard,
             Err(e) => {
-                tracing::error!("Mutex poisoned for failures: {:?} - recovery by creating new map", e);
+                tracing::error!(
+                    "Mutex poisoned for failures: {:?} - recovery by creating new map",
+                    e
+                );
                 // Create a new map and replace the internal state
                 let mut new_map = std::collections::HashMap::new();
                 new_map.insert(key.clone(), AtomicU64::new(1));
@@ -421,20 +424,23 @@ mod tests {
     #[test]
     fn test_parsing_failure_tracker_poison_recovery() {
         let tracker = ParsingFailureTracker::new();
-        
+
         // Record some failures normally
         tracker.record_failure("test_exchange", "test_operation");
-        assert_eq!(tracker.get_failure_count("test_exchange", "test_operation"), 1);
-        
+        assert_eq!(
+            tracker.get_failure_count("test_exchange", "test_operation"),
+            1
+        );
+
         // Test that the tracker works normally after creation
         tracker.record_failure("test_exchange", "test_operation_2");
         let count = tracker.get_failure_count("test_exchange", "test_operation_2");
         assert_eq!(count, 1);
-        
+
         // Verify original failure is still accessible
         let original_count = tracker.get_failure_count("test_exchange", "test_operation");
         assert_eq!(original_count, 1);
-        
+
         // Original failures should be accessible
         let all_failures = tracker.get_all_failures();
         assert_eq!(all_failures.len(), 2);
@@ -443,16 +449,16 @@ mod tests {
     #[test]
     fn test_parsing_failure_tracker_normal_operation() {
         let tracker = ParsingFailureTracker::new();
-        
+
         // Test normal operation
         tracker.record_failure("exchange1", "operation1");
         tracker.record_failure("exchange1", "operation1"); // Multiple calls
         tracker.record_failure("exchange2", "operation2");
-        
+
         assert_eq!(tracker.get_failure_count("exchange1", "operation1"), 2);
         assert_eq!(tracker.get_failure_count("exchange2", "operation2"), 1);
         assert_eq!(tracker.get_failure_count("exchange3", "operation3"), 0);
-        
+
         let all_failures = tracker.get_all_failures();
         assert_eq!(all_failures.len(), 2);
     }

@@ -71,8 +71,6 @@ impl MEXCConnector {
     pub fn symbol_from_mexc(&self, mexc_symbol: &str) -> Result<Symbol> {
         parse_symbol(mexc_symbol, SymbolFormat::NoSeparator)
     }
-
-
 }
 
 #[async_trait]
@@ -99,7 +97,12 @@ impl ExchangeConnector for MEXCConnector {
             self.base.config.rest_url, mexc_symbol, self.base.config.order_book_depth
         );
 
-        let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
@@ -120,7 +123,12 @@ impl ExchangeConnector for MEXCConnector {
 
     async fn fetch_symbols(&self) -> Result<Vec<Symbol>> {
         let url = format!("{}/api/v3/exchangeInfo", self.base.config.rest_url);
-        let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
@@ -130,7 +138,8 @@ impl ExchangeConnector for MEXCConnector {
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "MEXC fetch_symbols timed out after 5s: operation=fetch_symbols, exchange=MEXC".to_string(),
+                    "MEXC fetch_symbols timed out after 5s: operation=fetch_symbols, exchange=MEXC"
+                        .to_string(),
                 ));
             }
         };
@@ -156,8 +165,17 @@ impl ExchangeConnector for MEXCConnector {
 
     async fn fetch_tickers(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, TickerData>> {
         let url = format!("{}/api/v3/ticker/bookTicker", self.base.config.rest_url);
-        let symbols_str: String = symbols.iter().map(|s| format!("{}/{}", s.base, s.quote)).collect::<Vec<_>>().join(",");
-        let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+        let symbols_str: String = symbols
+            .iter()
+            .map(|s| format!("{}/{}", s.base, s.quote))
+            .collect::<Vec<_>>()
+            .join(",");
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
@@ -202,7 +220,12 @@ impl ExchangeConnector for MEXCConnector {
                 self.base.config.rest_url, mexc_symbol
             );
 
-            let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+            let response = match tokio::time::timeout(
+                Duration::from_secs(5),
+                self.client.get(&url).send(),
+            )
+            .await
+            {
                 Ok(Ok(resp)) => resp,
                 Ok(Err(e)) => {
                     warn!("MEXC funding rate request failed: operation=fetch_funding_rates, exchange=MEXC, symbol={}, error={}", mexc_symbol, e);
@@ -217,7 +240,10 @@ impl ExchangeConnector for MEXCConnector {
             let data = match response.json::<Value>().await {
                 Ok(data) => data,
                 Err(e) => {
-                    warn!("Failed to parse funding rate response for {}: {}", mexc_symbol, e);
+                    warn!(
+                        "Failed to parse funding rate response for {}: {}",
+                        mexc_symbol, e
+                    );
                     continue;
                 }
             };
@@ -333,12 +359,11 @@ impl ExchangeConnector for MEXCConnector {
             "newClientOrderId": order.client_order_id.as_deref().unwrap_or(""),
         });
 
-        let response = match tokio::time::timeout(Duration::from_secs(5), self
-            .client
-            .post(&url)
-            .json(&mexc_order)
-            .send())
-            .await
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.post(&url).json(&mexc_order).send(),
+        )
+        .await
         {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
@@ -392,12 +417,11 @@ impl ExchangeConnector for MEXCConnector {
             "orderId": order_id,
         });
 
-        let response = match tokio::time::timeout(Duration::from_secs(5), self
-            .client
-            .delete(&url)
-            .json(&cancel_request)
-            .send())
-            .await
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.delete(&url).json(&cancel_request).send(),
+        )
+        .await
         {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
@@ -434,7 +458,12 @@ impl ExchangeConnector for MEXCConnector {
             self.base.config.rest_url, order_id
         );
 
-        let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
@@ -524,7 +553,12 @@ impl ExchangeConnector for MEXCConnector {
 
         let url = format!("{}/api/v3/account", self.base.config.rest_url);
 
-        let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(
@@ -534,7 +568,8 @@ impl ExchangeConnector for MEXCConnector {
             }
             Err(_) => {
                 return Err(arbitrage_core::ArbitrageError::Timeout(
-                    "MEXC get_balance timed out after 5s: operation=get_balance, exchange=MEXC".to_string(),
+                    "MEXC get_balance timed out after 5s: operation=get_balance, exchange=MEXC"
+                        .to_string(),
                 ));
             }
         };
@@ -599,8 +634,15 @@ impl ExchangeConnector for MEXCConnector {
             url.push_str(&format!("?symbol={}{}", sym.base, sym.quote));
         }
 
-        let symbol_filter = symbol.map(|s| format!("{}/{}", s.base, s.quote)).unwrap_or_else(|| "all".to_string());
-        let response = match tokio::time::timeout(Duration::from_secs(5), self.client.get(&url).send()).await {
+        let symbol_filter = symbol
+            .map(|s| format!("{}/{}", s.base, s.quote))
+            .unwrap_or_else(|| "all".to_string());
+        let response = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client.get(&url).send(),
+        )
+        .await
+        {
             Ok(Ok(resp)) => resp,
             Ok(Err(e)) => {
                 return Err(arbitrage_core::ArbitrageError::Network(format!(

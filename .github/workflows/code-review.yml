@@ -44,70 +44,142 @@ jobs:
             - @testing-1: Find missing tests, low coverage, untested edge cases
             - @tech-debt-1: Find code duplication, dead code, magic numbers, poor naming
 
+            ## Consolidation Strategy (CRITICAL)
+            You MUST consolidate related findings into 10-15 maximum issues. Group findings by:
+            1. Root cause (e.g., all unwrap() panics → one issue)
+            2. Affected module (e.g., all connector issues → one issue)
+            3. Category (e.g., all performance issues → one issue)
+            4. Pattern (e.g., all missing tests → one issue)
+
+            Each consolidated issue should:
+            - Merge all related findings into one comprehensive description
+            - List all affected files and line numbers
+            - Include reproduction steps for each finding
+            - Provide unified acceptance criteria
+            - Map to the highest priority among merged findings
+
             ## Output Format
-            For each issue found, create a GitHub issue with:
-            ```yaml
+            Create markdown files in `docs/outputs/issues/` directory with this exact structure:
+
+            ```markdown
             ---
-            title: [P1-P3] Clear title (<70 chars)
-            problem: One sentence
-            impact: User/system impact
-            effort: 1-5
-            risk: High|Medium|Low
+            title: [P1-P3] Clear, consolidated title (<70 chars)
+            problem: One-sentence summary of the consolidated issue
+            impact: User/system impact of all merged findings
+            reproduction: |
+              Step-by-step reproduction for each finding:
+              1. First finding reproduction
+              2. Second finding reproduction
+              ...
+            acceptance_criteria: |
+              - Unified acceptance criteria covering all findings
+              - Each criterion should be testable
+            effort: 1-5 (based on most complex finding)
+            risk: High|Medium|Low (highest risk among findings)
             category: security|critical|performance|reliability|testing|tech-debt
             files:
-            - src/file.rs
+            - path/to/file1.rs:line1
+            - path/to/file2.rs:line2
             labels: security|crash|performance|error-handling|testing|debt
             ---
             ```
 
-            Priority: P1 (bugs/security), P2 (performance/tests), P3 (quality/refactoring).
-            Output summary: how many issues created by category and priority.
+            ## Available Repository Labels (USE ONLY THESE)
+            Standard GitHub labels:
+            - bug, documentation, duplicate, enhancement, good first issue, help wanted, invalid, question, wontfix
 
-      - name: Create GitHub Issues from Findings
+            Project-specific labels:
+            - refactoring, technical-debt, testing, performance, safety, critical, security, financial, reliability, trading
+            - api-design, validation, calculation, concurrency, optimization, maintainability, refactor, test-coverage
+            - robustness, error-handling, code-quality
+
+            ## Label Mapping Guidelines
+            Map findings to appropriate labels:
+            - Security issues: security, safety, critical
+            - Crashes/panics: bug, critical, crash
+            - Performance: performance, optimization
+            - Error handling: error-handling, robustness, reliability
+            - Testing: testing, test-coverage
+            - Code quality: technical-debt, code-quality, maintainability, refactoring, refactor
+            - Financial calculations: financial, calculation, validation
+            - Trading logic: trading, api-design
+            - Concurrency: concurrency, reliability
+
+            ## Priority Guidelines
+            - P1: Bugs, security vulnerabilities, crashes, data loss
+            - P2: Performance issues, missing critical tests, reliability concerns
+            - P3: Code quality, documentation, refactoring, minor improvements
+
+            ## Final Output
+            After creating all issue files, output a summary:
+            ```
+            ## Code Review Summary
+            - Total issues created: X (must be 10-15)
+            - By priority: P1: X, P2: X, P3: X
+            - By category: security: X, critical: X, performance: X, reliability: X, testing: X, tech-debt: X
+            - Files analyzed: X
+            - Findings consolidated: Y → X issues
+            ```
+
+      - name: Create GitHub Issues from Generated Files
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Wait for OpenCode to finish
-          sleep 10
-
-          # Check if OpenCode created its own branch with findings
-          OPENCODE_BRANCH=$(git branch -r | grep opencode | head -1 | sed 's/origin\///')
-          if [ -n "$OPENCODE_BRANCH" ]; then
-            echo "Checking OpenCode branch: $OPENCODE_BRANCH"
-            git checkout "$OPENCODE_BRANCH"
-          fi
+          # Wait for OpenCode to finish and create files
+          echo "Waiting for OpenCode to generate issue files..."
+          sleep 30
 
           # Check if findings directory exists
           if [ -d "docs/outputs/issues" ]; then
             echo "Found findings directory"
 
-            # Read all findings and create consolidated issues (max 15)
-            FINDINGS=$(find docs/outputs/issues -name "*.md" -type f 2>/dev/null | head -15)
+            # Find all markdown files (excluding .gitkeep)
+            FINDINGS=$(find docs/outputs/issues -name "*.md" -type f ! -name ".gitkeep" 2>/dev/null)
+
+            if [ -z "$FINDINGS" ]; then
+              echo "No issue files found in docs/outputs/issues"
+              exit 0
+            fi
 
             ISSUE_COUNT=0
             for finding in $FINDINGS; do
-              if [ $ISSUE_COUNT -ge 15 ]; then
-                echo "Reached maximum 15 issues limit"
-                break
-              fi
-
               # Extract metadata from finding file
               TITLE=$(grep "^title:" "$finding" 2>/dev/null | head -1 | sed 's/title: //' | tr -d '"')
               LABELS=$(grep "^labels:" "$finding" 2>/dev/null | head -1 | sed 's/labels: //' | tr -d '"')
 
-              if [ -n "$TITLE" ] && [ -n "$LABELS" ]; then
-                # Create GitHub issue
+              if [ -n "$TITLE" ]; then
+                # Read the entire file as the issue body
                 BODY=$(cat "$finding")
                 echo "Creating issue: $TITLE"
 
-                # Create labels string safely
+                # Create labels string - only use labels that exist in the repository
                 if [ -n "$LABELS" ]; then
-                  LABEL_STRING="auto-generated,code-review,$LABELS"
-                else
-                  LABEL_STRING="auto-generated,code-review"
+                  # Split labels by | and validate each one
+                  VALID_LABELS=""
+                  IFS='|' read -ra LABEL_ARRAY <<< "$LABELS"
+                  for label in "${LABEL_ARRAY[@]}"; do
+                    label=$(echo "$label" | xargs) # trim whitespace
+                    # Check if label exists (using gh label list)
+                    if gh label list --search "$label" --limit 1 --json name --jq '.[].name' | grep -q "^${label}$"; then
+                      if [ -n "$VALID_LABELS" ]; then
+                        VALID_LABELS="$VALID_LABELS,$label"
+                      else
+                        VALID_LABELS="$label"
+                      fi
+                    fi
+                  done
+                  LABEL_STRING="$VALID_LABELS"
                 fi
 
+                # Add auto-generated label if any valid labels found
+                if [ -n "$LABEL_STRING" ]; then
+                  LABEL_STRING="auto-generated,$LABEL_STRING"
+                else
+                  LABEL_STRING="auto-generated"
+                fi
+
+                # Create GitHub issue using gh CLI
                 gh issue create \
                   --title "$TITLE" \
                   --body "$BODY" \
@@ -118,10 +190,11 @@ jobs:
               fi
             done
 
-            echo "Created $ISSUE_COUNT GitHub issues from findings"
+            echo "Created $ISSUE_COUNT GitHub issues from generated files"
 
-            # Switch back to main branch
-            git checkout main
+            # Clean up generated files after creating issues
+            find docs/outputs/issues -name "*.md" -type f ! -name ".gitkeep" -delete
+            echo "Cleaned up generated issue files"
           else
             echo "No findings directory found"
           fi

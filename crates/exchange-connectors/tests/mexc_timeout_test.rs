@@ -12,10 +12,14 @@ async fn test_mexc_fetch_order_book_timeout() {
 
     Mock::given(method("GET"))
         .and(path("/api/v3/depth"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "bids": [["50000.00", "1.5"]],
-            "asks": [["50001.00", "1.0"]]
-        })).set_delay(Duration::from_secs(10)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "bids": [["50000.00", "1.5"]],
+                    "asks": [["50001.00", "1.0"]]
+                }))
+                .set_delay(Duration::from_secs(10)),
+        )
         .mount(&mock_server)
         .await;
 
@@ -44,15 +48,17 @@ async fn test_mexc_fetch_symbols_timeout() {
 
     Mock::given(method("GET"))
         .and(path("/api/v3/exchangeInfo"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(json!({
-                "symbols": [{
-                    "symbol": "BTCUSDT",
-                    "status": "TRADING",
-                    "isSpotTradingAllowed": true
-                }]
-            }))
-            .set_delay(Duration::from_secs(10)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "symbols": [{
+                        "symbol": "BTCUSDT",
+                        "status": "TRADING",
+                        "isSpotTradingAllowed": true
+                    }]
+                }))
+                .set_delay(Duration::from_secs(10)),
+        )
         .mount(&mock_server)
         .await;
 
@@ -79,17 +85,19 @@ async fn test_mexc_fetch_tickers_timeout() {
 
     Mock::given(method("GET"))
         .and(path("/api/v3/ticker/bookTicker"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(json!([
-                {
-                    "symbol": "BTCUSDT",
-                    "bidPrice": "50000.50",
-                    "askPrice": "50001.50",
-                    "bidQty": "1.5",
-                    "askQty": "1.0"
-                }
-            ]))
-            .set_delay(Duration::from_secs(10)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!([
+                    {
+                        "symbol": "BTCUSDT",
+                        "bidPrice": "50000.50",
+                        "askPrice": "50001.50",
+                        "bidQty": "1.5",
+                        "askQty": "1.0"
+                    }
+                ]))
+                .set_delay(Duration::from_secs(10)),
+        )
         .mount(&mock_server)
         .await;
 
@@ -118,13 +126,15 @@ async fn test_mexc_get_balance_timeout() {
 
     Mock::given(method("GET"))
         .and(path("/api/v3/account"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(json!({
-                "balances": [
-                    {"asset": "USDT", "free": "1000.00", "locked": "0.00"}
-                ]
-            }))
-            .set_delay(Duration::from_secs(10)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "balances": [
+                        {"asset": "USDT", "free": "1000.00", "locked": "0.00"}
+                    ]
+                }))
+                .set_delay(Duration::from_secs(10)),
+        )
         .mount(&mock_server)
         .await;
 
@@ -151,7 +161,9 @@ async fn test_mexc_error_context_includes_operation_and_symbol() {
 
     Mock::given(method("GET"))
         .and(path("/api/v3/depth"))
-        .respond_with(ResponseTemplate::new(500).set_body_raw("Internal Server Error", "text/plain"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_raw("Internal Server Error", "text/plain"),
+        )
         .mount(&mock_server)
         .await;
 
@@ -180,12 +192,14 @@ async fn test_mexc_timeout_error_includes_operation_and_symbol() {
 
     Mock::given(method("GET"))
         .and(path("/api/v3/depth"))
-        .respond_with(ResponseTemplate::new(200)
-            .set_body_json(json!({
-                "bids": [["50000.00", "1.5"]],
-                "asks": [["50001.00", "1.0"]]
-            }))
-            .set_delay(Duration::from_secs(10)))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({
+                    "bids": [["50000.00", "1.5"]],
+                    "asks": [["50001.00", "1.0"]]
+                }))
+                .set_delay(Duration::from_secs(10)),
+        )
         .mount(&mock_server)
         .await;
 
