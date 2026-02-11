@@ -9,11 +9,6 @@ import type { TradeSignal, ExchangeStatus, ApiResponse } from '$lib/types';
 const API_BASE_URL = '/api';
 
 class ApiClient {
-	private getAuthHeaders(): HeadersInit {
-		const token = localStorage.getItem('jwt_token');
-		return token ? { 'Authorization': `Bearer ${token}` } : {};
-	}
-
 	private async request<T>(
 		endpoint: string,
 		options?: RequestInit,
@@ -23,7 +18,6 @@ class ApiClient {
 			...options,
 			headers: {
 				'Content-Type': 'application/json',
-				...this.getAuthHeaders(),
 				...options?.headers
 			}
 		});
@@ -147,19 +141,46 @@ class ApiClient {
 		});
 	}
 
-	// Authentication
-	async login(username: string, password: string): Promise<{
-		success: boolean;
-		token?: string;
-		expires_at?: string;
-		message: string;
+	// Audit Log
+	async getAuditLog(limit?: number): Promise<{
+		entries: Array<{
+			id: string;
+			timestamp: string;
+			decision: string;
+			status: string;
+			message: string;
+			opportunity_id?: string;
+			symbol?: string;
+			exchanges?: string[];
+			profit?: string;
+		}>;
+		total: number;
+		limit: number;
 	}> {
-		const response = await fetch(`${API_BASE_URL}/auth/login`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ username, password })
-		});
-		return response.json();
+		const query = limit ? `?limit=${limit}` : '';
+		return this.request(`/audit${query}`);
+	}
+
+	// Bridge Status
+	async getBridgeStatus(): Promise<{
+		bridge: {
+			connected_exchanges: number;
+			total_exchanges: number;
+			total_messages_received: number;
+			total_errors: number;
+			active_symbols: number;
+		};
+		engine: {
+			cached_signals: number;
+			order_books_cached: number;
+			tickers_cached: number;
+			funding_rates_cached: number;
+			signals_detected: number;
+			signals_emitted: number;
+		};
+		last_updated: string;
+	}> {
+		return this.request('/status/bridge');
 	}
 }
 

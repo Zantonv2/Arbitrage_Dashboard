@@ -6,11 +6,12 @@
 //! - Execution preparation and confirmation
 //! - System status and analytics
 //! - Configuration management
-//! - Authentication
+//!
+//! **Note:** Authentication has been removed for local-only use.
 
 use crate::{
     audit_logger::{AuditDecision, AuditEntry},
-    server::{create_jwt, AppState},
+    server::AppState,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -600,138 +601,4 @@ pub async fn update_config(
     Ok(Json(response))
 }
 
-// ============================================================================
-// Authentication Endpoints
-// ============================================================================
 
-#[derive(Debug, Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-impl LoginRequest {
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-
-        // Validate username: 3-50 chars, alphanumeric
-        if self.username.len() < 3 {
-            errors.push("username must be at least 3 characters".to_string());
-        } else if self.username.len() > 50 {
-            errors.push("username must be at most 50 characters".to_string());
-        } else if !self.username.chars().all(|c| c.is_alphanumeric()) {
-            errors.push("username must be alphanumeric".to_string());
-        }
-
-        // Validate password: strong password requirements
-        if self.password.len() < 12 {
-            errors.push("password must be at least 12 characters".to_string());
-        } else if self.password.len() > 128 {
-            errors.push("password must be at most 128 characters".to_string());
-        } else {
-            // Check for at least one uppercase letter
-            if !self.password.chars().any(|c| c.is_uppercase()) {
-                errors.push("password must contain at least one uppercase letter".to_string());
-            }
-            // Check for at least one lowercase letter
-            if !self.password.chars().any(|c| c.is_lowercase()) {
-                errors.push("password must contain at least one lowercase letter".to_string());
-            }
-            // Check for at least one digit
-            if !self.password.chars().any(|c| c.is_ascii_digit()) {
-                errors.push("password must contain at least one digit".to_string());
-            }
-            // Check for at least one special character
-            if !self.password.chars().any(|c| !c.is_alphanumeric()) {
-                errors.push("password must contain at least one special character".to_string());
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct LoginResponse {
-    pub success: bool,
-    pub token: Option<String>,
-    pub expires_at: Option<String>,
-    pub message: String,
-}
-
-pub async fn login(
-    State(state): State<AppState>,
-    Json(request): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, StatusCode> {
-    debug!("POST /api/auth/login request received");
-
-    // Validate request
-    if let Err(errors) = request.validate() {
-        return Ok(Json(LoginResponse {
-            success: false,
-            token: None,
-            expires_at: None,
-            message: format!("Validation failed: {}", errors.join(", ")),
-        }));
-    }
-
-    let admin_username = match std::env::var("ADMIN_USERNAME") {
-        Ok(username) => username,
-        Err(_) => {
-            return Ok(Json(LoginResponse {
-                success: false,
-                token: None,
-                expires_at: None,
-                message: "Server configuration error: ADMIN_USERNAME not set".to_string(),
-            }));
-        }
-    };
-
-    let admin_password = match std::env::var("ADMIN_PASSWORD") {
-        Ok(password) => password,
-        Err(_) => {
-            return Ok(Json(LoginResponse {
-                success: false,
-                token: None,
-                expires_at: None,
-                message: "Server configuration error: ADMIN_PASSWORD not set".to_string(),
-            }));
-        }
-    };
-
-    if request.username == admin_username && request.password == admin_password {
-        let secret = state.jwt_secret.as_str();
-        match create_jwt(&request.username, secret) {
-            Ok(token) => {
-                let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
-                Ok(Json(LoginResponse {
-                    success: true,
-                    token: Some(token),
-                    expires_at: Some(expires_at.to_rfc3339()),
-                    message: "Login successful".to_string(),
-                }))
-            }
-            Err(e) => {
-                warn!("Failed to create JWT token: {}", e);
-                Ok(Json(LoginResponse {
-                    success: false,
-                    token: None,
-                    expires_at: None,
-                    message: "Failed to generate token".to_string(),
-                }))
-            }
-        }
-    } else {
-        debug!("Failed login attempt");
-        Ok(Json(LoginResponse {
-            success: false,
-            token: None,
-            expires_at: None,
-            message: "Invalid credentials".to_string(),
-        }))
-    }
-}

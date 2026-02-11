@@ -2,6 +2,9 @@
 //!
 //! Main HTTP server for the arbitrage dashboard.
 //! Provides REST API endpoints and WebSocket connections for real-time data.
+//!
+//! **Note:** Authentication has been removed for local-only use.
+//! The server is intended for local access only.
 
 use crate::{
     audit_logger::AuditLogger, bridge::ArbitrageBridge, config_manager::ConfigManager,
@@ -29,7 +32,6 @@ use axum::{
     Router,
 };
 use http::{Request, StatusCode};
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -48,8 +50,6 @@ use tracing::{error, info, warn};
 
 const RATE_LIMIT_MAX_REQUESTS: u64 = 100;
 const RATE_LIMIT_WINDOW_SECS: u64 = 60;
-const JWT_SECRET_ENV: &str = "JWT_SECRET";
-const JWT_EXPIRY_HOURS: u64 = 24;
 
 fn sanitize_path(path: &str) -> Result<std::path::PathBuf, String> {
     if path.contains("..") {
@@ -67,16 +67,8 @@ pub struct AppState {
     pub storage: Arc<StorageService>,
     pub strategy_registry: Arc<StrategyRegistry>,
     pub bridge: Arc<Mutex<ArbitrageBridge>>,
-    pub jwt_secret: Arc<String>,
     pub audit_logger: Arc<AuditLogger>,
     pub executor_config: ExecutorConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String,
-    pub exp: u64,
-    pub iat: u64,
 }
 
 #[derive(Clone)]
@@ -138,52 +130,6 @@ fn get_client_ip(req: &Request<Body>) -> String {
         .to_string()
 }
 
-pub fn validate_jwt(token: &str, secret: &str) -> bool {
-    let mut validation = Validation::default();
-    validation.validate_exp = true;
-
-    jsonwebtoken::decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    )
-    .is_ok()
-}
-
-pub fn create_jwt(user_id: &str, secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
-    let now = chrono::Utc::now().timestamp() as u64;
-    let expiry = now + (JWT_EXPIRY_HOURS * 3600);
-
-    let claims = Claims {
-        sub: user_id.to_string(),
-        exp: expiry,
-        iat: now,
-    };
-
-    jsonwebtoken::encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-}
-
-fn get_jwt_secret(config: &Config) -> Result<String, Box<dyn std::error::Error>> {
-    // Priority: config.toml > environment variable > error
-    if !config.server.jwt_secret.is_empty()
-        && config.server.jwt_secret != "insecure-default-change-me"
-    {
-        Ok(config.server.jwt_secret.clone())
-    } else {
-        match std::env::var(JWT_SECRET_ENV) {
-            Ok(secret) => Ok(secret),
-            Err(_) => {
-                error!("JWT_SECRET must be set either in config.toml [server] section or as environment variable");
-                Err("JWT_SECRET configuration missing. Set it in config.toml or as environment variable".into())
-            }
-        }
-    }
-}
-
 fn create_error_response(status_code: StatusCode, message: &str) -> impl IntoResponse {
     // Use safe response building without .expect()
     let body = Body::from(message.to_string());
@@ -218,8 +164,6 @@ impl ArbitrageServer {
         // Load configuration
         let config_manager = ConfigManager::new(config_path)?;
         let config = Arc::new(config_manager.get_config().clone());
-
-        let jwt_secret = get_jwt_secret(&config)?;
 
         // Initialize core components
         let (storage, normalizer, confidence_scorer, size_calculator, execution_preparer) =
@@ -277,7 +221,6 @@ impl ArbitrageServer {
             storage,
             strategy_registry,
             bridge: bridge.clone(),
-            jwt_secret: Arc::new(jwt_secret),
             audit_logger,
             executor_config,
         };
@@ -388,7 +331,6 @@ impl ArbitrageServer {
         state: AppState,
         config: &Config,
     ) -> Result<Router, Box<dyn std::error::Error>> {
-        let jwt_secret = state.jwt_secret.as_str().to_string();
         let rate_limit_state = Arc::new(RateLimitState::new());
 
         let allowed_origins: Vec<String> = if config.server.cors_origins.is_empty() {
@@ -413,7 +355,7 @@ impl ArbitrageServer {
         let rate_limit_state_for_api = rate_limit_state.clone();
         let rate_limit_state_for_public = rate_limit_state.clone();
 
-        // Protected API routes
+        // API routes (all public for local-only use)
         let api_routes = Router::new()
             // Signals
             .route("/signals", get(routes::get_signals))
@@ -437,10 +379,9 @@ impl ArbitrageServer {
             .with_state(state.clone())
             .layer(axum::middleware::from_fn(
                 move |req: Request<Body>, next: axum::middleware::Next| {
-                    let jwt_secret = jwt_secret.clone();
                     let rate_limit_state = rate_limit_state_for_api.clone();
                     async move {
-                        // Rate limiting
+                        // Rate limiting only (no auth for local-only use)
                         let client_ip = get_client_ip(&req);
                         if !rate_limit_state.check_rate_limit(
                             &client_ip,
@@ -454,34 +395,6 @@ impl ArbitrageServer {
                             ));
                         }
 
-                        // Authentication
-                        let auth_header = req.headers().get("authorization").cloned();
-                        let is_valid = match auth_header {
-                            Some(header) => {
-                                if let Ok(token_str) = header.to_str() {
-                                    if token_str.starts_with("Bearer ") {
-                                        validate_jwt(
-                                            token_str.trim_start_matches("Bearer "),
-                                            &jwt_secret,
-                                        )
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            }
-                            None => false,
-                        };
-
-                        if !is_valid {
-                            warn!("Invalid or missing JWT token");
-                            return Err(create_error_response(
-                                StatusCode::UNAUTHORIZED,
-                                "Invalid or missing authentication token",
-                            ));
-                        }
-
                         Ok(next.run(req).await)
                     }
                 },
@@ -492,10 +405,9 @@ impl ArbitrageServer {
             .route("/ws", get(websocket::websocket_handler))
             .with_state(state.clone());
 
-        // Public routes with rate limiting
+        // Public routes (health check)
         let public_routes = Router::new()
             .route("/health", get(|| async { "OK" }))
-            .route("/api/auth/login", post(routes::login))
             .with_state(state.clone())
             .layer(axum::middleware::from_fn(
                 move |req: Request<Body>, next: axum::middleware::Next| {

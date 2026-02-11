@@ -28,6 +28,16 @@ class SystemStore {
 		}
 	}
 
+	enableStrategy(strategy: StrategyType): void {
+		if (!this.enabledStrategies.includes(strategy)) {
+			this.enabledStrategies = [...this.enabledStrategies, strategy];
+		}
+	}
+
+	disableStrategy(strategy: StrategyType): void {
+		this.enabledStrategies = this.enabledStrategies.filter((s) => s !== strategy);
+	}
+
 	enableAllStrategies(strategies: StrategyType[]): void {
 		this.enabledStrategies = [...strategies];
 	}

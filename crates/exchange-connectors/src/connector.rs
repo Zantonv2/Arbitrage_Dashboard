@@ -26,6 +26,12 @@ pub struct ConnectorConfig {
     pub api_secret: Option<String>,
     pub passphrase: Option<String>,
 
+    /// Environment flag (testnet vs production)
+    pub is_testnet: bool,
+
+    /// Whether credentials are encrypted
+    pub credentials_encrypted: bool,
+
     /// Rate limiting configuration
     pub rate_limit_per_second: u32,
     pub rate_limit_burst: u32,
@@ -51,6 +57,8 @@ impl Default for ConnectorConfig {
             api_key: None,
             api_secret: None,
             passphrase: None,
+            is_testnet: false,
+            credentials_encrypted: false,
             rate_limit_per_second: 10,
             rate_limit_burst: 20,
             reconnect_interval_ms: 5000,
@@ -60,6 +68,70 @@ impl Default for ConnectorConfig {
             enable_trades: true,
             enable_tickers: true,
             enable_funding_rates: false,
+        }
+    }
+}
+
+impl ConnectorConfig {
+    /// Check if credentials are configured for this connector
+    pub fn has_credentials(&self) -> bool {
+        self.api_key.is_some() && self.api_secret.is_some()
+    }
+
+    /// Validate that credentials are present and valid
+    pub fn validate_credentials(&self) -> Result<()> {
+        if self.api_key.is_none() {
+            return Err(arbitrage_core::ArbitrageError::AuthenticationFailed(
+                format!("[{}] API key is not configured", self.exchange_id),
+            ));
+        }
+        if self.api_secret.is_none() {
+            return Err(arbitrage_core::ArbitrageError::AuthenticationFailed(
+                format!("[{}] API secret is not configured", self.exchange_id),
+            ));
+        }
+        let key = self.api_key.as_ref().unwrap();
+        let secret = self.api_secret.as_ref().unwrap();
+        if key.is_empty() {
+            return Err(arbitrage_core::ArbitrageError::AuthenticationFailed(
+                format!("[{}] API key is empty", self.exchange_id),
+            ));
+        }
+        if secret.is_empty() {
+            return Err(arbitrage_core::ArbitrageError::AuthenticationFailed(
+                format!("[{}] API secret is empty", self.exchange_id),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Get credentials as ExchangeCredentials struct
+    pub fn get_credentials(&self) -> Result<super::auth::ExchangeCredentials> {
+        self.validate_credentials()?;
+        Ok(super::auth::ExchangeCredentials::new(
+            self.api_key.as_ref().unwrap().clone(),
+            self.api_secret.as_ref().unwrap().clone(),
+            self.passphrase.clone(),
+        ))
+    }
+
+    /// Get REST URL based on environment (testnet vs production)
+    pub fn get_rest_url(&self) -> String {
+        if self.is_testnet {
+            // For exchanges that have separate testnet URLs
+            self.rest_url.clone()
+        } else {
+            self.rest_url.clone()
+        }
+    }
+
+    /// Get WebSocket URL based on environment
+    pub fn get_ws_url(&self) -> String {
+        if self.is_testnet {
+            // For exchanges that have separate testnet WebSocket URLs
+            self.ws_url.clone()
+        } else {
+            self.ws_url.clone()
         }
     }
 }

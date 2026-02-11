@@ -1,3 +1,5 @@
+use crate::auth::{self, mexc_auth_headers};
+
 use crate::connector::{
     CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus,
     OrderSide, OrderStatus, OrderStatusType, OrderType, TickerData,
@@ -341,7 +343,12 @@ impl ExchangeConnector for MEXCConnector {
     ) -> Result<crate::connector::OrderResponse> {
         use crate::connector::{OrderResponse, OrderStatusType};
 
-        let url = format!("{}/api/v3/order", self.base.config.rest_url);
+        // MEXC API endpoint for placing orders
+        let endpoint = "/api/v3/order";
+        let url = format!("{}{}", self.base.config.get_rest_url(), endpoint);
+
+        // Validate credentials before making request
+        let credentials = self.base.config.get_credentials()?;
 
         let mexc_order = serde_json::json!({
             "symbol": format!("{}{}", order.symbol.base, order.symbol.quote),
@@ -359,9 +366,15 @@ impl ExchangeConnector for MEXCConnector {
             "newClientOrderId": order.client_order_id.as_deref().unwrap_or(""),
         });
 
+        let body_str = mexc_order.to_string();
+
+        // Generate authentication headers
+        let auth_headers = mexc_auth_headers("POST", endpoint, &body_str, &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
         let response = match tokio::time::timeout(
             Duration::from_secs(5),
-            self.client.post(&url).json(&mexc_order).send(),
+            self.client.post(&url).headers(header_map).json(&mexc_order).send(),
         )
         .await
         {

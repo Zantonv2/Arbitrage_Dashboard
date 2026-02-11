@@ -39,7 +39,7 @@
   <div class="max-w-md w-full space-y-8 p-8 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
     <div>
       <h2 class="text-3xl font-bold text-center text-gray-900 dark:text-white">
-        Arbitrage Dashboard
+        Arbitrage
       </h2>
       <p class="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
         Sign in to access the dashboard

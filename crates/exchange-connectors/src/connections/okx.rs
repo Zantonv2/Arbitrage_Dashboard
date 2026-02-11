@@ -1,3 +1,5 @@
+use crate::auth::{self, okx_auth_headers, ExchangeCredentials};
+
 use crate::connector::{
     CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus,
     OrderStatus, OrderStatusType, TickerData,
@@ -282,7 +284,11 @@ impl ExchangeConnector for OKXConnector {
         use crate::connector::{OrderResponse, OrderStatusType};
 
         // OKX API endpoint for placing orders
-        let url = format!("{}/api/v5/trade/order", self.base.config.rest_url);
+        let endpoint = "/api/v5/trade/order";
+        let url = format!("{}{}", self.base.config.get_rest_url(), endpoint);
+
+        // Validate credentials before making request
+        let credentials = self.base.config.get_credentials()?;
 
         // Convert our order request to OKX format
         let okx_order = serde_json::json!({
@@ -302,10 +308,18 @@ impl ExchangeConnector for OKXConnector {
             "clOrdId": order.client_order_id.as_deref().unwrap_or(""),
         });
 
+        let body_str = okx_order.to_string();
+
+        // Generate authentication headers
+        let auth_headers =
+            okx_auth_headers("POST", endpoint, &body_str, &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
         // Make authenticated request to OKX
         let response = self
             .client
             .post(&url)
+            .headers(header_map)
             .json(&okx_order)
             .send()
             .await

@@ -1,4 +1,5 @@
 pub mod connections;
+pub mod auth;
 pub mod connector;
 pub mod connector_trait;
 pub mod connector_unit_tests;

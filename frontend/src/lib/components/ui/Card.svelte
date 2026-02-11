@@ -8,6 +8,7 @@
 		children: Snippet;
 		class?: string;
 		onclick?: (e: MouseEvent) => void;
+		onkeydown?: (e: KeyboardEvent) => void;
 	}
 
 	let {
@@ -16,10 +17,11 @@
 		interactive = false,
 		children,
 		class: className = '',
-		onclick
+		onclick,
+		onkeydown
 	}: Props = $props();
 
-	const baseClasses = 'rounded-xl transition-all duration-fast ease-standard overflow-hidden h-full';
+	const baseClasses = 'rounded-xl transition-colors duration-fast ease-standard overflow-hidden h-full';
 	
 	const variantClasses = {
 		elevated: 'glass glass-elevation-1',
@@ -41,15 +43,24 @@
 	let cardClasses = $derived(
 		`${baseClasses} ${variantClasses[variant]} ${paddingClasses[padding]} ${interactiveClasses} ${className}`
 	);
+
+	function handleKeydown(e: KeyboardEvent): void {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			onclick?.(e as unknown as MouseEvent);
+		}
+		onkeydown?.(e);
+	}
 </script>
 
 {#if interactive}
 	<div
 		class={cardClasses}
 		onclick={onclick}
+		onkeydown={handleKeydown}
 		role="button"
 		tabindex="0"
-		onkeydown={(e) => e.key === 'Enter' && onclick?.(e as unknown as MouseEvent)}
+		aria-pressed="false"
 	>
 		{@render children()}
 	</div>

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { TradeSignal, ExchangeId } from '$lib/types';
-	import Card from '$lib/components/ui/Card.svelte';
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
+	import { formatCurrency, t, getStrategyName } from '$lib/i18n.svelte';
 
 	interface Props {
 		signal: TradeSignal;
@@ -13,9 +13,13 @@
 
 	let { signal, variant = 'compact', onSelect, onExecute }: Props = $props();
 
+	// Default position size for profit calculation
+	const DEFAULT_POSITION_SIZE = 10000;
+
 	const isProfitable = $derived(signal.profitBps > 0);
 	const profitColor = $derived(isProfitable ? 'profit' : 'loss');
 	const confidencePercent = $derived(Math.round(signal.confidence * 100));
+	const actualProfit = $derived((signal.profitBps * DEFAULT_POSITION_SIZE) / 10000);
 	
 	const exchangeColors: Record<ExchangeId, string> = {
 		okx: '#0052FF',
@@ -26,21 +30,8 @@
 		bitstamp: '#00A6C2'
 	};
 	
-	const strategyLabels: Record<string, string> = {
-		'cex-arbitrage': 'CEX Arb',
-		'funding-arbitrage': 'Funding',
-		'spot-perp-arbitrage': 'Spot-Perp',
-		'stablecoin-arbitrage': 'Stable',
-		'cross-exchange-arbitrage': 'Cross-Ex',
-		'spread-capture': 'Spread',
-		'latency-arbitrage': 'Latency',
-		'convergence-arbitrage': 'Convergence',
-		'new-listing-arbitrage': 'New List',
-		'hedged-funding': 'Hedged'
-	};
-	
-	function formatProfit(bps: number): string {
-		return `${bps > 0 ? '+' : ''}${bps.toFixed(2)} bps`;
+	function formatProfit(profit: number): string {
+		return formatCurrency(profit);
 	}
 	
 	function formatTime(timestamp: number): string {
@@ -53,201 +44,266 @@
 	}
 </script>
 
-<Card 
-	variant="elevated" 
-	padding={variant === 'detailed' ? 'large' : 'medium'}
-	interactive={!!onSelect}
+<div 
+	class="signal-card glass {isProfitable ? 'signal-profitable' : 'signal-loss'}"
 	onclick={() => onSelect?.(signal)}
-	class="signal-card group {isProfitable ? 'signal-profitable' : 'signal-loss'}"
+	onkeydown={(e) => e.key === 'Enter' && onSelect?.(signal)}
+	role="button"
+	tabindex="0"
+	aria-label="{signal.symbol} - {isProfitable ? 'Profit' : 'Loss'}: {formatProfit(actualProfit)}"
 >
-	<!-- Header: Profit Badge & Confidence -->
-	<div class="flex items-start justify-between mb-3">
+	<!-- Profit Header -->
+	<div class="signal-header">
 		<Badge variant="filled" color={profitColor} size="medium">
-			{formatProfit(signal.profitBps)}
+			{formatProfit(actualProfit)}
 		</Badge>
-		<div class="flex flex-col items-end gap-1">
-			<span class="text-label-sm text-on-surface-variant">{confidencePercent}% confidence</span>
-			<span class="text-label-sm text-on-surface-variant">{formatTime(signal.timestamp)}</span>
+		<div class="signal-meta">
+			<span class="confidence">{confidencePercent}%</span>
+			<span class="timestamp">{formatTime(signal.timestamp)}</span>
 		</div>
 	</div>
 	
 	<!-- Exchange Flow -->
-	<div class="flex items-center gap-3 my-4">
+	<div class="exchange-flow">
 		<div 
-			class="exchange-badge"
-			style="background-color: {exchangeColors[signal.buyExchange]}20; color: {exchangeColors[signal.buyExchange]}"
+			class="exchange-node"
+			style="--exchange-color: {exchangeColors[signal.buyExchange]}"
 		>
-			<span class="text-label-md font-semibold">{signal.buyExchange.toUpperCase()}</span>
-			<span class="text-label-sm opacity-80">Buy</span>
+			<span class="exchange-name">{signal.buyExchange.toUpperCase()}</span>
+			<span class="exchange-label">{t('signalCard.buy')}</span>
 		</div>
 		
-		<div class="flex-1 flex items-center justify-center">
+		<div class="flow-connector">
 			<div class="flow-line"></div>
-			<svg class="flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+			<svg class="flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
 				<path d="M5 12h14M12 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round"/>
 			</svg>
 		</div>
 		
 		<div 
-			class="exchange-badge"
-			style="background-color: {exchangeColors[signal.sellExchange]}20; color: {exchangeColors[signal.sellExchange]}"
+			class="exchange-node"
+			style="--exchange-color: {exchangeColors[signal.sellExchange]}"
 		>
-			<span class="text-label-md font-semibold">{signal.sellExchange.toUpperCase()}</span>
-			<span class="text-label-sm opacity-80">Sell</span>
+			<span class="exchange-name">{signal.sellExchange.toUpperCase()}</span>
+			<span class="exchange-label">{t('signalCard.sell')}</span>
 		</div>
 	</div>
 	
 	<!-- Symbol & Strategy -->
-	<div class="flex items-center justify-between mb-3">
-		<div class="symbol-display">
-			<span class="text-title-md font-mono font-semibold text-on-surface">{signal.symbol}</span>
-		</div>
-		<Badge variant="outlined" color="default" size="small">
-			{strategyLabels[signal.strategy] || signal.strategy}
+	<div class="signal-footer">
+		<span class="symbol">{signal.symbol}</span>
+		<Badge variant="tonal" color="default" size="small">
+			{getStrategyName(signal.strategy, true)}
 		</Badge>
 	</div>
 	
-	<!-- Detailed View Additional Info -->
+	<!-- Detailed View -->
 	{#if variant === 'detailed'}
-		<div class="details-grid">
-			<div class="detail-item">
-				<span class="detail-label">Buy Price</span>
-				<span class="detail-value font-mono">${signal.buyPrice.toFixed(4)}</span>
+		<div class="details-panel glass">
+			<div class="details-grid">
+				<div class="detail-item">
+					<span class="detail-label">{t('signalCard.buyPrice')}</span>
+					<span class="detail-value">${signal.buyPrice.toFixed(4)}</span>
+				</div>
+				<div class="detail-item">
+					<span class="detail-label">{t('signalCard.sellPrice')}</span>
+					<span class="detail-value">${signal.sellPrice.toFixed(4)}</span>
+				</div>
+				<div class="detail-item">
+					<span class="detail-label">{t('signalCard.volume')}</span>
+					<span class="detail-value">{signal.volume.toFixed(4)}</span>
+				</div>
+				<div class="detail-item">
+					<span class="detail-label">{t('signalCard.spread')}</span>
+					<span class="detail-value profit">${(signal.sellPrice - signal.buyPrice).toFixed(4)}</span>
+				</div>
 			</div>
-			<div class="detail-item">
-				<span class="detail-label">Sell Price</span>
-				<span class="detail-value font-mono">${signal.sellPrice.toFixed(4)}</span>
+			<div class="action-row">
+				<Button variant="filled" size="small" onclick={(e) => { e.stopPropagation(); onExecute?.(signal); }}>
+					<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+					{t('signalCard.execute')}
+				</Button>
+				<Button variant="tonal" size="small" onclick={(e) => { e.stopPropagation(); onSelect?.(signal); }}>
+					<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+						<path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"/>
+					</svg>
+					{t('signalCard.details')}
+				</Button>
 			</div>
-			<div class="detail-item">
-				<span class="detail-label">Volume</span>
-				<span class="detail-value font-mono">{signal.volume.toFixed(4)}</span>
-			</div>
-			<div class="detail-item">
-				<span class="detail-label">Spread</span>
-				<span class="detail-value font-mono text-profit">${(signal.sellPrice - signal.buyPrice).toFixed(4)}</span>
-			</div>
-		</div>
-		
-		<!-- Action Buttons -->
-		<div class="flex gap-3 mt-6 pt-4 border-t border-outline-variant">
-			<Button variant="filled" size="medium" onclick={() => onExecute?.(signal)}>
-				<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"/>
-				</svg>
-				Execute
-			</Button>
-			<Button variant="outlined" size="medium" onclick={() => onSelect?.(signal)}>
-				View Details
-			</Button>
 		</div>
 	{/if}
-</Card>
+</div>
 
 <style>
-	:global(.signal-card) {
+	.signal-card {
 		position: relative;
-		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+		padding: var(--space-4);
+		border-radius: var(--shape-extra-large);
+		border: 1px solid var(--glass-border);
+		background: var(--glass-background);
+		backdrop-filter: var(--glass-backdrop);
+		-webkit-backdrop-filter: var(--glass-backdrop);
+		cursor: pointer;
+		transition: border-color var(--duration-normal) var(--ease-standard), box-shadow var(--duration-normal) var(--ease-standard), transform var(--duration-normal) var(--ease-standard);
 	}
-	
-	:global(.signal-profitable) {
-		border-color: rgba(46, 125, 50, 0.3) !important;
+
+	.signal-card:hover {
+		border-color: var(--glass-border-strong);
+		box-shadow: var(--glass-elevation-2);
+		transform: translateY(-2px);
 	}
-	
-	:global(.signal-profitable::before) {
-		content: '';
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		height: 3px;
-		background: linear-gradient(90deg, var(--color-profit), var(--color-profit-light));
-		opacity: 0.6;
+
+	.signal-card:focus {
+		outline: none;
+		box-shadow: 0 0 0 2px var(--md-sys-color-primary);
 	}
-	
-	:global(.signal-loss) {
-		border-color: rgba(198, 40, 40, 0.3) !important;
+
+	.signal-profitable {
+		border-left: 3px solid var(--color-profit);
 	}
-	
-	:global(.signal-loss::before) {
-		content: '';
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		height: 3px;
-		background: linear-gradient(90deg, var(--color-loss), var(--color-loss-light));
-		opacity: 0.6;
+
+	.signal-loss {
+		border-left: 3px solid var(--color-loss);
 	}
-	
-	.exchange-badge {
+
+	.signal-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.signal-meta {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: var(--space-1);
+	}
+
+	.confidence {
+		font: var(--typography-label-medium);
+		color: var(--md-sys-color-on-surface-variant);
+	}
+
+	.timestamp {
+		font: var(--typography-label-small);
+		color: var(--md-sys-color-on-surface-variant);
+		opacity: 0.7;
+	}
+
+	.exchange-flow {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+	}
+
+	.exchange-node {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		padding: 8px 12px;
+		padding: var(--space-2) var(--space-3);
 		border-radius: var(--shape-medium);
-		min-width: 70px;
+		background: color-mix(in srgb, var(--exchange-color) 15%, transparent);
+		min-width: 60px;
 	}
-	
-	.flow-line {
+
+	.exchange-name {
+		font: var(--typography-label-medium);
+		font-weight: 600;
+		color: var(--exchange-color);
+	}
+
+	.exchange-label {
+		font: var(--typography-label-small);
+		color: var(--md-sys-color-on-surface-variant);
+		opacity: 0.7;
+	}
+
+	.flow-connector {
 		flex: 1;
-		height: 2px;
-		background: linear-gradient(90deg, var(--md-sys-color-outline-variant), var(--md-sys-color-primary));
-		margin: 0 -8px;
-	}
-	
-	.flow-arrow {
-		width: 20px;
-		height: 20px;
-		color: var(--md-sys-color-primary);
-		flex-shrink: 0;
-	}
-	
-	.symbol-display {
+		display: flex;
+		align-items: center;
+		justify-content: center;
 		position: relative;
 	}
-	
+
+	.flow-line {
+		position: absolute;
+		left: 0;
+		right: 0;
+		height: 2px;
+		background: linear-gradient(90deg, var(--md-sys-color-outline-variant), var(--md-sys-color-primary));
+	}
+
+	.flow-arrow {
+		width: 18px;
+		height: 18px;
+		color: var(--md-sys-color-primary);
+		position: relative;
+		z-index: 1;
+	}
+
+	.signal-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.symbol {
+		font: var(--typography-title-small);
+		font-family: var(--font-mono);
+		font-weight: 600;
+		color: var(--md-sys-color-on-surface);
+	}
+
+	.details-panel {
+		margin-top: var(--space-2);
+		padding: var(--space-4);
+		border-radius: var(--shape-large);
+		border: 1px solid var(--glass-border);
+		background: var(--glass-background-subtle);
+	}
+
 	.details-grid {
 		display: grid;
 		grid-template-columns: repeat(2, 1fr);
-		gap: 16px;
-		margin-top: 16px;
-		padding-top: 16px;
-		border-top: 1px solid var(--md-sys-color-outline-variant);
+		gap: var(--space-3);
+		margin-bottom: var(--space-4);
 	}
-	
+
 	.detail-item {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: var(--space-1);
 	}
-	
+
 	.detail-label {
-		font: var(--typography-label-sm);
+		font: var(--typography-label-small);
 		color: var(--md-sys-color-on-surface-variant);
 	}
-	
+
 	.detail-value {
 		font: var(--typography-body-medium);
-		color: var(--md-sys-color-on-surface);
-	}
-	
-	:global(.border-outline-variant) {
-		border-color: var(--md-sys-color-outline-variant);
-	}
-	
-	:global(.text-on-surface-variant) {
-		color: var(--md-sys-color-on-surface-variant);
-	}
-	
-	:global(.text-on-surface) {
-		color: var(--md-sys-color-on-surface);
-	}
-	
-	:global(.font-mono) {
 		font-family: var(--font-mono);
+		color: var(--md-sys-color-on-surface);
 	}
-	
-	:global(.text-profit) {
+
+	.detail-value.profit {
 		color: var(--color-profit);
+	}
+
+	.action-row {
+		display: flex;
+		gap: var(--space-2);
+	}
+
+	.btn-icon {
+		width: 16px;
+		height: 16px;
 	}
 </style>

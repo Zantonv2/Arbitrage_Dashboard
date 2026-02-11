@@ -1,3 +1,5 @@
+use crate::auth::{self, bybit_auth_headers};
+
 use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use crate::connector::{
     ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus, TickerData,
@@ -377,7 +379,11 @@ impl ExchangeConnector for BybitConnector {
         use crate::connector::{OrderResponse, OrderStatusType};
 
         // ByBit API endpoint for placing orders
-        let url = format!("{}/v5/order/create", self.config.rest_url);
+        let endpoint = "/v5/order/create";
+        let url = format!("{}{}", self.config.get_rest_url(), endpoint);
+
+        // Validate credentials before making request
+        let credentials = self.config.get_credentials()?;
 
         // Convert our order request to ByBit format
         let bybit_order = serde_json::json!({
@@ -397,10 +403,19 @@ impl ExchangeConnector for BybitConnector {
             "orderLinkId": order.client_order_id.as_deref().unwrap_or(""),
         });
 
+        let body_str = bybit_order.to_string();
+        let mut params = HashMap::new();
+
+        // Generate authentication headers
+        let auth_headers =
+            bybit_auth_headers("POST", endpoint, &params, &body_str, &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
         // Make authenticated request to ByBit
         let response = self
             .client
             .post(&url)
+            .headers(header_map)
             .json(&bybit_order)
             .send()
             .await
