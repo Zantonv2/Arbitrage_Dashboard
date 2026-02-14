@@ -2,6 +2,8 @@
 //!
 //! Coordinates simultaneous order execution across multiple exchanges for arbitrage trades.
 //! Handles order placement, tracking, rollback, and hedge logic for failed executions.
+//! Now includes risk management integration for balance checking and slippage protection.
+//! Includes circuit breaker pattern and order confirmation polling for production hardening.
 
 use arbitrage_core::{
     types::{ExchangeId, ExecutionInstruction},
@@ -10,12 +12,17 @@ use arbitrage_core::{
 use exchange_connectors::{
     connector::{OrderRequest, OrderResponse, OrderSide, OrderType, TimeInForce},
     exchange_manager::ExchangeManager,
+    circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager, CircuitState},
 };
 use rust_decimal::Decimal;
 use std::{sync::Arc, time::Duration};
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+use crate::risk_manager::RiskManager;
+use crate::order_poller::{OrderPoller, OrderPollerConfig};
 
 /// Configuration for order execution
 #[derive(Debug, Clone)]
@@ -60,16 +67,64 @@ pub struct ExecutionResult {
 /// Order execution service for coordinated arbitrage trades
 pub struct OrderExecutor {
     config: ExecutorConfig,
-    exchange_manager: Arc<ExchangeManager>,
+    exchange_manager: Arc<Mutex<ExchangeManager>>,
+    risk_manager: Option<Arc<Mutex<RiskManager>>>,
+    circuit_breaker_manager: Arc<Mutex<CircuitBreakerManager>>,
+    order_poller: Option<OrderPoller>,
+    enable_order_polling: bool,
 }
 
 impl OrderExecutor {
     /// Create new order executor
-    pub fn new(config: ExecutorConfig, exchange_manager: Arc<ExchangeManager>) -> Self {
+    pub fn new(config: ExecutorConfig, exchange_manager: Arc<Mutex<ExchangeManager>>) -> Self {
         Self {
             config,
             exchange_manager,
+            risk_manager: None,
+            circuit_breaker_manager: Arc::new(Mutex::new(CircuitBreakerManager::new())),
+            order_poller: None,
+            enable_order_polling: false,
         }
+    }
+
+    /// Create new order executor with risk manager
+    pub fn with_risk_manager(
+        config: ExecutorConfig,
+        exchange_manager: Arc<Mutex<ExchangeManager>>,
+        risk_manager: Arc<Mutex<RiskManager>>,
+    ) -> Self {
+        Self {
+            config,
+            exchange_manager,
+            risk_manager: Some(risk_manager),
+            circuit_breaker_manager: Arc::new(Mutex::new(CircuitBreakerManager::new())),
+            order_poller: None,
+            enable_order_polling: false,
+        }
+    }
+
+    /// Create new order executor with all production hardening features
+    pub fn with_production_hardening(
+        config: ExecutorConfig,
+        exchange_manager: Arc<Mutex<ExchangeManager>>,
+        risk_manager: Arc<Mutex<RiskManager>>,
+        _circuit_breaker_config: CircuitBreakerConfig,
+        order_poller_config: OrderPollerConfig,
+    ) -> Self {
+        let exchange_manager_clone = Arc::clone(&exchange_manager);
+        Self {
+            config,
+            exchange_manager: Arc::clone(&exchange_manager),
+            risk_manager: Some(risk_manager),
+            circuit_breaker_manager: Arc::new(Mutex::new(CircuitBreakerManager::new())),
+            order_poller: Some(OrderPoller::new(order_poller_config, exchange_manager_clone)),
+            enable_order_polling: true,
+        }
+    }
+
+    /// Enable or disable order polling
+    pub fn set_order_polling(&mut self, enabled: bool) {
+        self.enable_order_polling = enabled;
     }
 
     /// Execute an arbitrage opportunity using two-phase commit pattern
@@ -89,6 +144,54 @@ impl OrderExecutor {
 
         // Validate instruction
         self.validate_instruction(instruction).await?;
+
+        // Check risk conditions if risk manager is available
+        if let Some(risk_manager_arc) = &self.risk_manager {
+            let mut risk_manager = risk_manager_arc.lock().await;
+            let risk_result = risk_manager.check_risk(instruction).await;
+            
+            if !risk_result.allowed {
+                error!("Risk check failed: {:?}", risk_result.reason);
+                return Ok(ExecutionResult {
+                    signal_id: instruction.signal_id,
+                    success: false,
+                    buy_order: None,
+                    sell_order: None,
+                    actual_profit: None,
+                    execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
+                    error_message: risk_result.reason,
+                    rollback_performed: false,
+                });
+            }
+        }
+
+        // Check slippage protection if risk manager is available
+        if let Some(risk_manager_arc) = &self.risk_manager {
+            let mut risk_manager = risk_manager_arc.lock().await;
+            let slippage_result = risk_manager.check_slippage(instruction.signal_id, instruction).await;
+            
+            if slippage_result.should_requote && !slippage_result.allowed {
+                warn!(
+                    "Slippage protection triggered: {:.4}% > {:.4}%",
+                    slippage_result.actual_slippage_percent,
+                    risk_manager.get_config().max_slippage_percent * Decimal::from(100)
+                );
+                return Ok(ExecutionResult {
+                    signal_id: instruction.signal_id,
+                    success: false,
+                    buy_order: None,
+                    sell_order: None,
+                    actual_profit: None,
+                    execution_time_ms: start_time.elapsed().as_millis().max(1) as u64,
+                    error_message: Some(format!(
+                        "Slippage {:.4}% exceeds threshold {:.4}%",
+                        slippage_result.actual_slippage_percent,
+                        risk_manager.get_config().max_slippage_percent * Decimal::from(100)
+                    )),
+                    rollback_performed: false,
+                });
+            }
+        }
 
         // Phase 1: Prepare - check if both exchanges are ready
         let prepare_result = self.prepare_execution(instruction).await;
@@ -150,11 +253,15 @@ impl OrderExecutor {
         // Check both exchanges are connected
         let buy_connected = self
             .exchange_manager
+            .lock()
+            .await
             .is_exchange_connected(&instruction.buy_order.exchange)
             .await;
 
         let sell_connected = self
             .exchange_manager
+            .lock()
+            .await
             .is_exchange_connected(&instruction.sell_order.exchange)
             .await;
 
@@ -229,6 +336,10 @@ impl OrderExecutor {
             (Ok(buy_order), Ok(sell_order)) => {
                 // Both orders successful - commit complete
                 let actual_profit = self.calculate_actual_profit(&buy_order, &sell_order);
+
+                // Record trade for risk management
+                let executed_quantity = buy_order.quantity.min(sell_order.quantity);
+                self.record_trade(instruction, executed_quantity).await;
 
                 Ok(ExecutionResult {
                     signal_id: instruction.signal_id,
@@ -364,12 +475,27 @@ impl OrderExecutor {
         Ok(())
     }
 
-    /// Place order on specific exchange
+    /// Place order on specific exchange (with circuit breaker)
     async fn place_order(
         &self,
         exchange: &ExchangeId,
         request: &OrderRequest,
     ) -> Result<OrderResponse> {
+        // Check circuit breaker before placing order
+        let exchange_name = exchange.to_string();
+        let mut cb_manager = self.circuit_breaker_manager.lock().await;
+        let breaker = cb_manager.get_or_create(&exchange_name, CircuitBreakerConfig::default());
+        
+        if !breaker.can_execute().await {
+            let state = breaker.get_state().await;
+            return Err(ArbitrageError::Execution(format!(
+                "Circuit breaker is {} for exchange {}",
+                if state == CircuitState::Open { "open" } else { "half-open" },
+                exchange_name
+            )));
+        }
+        drop(cb_manager);
+
         debug!(
             "Placing {} order on {}: {} {}",
             match request.side {
@@ -381,7 +507,17 @@ impl OrderExecutor {
             request.symbol
         );
 
-        self.exchange_manager.place_order(exchange, request).await
+        let result = self.exchange_manager.lock().await.place_order(exchange, request).await;
+        
+        // Record success/failure in circuit breaker
+        let mut cb_manager = self.circuit_breaker_manager.lock().await;
+        let breaker = cb_manager.get_or_create(&exchange_name, CircuitBreakerConfig::default());
+        match &result {
+            Ok(_) => breaker.record_success().await,
+            Err(_) => breaker.record_failure().await,
+        }
+        
+        result
     }
 
     /// Calculate actual profit from executed orders
@@ -470,5 +606,52 @@ impl OrderExecutor {
     /// Update configuration
     pub fn update_config(&mut self, config: ExecutorConfig) {
         self.config = config;
+    }
+
+    /// Get risk manager reference if available
+    pub fn risk_manager(&self) -> Option<&Arc<Mutex<RiskManager>>> {
+        self.risk_manager.as_ref()
+    }
+
+    /// Record a completed trade for risk management tracking
+    pub async fn record_trade(&self, instruction: &ExecutionInstruction, quantity: Decimal) {
+        if let Some(risk_manager_arc) = &self.risk_manager {
+            let mut risk_manager = risk_manager_arc.lock().await;
+            risk_manager.record_trade(instruction, quantity).await;
+            risk_manager.reset_requote_counter(instruction.signal_id);
+        }
+    }
+
+    /// Get circuit breaker statistics for an exchange
+    pub async fn get_circuit_breaker_stats(&self, exchange: &str) -> Option<exchange_connectors::circuit_breaker::CircuitBreakerStats> {
+        let cb_manager = self.circuit_breaker_manager.lock().await;
+        cb_manager.get(exchange).map(|b| b.get_stats())
+    }
+
+    /// Get all circuit breaker statistics
+    pub async fn get_all_circuit_breaker_stats(&self) -> std::collections::HashMap<String, exchange_connectors::circuit_breaker::CircuitBreakerStats> {
+        let cb_manager = self.circuit_breaker_manager.lock().await;
+        cb_manager.get_all_stats()
+    }
+
+    /// Reset circuit breaker for an exchange
+    pub async fn reset_circuit_breaker(&self, exchange: &str) {
+        let cb_manager = self.circuit_breaker_manager.lock().await;
+        if let Some(breaker) = cb_manager.get(exchange) {
+            breaker.reset().await;
+        }
+    }
+
+    /// Force open circuit breaker for an exchange
+    pub async fn force_open_circuit_breaker(&self, exchange: &str) {
+        let cb_manager = self.circuit_breaker_manager.lock().await;
+        if let Some(breaker) = cb_manager.get(exchange) {
+            breaker.force_open().await;
+        }
+    }
+
+    /// Check if order polling is enabled
+    pub fn is_order_polling_enabled(&self) -> bool {
+        self.enable_order_polling
     }
 }

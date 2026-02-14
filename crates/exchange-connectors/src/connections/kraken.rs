@@ -1,4 +1,5 @@
 use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
+use crate::auth::kraken_auth_headers;
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
@@ -221,7 +222,7 @@ impl ExchangeConnector for KrakenConnector {
         let subscribed_symbols = self.subscribed_symbols.clone();
         let config = self.config.clone();
 
-        let handle = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             Self::websocket_task(
                 ws_url,
                 event_sender,
@@ -486,8 +487,22 @@ impl ExchangeConnector for KrakenConnector {
 
     async fn get_balance(&self) -> Result<Balance> {
         let url = format!("{}/0/private/Balance", self.config.rest_url);
+        let endpoint = "/0/private/Balance";
 
-        let response = self.client.post(&url).send().await?;
+        // Get credentials and generate authentication headers
+        let credentials = self.config.get_credentials()?;
+        // Kraken requires nonce in post_data
+        let nonce = chrono::Utc::now().timestamp_millis();
+        let post_data = format!("nonce={}", nonce);
+        let auth_headers = kraken_auth_headers(endpoint, &post_data, &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
+        let response = self.client.post(&url)
+            .headers(header_map)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(post_data)
+            .send()
+            .await?;
         let response_json: Value = response.json().await?;
 
         let mut balances = HashMap::new();

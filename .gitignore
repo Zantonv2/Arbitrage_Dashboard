@@ -12,6 +12,7 @@ cargo_home/
 *.swp
 *.swo
 *~
+.kilocodemodes
 
 # OS
 .DS_Store

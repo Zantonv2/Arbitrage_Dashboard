@@ -111,7 +111,7 @@ struct TradeRecord {
 }
 
 impl SimulationEngine {
-    pub fn new(mut config: SimulationConfig) -> Self {
+    pub fn new(config: SimulationConfig) -> Self {
         let initial_capital = config.initial_capital_usd;
         Self {
             config: config.clone(),

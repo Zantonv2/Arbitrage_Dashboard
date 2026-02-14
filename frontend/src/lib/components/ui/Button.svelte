@@ -9,6 +9,7 @@
 		onclick?: (e: MouseEvent) => void;
 		children: Snippet;
 		class?: string;
+		ariaLabel?: string;
 	}
 
 	let {
@@ -18,7 +19,8 @@
 		type = 'button',
 		onclick,
 		children,
-		class: className = ''
+		class: className = '',
+		ariaLabel
 	}: Props = $props();
 
 	const baseClasses = 'inline-flex items-center justify-center gap-2 font-medium transition-colors duration-fast ease-standard relative overflow-hidden whitespace-nowrap';
@@ -70,7 +72,7 @@
 	class={buttonClasses}
 	disabled={disabled}
 	onclick={handleClick}
-	aria-hidden="true"
+	aria-label={ariaLabel}
 >
 	{@render children()}
 	{#each ripples as ripple (ripple.id)}

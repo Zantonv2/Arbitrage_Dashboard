@@ -61,7 +61,7 @@
 	});
 </script>
 
-<div class="exchange-card glass">
+<div class="exchange-card glass" role="region" aria-label="{exchangeNames[status.exchange]} exchange status">
 	<!-- Header -->
 	<div class="card-header">
 		<div class="exchange-info">
@@ -135,7 +135,7 @@
 	<!-- Connection Quality -->
 	<div class="quality-section">
 		<span class="metric-label">{t('exchangeCard.connectionQuality')}</span>
-		<div class="quality-dots">
+		<div class="quality-dots" aria-label="Connection quality rating">
 			{#each Array(5) as _, i}
 				<div 
 					class="quality-dot"

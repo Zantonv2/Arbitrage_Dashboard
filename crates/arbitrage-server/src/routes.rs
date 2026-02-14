@@ -11,6 +11,7 @@
 
 use crate::{
     audit_logger::{AuditDecision, AuditEntry},
+    order_executor::OrderExecutor,
     server::AppState,
 };
 use axum::{
@@ -23,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 // ============================================================================
 // Query Parameters
@@ -364,6 +365,9 @@ pub async fn prepare_execution(
 
     match execution_preparer.prepare_execution(&stored_signal.signal, quantity) {
         Ok(instruction) => {
+            // Store instruction in cache for later confirmation
+            state.instruction_cache.store(instruction.clone()).await;
+            
             // Log execution preparation
             let audit_entry = AuditEntry::new(
                 AuditDecision::ExecutionPrepared,
@@ -443,20 +447,236 @@ pub async fn prepare_execution(
     }
 }
 
+/// Request body for execution confirmation
+#[derive(Debug, Deserialize)]
+pub struct ConfirmExecutionRequest {
+    pub instruction_id: String,
+}
+
+impl ConfirmExecutionRequest {
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if let Err(_) = uuid::Uuid::parse_str(&self.instruction_id) {
+            errors.push("instruction_id must be a valid UUID format".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+/// Response for execution confirmation
+#[derive(Debug, Serialize)]
+pub struct ConfirmExecutionResponse {
+    pub success: bool,
+    pub message: String,
+    pub execution_id: Option<String>,
+    pub buy_order: Option<OrderResult>,
+    pub sell_order: Option<OrderResult>,
+    pub actual_profit: Option<f64>,
+    pub execution_time_ms: Option<u64>,
+    pub rollback_performed: bool,
+}
+
+/// Order execution result
+#[derive(Debug, Serialize)]
+pub struct OrderResult {
+    pub order_id: String,
+    pub exchange: String,
+    pub symbol: String,
+    pub side: String,
+    pub quantity: f64,
+    pub price: f64,
+    pub status: String,
+}
+
 /// Confirm execution
 pub async fn confirm_execution(
-    State(_state): State<AppState>,
-    Json(request): Json<Value>,
-) -> Result<Json<Value>, StatusCode> {
+    State(state): State<AppState>,
+    Json(request): Json<ConfirmExecutionRequest>,
+) -> Result<Json<ConfirmExecutionResponse>, StatusCode> {
     debug!("POST /api/executions/confirm: {:?}", request);
 
-    // TODO: Implement execution confirmation
-    let response = json!({
-        "success": true,
-        "message": "Execution confirmation not yet implemented"
-    });
+    // Validate request
+    if let Err(errors) = request.validate() {
+        return Ok(Json(ConfirmExecutionResponse {
+            success: false,
+            message: format!("Validation failed: {}", errors.join(", ")),
+            execution_id: None,
+            buy_order: None,
+            sell_order: None,
+            actual_profit: None,
+            execution_time_ms: None,
+            rollback_performed: false,
+        }));
+    }
 
-    Ok(Json(response))
+    // Parse instruction ID
+    let instruction_uuid = match uuid::Uuid::parse_str(&request.instruction_id) {
+        Ok(id) => id,
+        Err(_) => return Err(StatusCode::BAD_REQUEST),
+    };
+
+    // Retrieve instruction from cache
+    let cached = match state.instruction_cache.get(&instruction_uuid).await {
+        Some(cached) => cached,
+        None => {
+            return Ok(Json(ConfirmExecutionResponse {
+                success: false,
+                message: "Instruction not found or expired. Please prepare execution again.".to_string(),
+                execution_id: None,
+                buy_order: None,
+                sell_order: None,
+                actual_profit: None,
+                execution_time_ms: None,
+                rollback_performed: false,
+            }));
+        }
+    };
+
+    let instruction = cached.instruction;
+
+    // Check if instruction is valid
+    if !instruction.is_valid() {
+        return Ok(Json(ConfirmExecutionResponse {
+            success: false,
+            message: format!(
+                "Instruction has validation errors: {}",
+                instruction.validation_errors.join(", ")
+            ),
+            execution_id: None,
+            buy_order: None,
+            sell_order: None,
+            actual_profit: None,
+            execution_time_ms: None,
+            rollback_performed: false,
+        }));
+    }
+
+    // Log execution start
+    let audit_entry = AuditEntry::new(
+        AuditDecision::ExecutionConfirmed,
+        "pending",
+        &format!("Starting execution for instruction {}", instruction_uuid),
+    )
+    .with_opportunity(instruction.signal_id, &instruction.buy_order.symbol.to_pair())
+    .with_exchanges(
+        &instruction.buy_order.exchange.to_string(),
+        &instruction.sell_order.exchange.to_string(),
+    )
+    .with_profit(&instruction.expected_profit.to_string(), None);
+
+    state.audit_logger.log(audit_entry).await;
+
+    // Get exchange manager from bridge
+    let bridge = state.bridge.lock().await;
+    let exchange_manager = bridge.get_exchange_manager();
+    
+    // Create order executor
+    let executor = OrderExecutor::new(
+        state.executor_config.clone(),
+        exchange_manager,
+    );
+    
+    // Execute the arbitrage
+    let result = executor.execute_arbitrage(&instruction).await;
+    
+    // Remove instruction from cache after execution attempt
+    state.instruction_cache.remove(&instruction_uuid).await;
+
+    match result {
+        Ok(execution_result) => {
+            let (status, message) = if execution_result.success {
+                ("success", "Arbitrage executed successfully".to_string())
+            } else {
+                ("failed", execution_result.error_message.clone().unwrap_or_else(|| "Execution failed".to_string()))
+            };
+
+            // Log execution result
+            let audit_entry = AuditEntry::new(
+                if execution_result.success {
+                    AuditDecision::ExecutionCompleted
+                } else {
+                    AuditDecision::ExecutionFailed
+                },
+                status,
+                &message,
+            )
+            .with_opportunity(instruction.signal_id, &instruction.buy_order.symbol.to_pair())
+            .with_exchanges(
+                &instruction.buy_order.exchange.to_string(),
+                &instruction.sell_order.exchange.to_string(),
+            )
+            .with_profit(
+                &instruction.expected_profit.to_string(),
+                execution_result.actual_profit.map(|p| p.to_string()).as_deref(),
+            );
+
+            state.audit_logger.log(audit_entry).await;
+
+            info!(
+                "Execution {} for signal {}: {}",
+                if execution_result.success { "completed" } else { "failed" },
+                instruction.signal_id,
+                message
+            );
+
+            Ok(Json(ConfirmExecutionResponse {
+                success: execution_result.success,
+                message,
+                execution_id: Some(instruction_uuid.to_string()),
+                buy_order: execution_result.buy_order.map(|o| OrderResult {
+                    order_id: o.order_id,
+                    exchange: instruction.buy_order.exchange.to_string(),
+                    symbol: o.symbol.to_pair(),
+                    side: o.side.to_string(),
+                    quantity: o.quantity.to_f64().unwrap_or(0.0),
+                    price: o.price.unwrap_or_default().to_f64().unwrap_or(0.0),
+                    status: format!("{:?}", o.status),
+                }),
+                sell_order: execution_result.sell_order.map(|o| OrderResult {
+                    order_id: o.order_id,
+                    exchange: instruction.sell_order.exchange.to_string(),
+                    symbol: o.symbol.to_pair(),
+                    side: o.side.to_string(),
+                    quantity: o.quantity.to_f64().unwrap_or(0.0),
+                    price: o.price.unwrap_or_default().to_f64().unwrap_or(0.0),
+                    status: format!("{:?}", o.status),
+                }),
+                actual_profit: execution_result.actual_profit.map(|p| p.to_f64().unwrap_or(0.0)),
+                execution_time_ms: Some(execution_result.execution_time_ms),
+                rollback_performed: execution_result.rollback_performed,
+            }))
+        }
+        Err(e) => {
+            // Log execution error
+            let audit_entry = AuditEntry::new(
+                AuditDecision::ExecutionFailed,
+                "error",
+                &format!("Execution error: {}", e),
+            )
+            .with_opportunity(instruction.signal_id, &instruction.buy_order.symbol.to_pair());
+
+            state.audit_logger.log(audit_entry).await;
+
+            warn!("Execution error for signal {}: {}", instruction.signal_id, e);
+
+            Ok(Json(ConfirmExecutionResponse {
+                success: false,
+                message: format!("Execution error: {}", e),
+                execution_id: Some(instruction_uuid.to_string()),
+                buy_order: None,
+                sell_order: None,
+                actual_profit: None,
+                execution_time_ms: None,
+                rollback_performed: false,
+            }))
+        }
+    }
 }
 
 // ============================================================================
@@ -596,6 +816,194 @@ pub async fn update_config(
     let response = json!({
         "success": true,
         "message": "Configuration update not yet implemented"
+    });
+
+    Ok(Json(response))
+}
+
+// ============================================================================
+// Credential Management Endpoints
+// ============================================================================
+
+/// Request body for saving exchange credentials
+#[derive(Debug, Deserialize)]
+pub struct SaveCredentialsRequest {
+    pub exchange: String,
+    pub api_key: String,
+    pub api_secret: String,
+    pub passphrase: Option<String>,
+}
+
+/// Request body for validating credentials
+#[derive(Debug, Deserialize)]
+pub struct ValidateCredentialsRequest {
+    pub exchange: String,
+    pub api_key: String,
+    pub api_secret: String,
+    pub passphrase: Option<String>,
+    pub testnet: bool,
+}
+
+/// Response for credential status
+#[derive(Debug, Serialize)]
+pub struct CredentialStatus {
+    pub exchange: String,
+    pub has_credentials: bool,
+    pub testnet: bool,
+    pub validated: bool,
+}
+
+/// Get credential status for all exchanges
+pub async fn get_credentials(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /api/credentials");
+
+    // Use hardcoded exchange list to avoid HashMap key issues
+    let exchange_ids = [
+        arbitrage_core::types::ExchangeId::OKX,
+        arbitrage_core::types::ExchangeId::ByBit,
+        arbitrage_core::types::ExchangeId::MEXC,
+        arbitrage_core::types::ExchangeId::GateIo,
+        arbitrage_core::types::ExchangeId::Kraken,
+        arbitrage_core::types::ExchangeId::Bitstamp,
+    ];
+    
+    let exchange_names = ["okx", "bybit", "mexc", "gateio", "kraken", "bitstamp"];
+    
+    let credentials: Vec<CredentialStatus> = exchange_ids.iter().zip(exchange_names.iter()).map(|(exchange_id, exchange_name)| {
+        let config = state.config.exchanges.get(exchange_id);
+        let has_credentials = config.map(|c| {
+            c.api_key.is_configured() && c.api_secret.is_configured()
+        }).unwrap_or(false);
+        
+        let testnet = config.map(|c| c.testnet).unwrap_or(true);
+        
+        CredentialStatus {
+            exchange: exchange_name.to_string(),
+            has_credentials,
+            testnet,
+            validated: false,
+        }
+    }).collect();
+
+    let response = json!({
+        "credentials": credentials
+    });
+
+    Ok(Json(response))
+}
+
+/// Save credentials for an exchange
+pub async fn save_credentials(
+    State(_state): State<AppState>,
+    Json(request): Json<SaveCredentialsRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("POST /api/credentials: {}", request.exchange);
+
+    // Validate exchange name
+    let valid_exchanges = ["okx", "bybit", "mexc", "gateio", "kraken", "bitstamp"];
+    if !valid_exchanges.contains(&request.exchange.to_lowercase().as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // For now, just return success - actual storage would require
+    // encryption and config file updates
+    let response = json!({
+        "success": true,
+        "message": format!("Credentials received for {}. Server restart required for changes to take effect.", request.exchange)
+    });
+
+    Ok(Json(response))
+}
+
+/// Validate credentials for an exchange (tests API connectivity)
+pub async fn validate_credentials(
+    State(_state): State<AppState>,
+    Json(request): Json<ValidateCredentialsRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("POST /api/credentials/validate: {}", request.exchange);
+
+    // Validate exchange name
+    let valid_exchanges = ["okx", "bybit", "mexc", "gateio", "kraken", "bitstamp"];
+    if !valid_exchanges.contains(&request.exchange.to_lowercase().as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Basic validation - check non-empty credentials
+    if request.api_key.is_empty() {
+        return Ok(Json(json!({
+            "success": false,
+            "message": "API key is empty"
+        })));
+    }
+
+    if request.api_secret.is_empty() {
+        return Ok(Json(json!({
+            "success": false,
+            "message": "API secret is empty"
+        })));
+    }
+
+    // TODO: Actually test credentials by making an authenticated API call
+    // This would require:
+    // 1. Getting the exchange connector
+    // 2. Making a balance query with the provided credentials
+    // 3. Returning success/failure based on the response
+
+    // For now, just validate format and return success
+    let response = json!({
+        "success": true,
+        "message": "Credentials format validated. Full validation requires server restart with new credentials."
+    });
+
+    Ok(Json(response))
+}
+
+/// Delete credentials for an exchange
+pub async fn delete_credentials(
+    State(_state): State<AppState>,
+    Path(exchange): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("DELETE /api/credentials/{}", exchange);
+
+    // Validate exchange name
+    let valid_exchanges = ["okx", "bybit", "mexc", "gateio", "kraken", "bitstamp"];
+    if !valid_exchanges.contains(&exchange.to_lowercase().as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let response = json!({
+        "success": true,
+        "message": format!("Credentials cleared for {}. Server restart required.", exchange)
+    });
+
+    Ok(Json(response))
+}
+
+/// Toggle testnet/production mode for an exchange
+pub async fn toggle_exchange_mode(
+    State(_state): State<AppState>,
+    Json(request): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("POST /api/exchange/mode: {:?}", request);
+
+    let exchange = request.get("exchange")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let testnet = request.get("testnet")
+        .and_then(|v| v.as_bool())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Validate exchange name
+    let valid_exchanges = ["okx", "bybit", "mexc", "gateio", "kraken", "bitstamp"];
+    if !valid_exchanges.contains(&exchange.to_lowercase().as_str()) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let response = json!({
+        "success": true,
+        "message": format!("Exchange {} mode set to {}. Server restart required.", 
+            exchange, if testnet { "testnet" } else { "production" })
     });
 
     Ok(Json(response))

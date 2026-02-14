@@ -29,7 +29,6 @@ pub mod strategy_impl;
 pub use config::*;
 pub use execution_context::*;
 pub use filter_context::*;
-pub use macros::*;
 pub use market_types::*;
 pub use registry::StrategyRegistry;
 pub use strategies_specifics::*;

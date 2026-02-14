@@ -243,7 +243,9 @@
 		"spread": "Спред",
 		"execute": "Исполнить",
 		"details": "Детали",
-		"perSignal": "за сигнал"
+		"perSignal": "за сигнал",
+		"preparing": "Подготовка...",
+		"executing": "Выполнение..."
 	},
 	"exchangeCard": {
 		"latency": "Задержка",
@@ -264,5 +266,22 @@
 	"sidebar": {
 		"collapse": "Свернуть сайдбар",
 		"expand": "Развернуть сайдбар"
+	},
+	"credentials": {
+		"title": "API ключи",
+		"refresh": "Обновить",
+		"loading": "Загрузка ключей...",
+		"modalTitle": "{exchange} API ключи",
+		"apiKey": "API ключ",
+		"apiSecret": "API секрет",
+		"passphrase": "Пароль",
+		"configured": "Настроено",
+		"notConfigured": "Не настроено",
+		"testnet": "Тестовая сеть",
+		"production": "Основная сеть",
+		"validated": "Проверено",
+		"notValidated": "Не проверено",
+		"saveSuccess": "Ключи сохранены. Перезапустите сервер для применения изменений.",
+		"deleteConfirm": "Вы уверены, что хотите удалить ключи для {exchange}?"
 	}
 }

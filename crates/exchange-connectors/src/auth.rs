@@ -220,7 +220,7 @@ pub fn generate_bybit_signature(
 /// Generate ByBit authentication headers
 pub fn bybit_auth_headers(
     method: &str,
-    endpoint: &str,
+    _endpoint: &str,
     params: &HashMap<String, String>,
     body: &str,
     credentials: &ExchangeCredentials,
@@ -391,7 +391,7 @@ pub fn gateio_auth_headers(
 /// - API-Sign: Base64 encoded signature
 /// - nonce: Increasing nonce value
 pub fn generate_kraken_signature(
-    endpoint: &str,
+    _endpoint: &str,
     nonce: &str,
     post_data: &str,
     secret: &str,

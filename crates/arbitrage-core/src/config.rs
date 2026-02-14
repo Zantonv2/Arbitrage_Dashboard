@@ -25,6 +25,11 @@ impl EncryptedString {
         *Key::<Aes256Gcm>::from_slice(&key_bytes)
     }
 
+    /// Check if the encrypted string has data
+    pub fn is_configured(&self) -> bool {
+        !self.ciphertext.is_empty()
+    }
+
     pub fn new(plaintext: &str, master_password: &str) -> Self {
         let mut salt = [0u8; 16];
         OsRng
@@ -99,17 +104,9 @@ pub struct ServerConfig {
 fn default_jwt_secret() -> String {
     // SECURITY: In production, JWT_SECRET must be set. For tests, use a test-only default.
     std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        // Compile-time check: only allow test default in test builds
-        if cfg!(test) {
-            // Additional runtime check: verify we're actually in test mode
-            // This prevents the test default from being used in production
-            if std::env::var("RUST_TEST_THREADS").is_ok() || cfg!(debug_assertions) {
-                "test-jwt-secret-for-unit-tests-only".to_string()
-            } else {
-                panic!(
-                    "JWT_SECRET must be set in environment. Test default blocked in non-test runtime."
-                )
-            }
+        // Allow test default in test builds or debug mode (for integration tests)
+        if cfg!(test) || cfg!(debug_assertions) {
+            "test-jwt-secret-for-unit-tests-only".to_string()
         } else {
             panic!(
                 "JWT_SECRET must be set in environment. This is a critical security requirement."

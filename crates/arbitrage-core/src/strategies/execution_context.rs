@@ -1,4 +1,4 @@
-use crate::{types::FeeSchedule, ExchangeId, Symbol};
+use crate::{types::FeeSchedule, ExchangeId};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 

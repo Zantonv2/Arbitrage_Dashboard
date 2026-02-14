@@ -9,6 +9,7 @@
 	import { onMount } from 'svelte';
 	import { t } from '$lib/i18n.svelte';
 	import Sidebar from '$lib/components/ui/Sidebar.svelte';
+	import Toast from '$lib/components/ui/Toast.svelte';
 	import type { TradeSignal } from '$lib/types';
 
 	let wsClient: WebSocketClient;
@@ -129,10 +130,13 @@
 	<title>Triangulum</title>
 </svelte:head>
 
+<!-- Skip link for accessibility -->
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
 <div class="app-layout">
 	<Sidebar />
 	
-	<main class="main-content">
+	<main class="main-content" id="main-content">
 		<!-- Top Header - Simplified -->
 		<header class="top-header glass">
 			<div class="header-content">
@@ -224,10 +228,30 @@
 
 <!-- Click outside to close notifications -->
 {#if notificationsOpen}
-	<button class="click-outside" onclick={closeNotifications} aria-label="Close notifications"></button>
+	<div class="click-outside-overlay" onclick={closeNotifications} onkeydown={(e) => e.key === 'Escape' && closeNotifications()} role="button" tabindex="-1" aria-label="Close notifications"></div>
 {/if}
 
+<!-- Toast notifications -->
+<Toast />
+
 <style>
+	.skip-link {
+		position: absolute;
+		top: -40px;
+		left: 0;
+		background: var(--md-sys-color-primary);
+		color: var(--md-sys-color-on-primary);
+		padding: var(--space-2) var(--space-4);
+		z-index: 100;
+		transition: top var(--duration-fast) var(--ease-standard);
+		text-decoration: none;
+		font: var(--typography-label-medium);
+	}
+
+	.skip-link:focus {
+		top: 0;
+	}
+
 	.app-layout {
 		display: flex;
 		min-height: 100vh;
@@ -496,13 +520,12 @@
 		opacity: 0.7;
 	}
 	
-	.click-outside {
+	.click-outside-overlay {
 		position: fixed;
 		inset: 0;
 		z-index: 30;
-		background: transparent;
-		border: none;
-		cursor: default;
+		cursor: pointer;
+		pointer-events: auto;
 	}
 	
 	@keyframes slide-in-up {

@@ -243,7 +243,9 @@
 		"spread": "Spread",
 		"execute": "Execute",
 		"details": "Details",
-		"perSignal": "per signal"
+		"perSignal": "per signal",
+		"preparing": "Preparing...",
+		"executing": "Executing..."
 	},
 	"exchangeCard": {
 		"latency": "Latency",
@@ -264,5 +266,22 @@
 	"sidebar": {
 		"collapse": "Collapse sidebar",
 		"expand": "Expand sidebar"
+	},
+	"credentials": {
+		"title": "API Credentials",
+		"refresh": "Refresh",
+		"loading": "Loading credentials...",
+		"modalTitle": "{exchange} API Keys",
+		"apiKey": "API Key",
+		"apiSecret": "API Secret",
+		"passphrase": "Passphrase",
+		"configured": "Configured",
+		"notConfigured": "Not Configured",
+		"testnet": "Testnet",
+		"production": "Production",
+		"validated": "Validated",
+		"notValidated": "Not Validated",
+		"saveSuccess": "Credentials saved successfully. Server restart required for changes to take effect.",
+		"deleteConfirm": "Are you sure you want to delete credentials for {exchange}?"
 	}
 }

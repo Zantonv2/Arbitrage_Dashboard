@@ -186,7 +186,7 @@
 						<div class="kpi-label">{t('dashboard.kpiOnlineExchanges')}</div>
 					</div>
 					<div class="kpi-badges">
-						<Badge variant="tonal" color="profit" size="small">All Operational</Badge>
+						<Badge variant="tonal" color="profit" size="small">{t('dashboard.allOperational')}</Badge>
 					</div>
 				</div>
 			</div>

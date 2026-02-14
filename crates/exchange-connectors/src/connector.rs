@@ -119,7 +119,16 @@ impl ConnectorConfig {
     pub fn get_rest_url(&self) -> String {
         if self.is_testnet {
             // For exchanges that have separate testnet URLs
-            self.rest_url.clone()
+            // Override with testnet-specific URL
+            match self.exchange_id {
+                ExchangeId::OKX => "https://www.okx.com".to_string(),
+                ExchangeId::ByBit => "https://api-testnet.bybit.com".to_string(),
+                ExchangeId::MEXC => "https://api.mexc.com".to_string(), // MEXC doesn't have separate testnet
+                ExchangeId::GateIo => "https://api.gateio.ws".to_string(),
+                ExchangeId::Bitstamp => "https://api.bitstamp.net".to_string(),
+                ExchangeId::Kraken => "https://api.kraken.com".to_string(),
+                _ => self.rest_url.clone(),
+            }
         } else {
             self.rest_url.clone()
         }
@@ -128,8 +137,15 @@ impl ConnectorConfig {
     /// Get WebSocket URL based on environment
     pub fn get_ws_url(&self) -> String {
         if self.is_testnet {
-            // For exchanges that have separate testnet WebSocket URLs
-            self.ws_url.clone()
+            match self.exchange_id {
+                ExchangeId::OKX => "wss://ws.okx.com:8443/ws/v5/public".to_string(),
+                ExchangeId::ByBit => "wss://stream-testnet.bybit.com/v5/public/spot".to_string(),
+                ExchangeId::MEXC => "wss://api.mexc.com/ws".to_string(),
+                ExchangeId::GateIo => "wss://api.gateio.ws/ws/v4/".to_string(),
+                ExchangeId::Bitstamp => "wss://api.bitstamp.net".to_string(),
+                ExchangeId::Kraken => "wss://ws.kraken.com".to_string(),
+                _ => self.ws_url.clone(),
+            }
         } else {
             self.ws_url.clone()
         }
@@ -304,6 +320,15 @@ pub enum OrderSide {
     Sell,
 }
 
+impl std::fmt::Display for OrderSide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrderSide::Buy => write!(f, "buy"),
+            OrderSide::Sell => write!(f, "sell"),
+        }
+    }
+}
+
 /// Order type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum OrderType {
@@ -366,7 +391,7 @@ pub struct OrderStatus {
 }
 
 /// Order status types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum OrderStatusType {
     New,
     PartiallyFilled,

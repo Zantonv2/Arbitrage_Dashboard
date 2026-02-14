@@ -1,14 +1,13 @@
-use crate::auth::{self, okx_auth_headers, ExchangeCredentials};
+use crate::auth::okx_auth_headers;
 
 use crate::connector::{
     CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus,
     OrderStatus, OrderStatusType, TickerData,
 };
 use crate::connector_trait::ConnectorBase;
-use crate::events::{ConnectionEvent, MarketDataEvent};
+use crate::events::ConnectionEvent;
 use crate::utils::{
-    format_symbol, parse_decimal, parse_json_with_retry, parse_symbol, parse_timestamp,
-    ExponentialBackoff, SymbolFormat,
+    format_symbol, parse_decimal, parse_json_with_retry, parse_symbol, parse_timestamp, SymbolFormat,
 };
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
@@ -17,16 +16,12 @@ use arbitrage_core::{
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 #[derive(Clone)]
 pub struct OKXConnector {
@@ -45,15 +40,23 @@ impl Default for OKXConnector {
 
 impl OKXConnector {
     pub fn new() -> Self {
+        Self::new_with_config(ConnectorConfig::default())
+    }
+
+    pub fn new_testnet() -> Self {
         let config = ConnectorConfig {
             exchange_id: ExchangeId::OKX,
             ws_url: "wss://ws.okx.com:8443/ws/v5/public".to_string(),
             rest_url: "https://www.okx.com".to_string(),
             rate_limit_per_second: 20,
             rate_limit_burst: 40,
+            is_testnet: true,
             ..Default::default()
         };
+        Self::new_with_config(config)
+    }
 
+    pub fn new_with_config(config: ConnectorConfig) -> Self {
         let base = ConnectorBase::new(config);
         let client = Client::new();
 
@@ -521,13 +524,23 @@ impl ExchangeConnector for OKXConnector {
         use crate::connector::{AssetBalance, Balance};
 
         let url = format!("{}/api/v5/account/balance", self.base.config.rest_url);
+        let endpoint = "/api/v5/account/balance";
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            arbitrage_core::ArbitrageError::Network(format!(
-                "OKX get balance request failed: {}",
-                e
-            ))
-        })?;
+        // Get credentials and generate authentication headers for GET request
+        let credentials = self.base.config.get_credentials()?;
+        let auth_headers = okx_auth_headers("GET", endpoint, "", &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
+        let response = self.client.get(&url)
+            .headers(header_map)
+            .send()
+            .await
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "OKX get balance request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
             return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(

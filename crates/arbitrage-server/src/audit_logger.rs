@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -10,6 +13,8 @@ pub enum AuditDecision {
     SignalEmitted,
     ExecutionPrepared,
     ExecutionConfirmed,
+    ExecutionCompleted,
+    ExecutionFailed,
     ExecutionRejected,
     OrderPlaced,
     OrderFilled,
@@ -113,7 +118,7 @@ impl AuditLogger {
         self.log(entry).await;
     }
 
-    pub async fn log_error(&self, error_type: &str, context: &str) {
+    pub async fn log_error(&self, _error_type: &str, context: &str) {
         let entry = AuditEntry::new(AuditDecision::ErrorOccurred, "error", context)
             .with_profit("N/A", None);
         self.log(entry).await;
@@ -137,6 +142,99 @@ impl AuditLogger {
             .filter(|e| e.decision == decision)
             .cloned()
             .collect()
+    }
+
+    /// Persist audit log to file for immutable storage
+    /// This creates a new file with all current entries
+    pub async fn persist_to_file(&self, path: &PathBuf) -> std::io::Result<()> {
+        let entries = self.entries.lock().await;
+        let json = serde_json::to_string_pretty(&*entries)?;
+        drop(entries);
+
+        let file = File::create(path).await?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(json.as_bytes()).await?;
+        writer.flush().await?;
+
+        Ok(())
+    }
+
+    /// Append a single entry to the audit log file
+    /// This maintains immutability by only appending new entries
+    pub async fn append_to_file(&self, path: &PathBuf) -> std::io::Result<()> {
+        let entries = self.entries.lock().await;
+        
+        // Get the last entry for appending
+        if let Some(last_entry) = entries.last() {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .await?;
+
+            let json = serde_json::to_string(last_entry)?;
+            file.write_all(format!("\n{}", json).as_bytes()).await?;
+            file.flush().await?;
+        }
+
+        Ok(())
+    }
+
+    /// Export audit log to CSV format for compliance reporting
+    pub async fn export_to_csv(&self, path: &PathBuf) -> std::io::Result<()> {
+        let entries = self.entries.lock().await;
+        
+        let mut csv_content = String::from("id,timestamp,decision,opportunity_id,symbol,buy_exchange,sell_exchange,expected_profit,actual_profit,status,details\n");
+        
+        for entry in entries.iter() {
+            csv_content.push_str(&format!(
+                "{},{},{:?},{},{},{},{},{},{},{},{}",
+                entry.id,
+                entry.timestamp.to_rfc3339(),
+                entry.decision,
+                entry.opportunity_id.map(|u| u.to_string()).unwrap_or_default(),
+                entry.symbol.as_deref().unwrap_or(""),
+                entry.buy_exchange.as_deref().unwrap_or(""),
+                entry.sell_exchange.as_deref().unwrap_or(""),
+                entry.expected_profit.as_deref().unwrap_or(""),
+                entry.actual_profit.as_deref().unwrap_or(""),
+                entry.status,
+                entry.details.replace(",", ";") // Escape commas
+            ));
+            csv_content.push('\n');
+        }
+
+        let file = File::create(path).await?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(csv_content.as_bytes()).await?;
+        writer.flush().await?;
+
+        Ok(())
+    }
+
+    /// Get audit entries within a time range
+    pub async fn get_entries_in_range(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Vec<AuditEntry> {
+        self.entries
+            .lock()
+            .await
+            .iter()
+            .filter(|e| e.timestamp >= start && e.timestamp <= end)
+            .cloned()
+            .collect()
+    }
+
+    /// Get total entry count
+    pub async fn len(&self) -> usize {
+        self.entries.lock().await.len()
+    }
+
+    /// Check if audit log is empty
+    pub async fn is_empty(&self) -> bool {
+        self.entries.lock().await.is_empty()
     }
 }
 

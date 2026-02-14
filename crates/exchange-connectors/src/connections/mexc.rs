@@ -1,4 +1,4 @@
-use crate::auth::{self, mexc_auth_headers};
+use crate::auth::mexc_auth_headers;
 
 use crate::connector::{
     CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector, FundingRate, HealthStatus,
@@ -21,9 +21,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, Mutex, RwLock};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use tracing::{debug, error, info, warn};
+use tokio::sync::{broadcast, RwLock};
+use tracing::{debug, info, warn};
 
 /// MEXC WebSocket subscription message - used for order book subscriptions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -565,10 +564,16 @@ impl ExchangeConnector for MEXCConnector {
         use crate::connector::{AssetBalance, Balance};
 
         let url = format!("{}/api/v3/account", self.base.config.rest_url);
+        let endpoint = "/api/v3/account";
+
+        // Get credentials and generate authentication headers for GET request
+        let credentials = self.base.config.get_credentials()?;
+        let auth_headers = mexc_auth_headers("GET", endpoint, "", &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
 
         let response = match tokio::time::timeout(
             Duration::from_secs(5),
-            self.client.get(&url).send(),
+            self.client.get(&url).headers(header_map).send(),
         )
         .await
         {

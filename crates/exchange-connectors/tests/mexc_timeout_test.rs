@@ -1,9 +1,10 @@
 use arbitrage_core::types::Symbol;
-use exchange_connectors::connections::mexc::MEXCConnector;
 use exchange_connectors::connector::ExchangeConnector;
+use exchange_connectors::connections::mexc::MEXCConnector;
+use arbitrage_core::Result;
 use serde_json::json;
 use std::time::Duration;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, header_exists, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -124,8 +125,12 @@ async fn test_mexc_fetch_tickers_timeout() {
 async fn test_mexc_get_balance_timeout() {
     let mock_server = MockServer::start().await;
 
+    // Now we need to match the auth headers that MEXC sends
     Mock::given(method("GET"))
         .and(path("/api/v3/account"))
+        .and(header("accesskey", "test_api_key"))
+        .and(header_exists("timestamp"))
+        .and(header_exists("signature"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(json!({
@@ -138,8 +143,11 @@ async fn test_mexc_get_balance_timeout() {
         .mount(&mock_server)
         .await;
 
+    // Create connector and set credentials manually
     let mut connector = MEXCConnector::new();
     connector.base.config.rest_url = mock_server.uri();
+    connector.base.config.api_key = Some("test_api_key".to_string());
+    connector.base.config.api_secret = Some("dGVzdF9hcGlfc2VjcmV0".to_string());
 
     let result = connector.get_balance().await;
 

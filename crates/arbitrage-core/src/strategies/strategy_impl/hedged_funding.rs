@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use crate::constants::{BASIS_POINTS_DIVISOR, SLIPPIER_TIER_1_BPS, SLIPPIER_TIER_2_BPS};
+use crate::constants::{BASIS_POINTS_DIVISOR, SLIPPIER_TIER_2_BPS};
 use crate::strategies::strategies_specifics::{
     ExchangeCapabilities, StrategyLimits, StrategyUtils,
 };
@@ -39,7 +39,7 @@ use tracing::debug;
 /// # Example
 ///
 /// ```rust
-/// use arbitrage_core::strategies::StrategyConfig;
+/// use arbitrage_core::strategies::{HedgedFundingStrategy, Strategy};
 ///
 /// let strategy = HedgedFundingStrategy::new();
 /// assert_eq!(strategy.id(), "hedged_funding");
@@ -71,6 +71,8 @@ impl HedgedFundingStrategy {
     /// # Example
     ///
     /// ```rust
+    /// use arbitrage_core::strategies::{HedgedFundingStrategy, Strategy};
+    ///
     /// let strategy = HedgedFundingStrategy::new();
     /// assert!(strategy.config().enabled);
     /// ```
@@ -108,8 +110,9 @@ impl HedgedFundingStrategy {
     /// # Example
     ///
     /// ```rust
-    /// use arbitrage_core::strategies::{StrategyConfig, RiskLimits};
+    /// use arbitrage_core::strategies::{HedgedFundingStrategy, StrategyConfig, RiskLimits};
     /// use rust_decimal::Decimal;
+    /// use std::collections::HashMap;
     ///
     /// let config = StrategyConfig {
     ///     enabled: true,
@@ -117,7 +120,7 @@ impl HedgedFundingStrategy {
     ///     max_exposure: Decimal::from(100000),
     ///     confidence_threshold: Decimal::new(8, 1),
     ///     risk_limits: RiskLimits::default(),
-    ///     custom_params: serde_json::Map::new(),
+    ///     custom_params: HashMap::new(),
     /// };
     ///
     /// let strategy = HedgedFundingStrategy::with_config(config);

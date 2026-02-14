@@ -104,6 +104,28 @@ class ApiClient {
 	async confirmExecution(instructionId: string): Promise<{
 		success: boolean;
 		message: string;
+		execution_id?: string;
+		buy_order?: {
+			order_id: string;
+			exchange: string;
+			symbol: string;
+			side: string;
+			quantity: number;
+			price: number;
+			status: string;
+		};
+		sell_order?: {
+			order_id: string;
+			exchange: string;
+			symbol: string;
+			side: string;
+			quantity: number;
+			price: number;
+			status: string;
+		};
+		actual_profit?: number;
+		execution_time_ms?: number;
+		rollback_performed: boolean;
 	}> {
 		return this.request('/executions/confirm', {
 			method: 'POST',
@@ -181,6 +203,56 @@ class ApiClient {
 		last_updated: string;
 	}> {
 		return this.request('/status/bridge');
+	}
+
+	// Credentials Management
+	async getCredentials(): Promise<{
+		credentials: Array<{
+			exchange: string;
+			has_credentials: boolean;
+			testnet: boolean;
+			validated: boolean;
+		}>;
+	}> {
+		return this.request('/credentials');
+	}
+
+	async saveCredentials(credentials: {
+		exchange: string;
+		api_key: string;
+		api_secret: string;
+		passphrase?: string;
+	}): Promise<{ success: boolean; message: string }> {
+		return this.request('/credentials', {
+			method: 'POST',
+			body: JSON.stringify(credentials)
+		});
+	}
+
+	async validateCredentials(credentials: {
+		exchange: string;
+		api_key: string;
+		api_secret: string;
+		passphrase?: string;
+		testnet: boolean;
+	}): Promise<{ success: boolean; message: string }> {
+		return this.request('/credentials/validate', {
+			method: 'POST',
+			body: JSON.stringify(credentials)
+		});
+	}
+
+	async deleteCredentials(exchange: string): Promise<{ success: boolean; message: string }> {
+		return this.request(`/credentials/${exchange}`, {
+			method: 'DELETE'
+		});
+	}
+
+	async toggleExchangeMode(exchange: string, testnet: boolean): Promise<{ success: boolean; message: string }> {
+		return this.request('/exchange/mode', {
+			method: 'POST',
+			body: JSON.stringify({ exchange, testnet })
+		});
 	}
 }
 

@@ -1,3 +1,4 @@
+pub mod circuit_breaker;
 pub mod connections;
 pub mod auth;
 pub mod connector;
@@ -15,6 +16,10 @@ pub mod websocket_common;
 pub mod websocket_pool;
 
 // Re-exports
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerManager, CircuitBreakerRef,
+    CircuitBreakerStats, CircuitState,
+};
 pub use connections::{
     BitstampConnector, BybitConnector, GateioConnector, KrakenConnector, MEXCConnector,
     OKXConnector,

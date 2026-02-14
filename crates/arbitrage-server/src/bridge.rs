@@ -469,4 +469,9 @@ impl ArbitrageBridge {
 
         Ok(())
     }
+
+    /// Get a clone of the exchange manager for order execution
+    pub fn get_exchange_manager(&self) -> Arc<Mutex<ExchangeManager>> {
+        Arc::clone(&self.exchange_manager)
+    }
 }

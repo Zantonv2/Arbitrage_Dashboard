@@ -8,7 +8,7 @@
 
 use crate::{
     audit_logger::AuditLogger, bridge::ArbitrageBridge, config_manager::ConfigManager,
-    order_executor::ExecutorConfig, routes, websocket,
+    instruction_cache::InstructionCache, order_executor::ExecutorConfig, routes, websocket,
 };
 use arbitrage_core::{
     arbitrage_engine::ArbitrageEngine,
@@ -28,11 +28,10 @@ use arbitrage_core::{
 use axum::{
     body::Body,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use http::{Request, StatusCode};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -69,6 +68,7 @@ pub struct AppState {
     pub bridge: Arc<Mutex<ArbitrageBridge>>,
     pub audit_logger: Arc<AuditLogger>,
     pub executor_config: ExecutorConfig,
+    pub instruction_cache: Arc<InstructionCache>,
 }
 
 #[derive(Clone)]
@@ -214,6 +214,10 @@ impl ArbitrageServer {
         // For now, we'll create it when needed in routes
         info!("⚙️ Order executor config initialized");
 
+        // Initialize instruction cache
+        let instruction_cache = Arc::new(InstructionCache::default());
+        info!("📦 Instruction cache initialized");
+
         // Create application state
         let state = AppState {
             config: config.clone(),
@@ -223,6 +227,7 @@ impl ArbitrageServer {
             bridge: bridge.clone(),
             audit_logger,
             executor_config,
+            instruction_cache,
         };
 
         // Start background services
@@ -376,6 +381,13 @@ impl ArbitrageServer {
             // Configuration
             .route("/config", get(routes::get_config))
             .route("/config", post(routes::update_config))
+            // Credentials
+            .route("/credentials", get(routes::get_credentials))
+            .route("/credentials", post(routes::save_credentials))
+            .route("/credentials/validate", post(routes::validate_credentials))
+            .route("/credentials/{exchange}", delete(routes::delete_credentials))
+            // Exchange mode toggle
+            .route("/exchange/mode", post(routes::toggle_exchange_mode))
             .with_state(state.clone())
             .layer(axum::middleware::from_fn(
                 move |req: Request<Body>, next: axum::middleware::Next| {

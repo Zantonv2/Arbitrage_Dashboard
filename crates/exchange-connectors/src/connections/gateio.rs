@@ -1,4 +1,5 @@
 use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
+use crate::auth::gateio_auth_headers;
 use crate::connector::{
     AssetBalance, Balance, CancelResponse, ConnectorConfig, ConnectorStats, ExchangeConnector,
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
@@ -181,7 +182,7 @@ impl ExchangeConnector for GateioConnector {
         let subscribed_symbols = self.subscribed_symbols.clone();
         let config = self.config.clone();
 
-        let handle = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             Self::websocket_task(
                 ws_url,
                 event_sender,
@@ -411,8 +412,17 @@ impl ExchangeConnector for GateioConnector {
 
     async fn get_balance(&self) -> Result<Balance> {
         let url = format!("{}/api/v4/spot/accounts", self.config.rest_url);
+        let endpoint = "/api/v4/spot/accounts";
 
-        let response = self.client.get(&url).send().await?;
+        // Get credentials and generate authentication headers for GET request
+        let credentials = self.config.get_credentials()?;
+        let auth_headers = gateio_auth_headers("GET", endpoint, "", "", &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
+        let response = self.client.get(&url)
+            .headers(header_map)
+            .send()
+            .await?;
         let accounts: Value = response.json().await?;
 
         let mut balances = HashMap::with_capacity(128);

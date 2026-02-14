@@ -46,3 +46,4 @@ rand = "0.8"
 proptest = { workspace = true }
 async-trait = { workspace = true }
 tempfile = "3.8"
+jsonwebtoken = "9"

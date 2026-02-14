@@ -6,14 +6,14 @@
 use crate::connector::ConnectorStats;
 use crate::events::ConnectionEvent;
 use arbitrage_core::{
-    types::{ConnectionStatus, ExchangeId, Symbol},
+    types::{ConnectionStatus, ExchangeId},
     Result,
 };
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Common WebSocket reconnection logic shared across exchanges
 pub struct WebSocketReconnector {

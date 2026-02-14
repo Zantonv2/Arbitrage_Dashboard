@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$lib/components/ui/Button.svelte';
+	import ApiKeyManager from '$lib/components/ApiKeyManager.svelte';
 	import { systemStore } from '$lib/stores/system.svelte';
 	import { setLanguage, getLanguage } from '$lib/i18n.svelte';
 	import type { ExchangeId, StrategyType, Language } from '$lib/types';
@@ -319,6 +320,11 @@
 				{/each}
 			</div>
 		</div>
+	</section>
+
+	<!-- API Key Management -->
+	<section class="settings-section">
+		<ApiKeyManager />
 	</section>
 
 	<!-- Strategy Configuration with Info Tooltips -->

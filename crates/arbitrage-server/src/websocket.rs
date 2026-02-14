@@ -1,13 +1,13 @@
 use crate::server::AppState;
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde_json::json;
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
-use tracing::{debug, error, info, warn};
+use tokio::sync::Mutex;
+use tracing::{debug, error, info};
 
 /// WebSocket handler - no authentication required for local-only use
 pub async fn websocket_handler(

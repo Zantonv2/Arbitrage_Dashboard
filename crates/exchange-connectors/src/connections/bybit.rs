@@ -1,4 +1,4 @@
-use crate::auth::{self, bybit_auth_headers};
+use crate::auth::bybit_auth_headers;
 
 use crate::connections::constants::BROADCAST_CHANNEL_CAPACITY;
 use crate::connector::{
@@ -264,7 +264,7 @@ impl ExchangeConnector for BybitConnector {
         let subscribed_symbols = self.subscribed_symbols.clone();
         let config = self.config.clone();
 
-        let handle = tokio::spawn(async move {
+        let _handle = tokio::spawn(async move {
             Self::websocket_task(
                 ws_url,
                 event_sender,
@@ -404,7 +404,7 @@ impl ExchangeConnector for BybitConnector {
         });
 
         let body_str = bybit_order.to_string();
-        let mut params = HashMap::new();
+        let params = HashMap::new();
 
         // Generate authentication headers
         let auth_headers =
@@ -634,18 +634,33 @@ impl ExchangeConnector for BybitConnector {
 
     async fn get_balance(&self) -> Result<crate::connector::Balance> {
         use crate::connector::{AssetBalance, Balance};
+        use std::collections::HashMap;
 
         let url = format!(
             "{}/v5/account/wallet-balance?accountType=SPOT",
             self.config.rest_url
         );
+        let endpoint = "/v5/account/wallet-balance";
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            arbitrage_core::ArbitrageError::Network(format!(
-                "ByBit get balance request failed: {}",
-                e
-            ))
-        })?;
+        // Build query params for auth generation (must use String, not &str)
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("accountType".to_string(), "SPOT".to_string());
+
+        // Get credentials and generate authentication headers for GET request
+        let credentials = self.config.get_credentials()?;
+        let auth_headers = bybit_auth_headers("GET", endpoint, &params, "", &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
+        let response = self.client.get(&url)
+            .headers(header_map)
+            .send()
+            .await
+            .map_err(|e| {
+                arbitrage_core::ArbitrageError::Network(format!(
+                    "ByBit get balance request failed: {}",
+                    e
+                ))
+            })?;
 
         if !response.status().is_success() {
             return Err(arbitrage_core::ArbitrageError::ExchangeConnection(format!(

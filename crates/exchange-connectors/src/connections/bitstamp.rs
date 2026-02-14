@@ -3,9 +3,10 @@ use crate::connector::{
     FundingRate, HealthStatus, OrderRequest, OrderResponse, OrderSide, OrderStatus,
     OrderStatusType, OrderType, TickerData,
 };
+use crate::auth::bitstamp_auth_headers;
 use crate::connector_trait::ConnectorBase;
 use crate::events::{ConnectionEvent, MarketDataEvent};
-use crate::utils::{parse_decimal, ExponentialBackoff};
+use crate::utils::parse_decimal;
 
 use arbitrage_core::{
     types::{ConnectionStatus, ExchangeId, OrderBook, OrderBookLevel, Symbol},
@@ -395,7 +396,15 @@ impl ExchangeConnector for BitstampConnector {
     async fn get_balance(&self) -> Result<Balance> {
         let url = format!("{}/v2/balance/", self.base.config.rest_url);
 
-        let response = self.client.post(&url).send().await?;
+        // Get credentials and generate authentication headers
+        let credentials = self.base.config.get_credentials()?;
+        let auth_headers = bitstamp_auth_headers("", "v2", &credentials)?;
+        let header_map = auth_headers.to_header_map()?;
+
+        let response = self.client.post(&url)
+            .headers(header_map)
+            .send()
+            .await?;
         let balance_data: Value = response.json().await?;
 
         let mut balances = HashMap::new();

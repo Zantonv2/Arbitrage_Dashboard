@@ -3,6 +3,8 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { formatCurrency, t, getStrategyName } from '$lib/i18n.svelte';
+	import { apiClient } from '$lib/api/client';
+	import { toastStore } from '$lib/stores/toast.svelte';
 
 	interface Props {
 		signal: TradeSignal;
@@ -13,13 +15,17 @@
 
 	let { signal, variant = 'compact', onSelect, onExecute }: Props = $props();
 
+	// Execution state
+	let isExecuting = $state(false);
+	let executionStatus = $state<'idle' | 'preparing' | 'confirming' | 'done'>('idle');
+
 	// Default position size for profit calculation
 	const DEFAULT_POSITION_SIZE = 10000;
 
 	const isProfitable = $derived(signal.profitBps > 0);
 	const profitColor = $derived(isProfitable ? 'profit' : 'loss');
 	const confidencePercent = $derived(Math.round(signal.confidence * 100));
-	const actualProfit = $derived((signal.profitBps * DEFAULT_POSITION_SIZE) / 10000);
+	const actualProfit = $derived((signal.profitBps * DEFAULT_POSITION_SIZE) / 100);
 	
 	const exchangeColors: Record<ExchangeId, string> = {
 		okx: '#0052FF',
@@ -41,6 +47,60 @@
 		if (minutes < 60) return `${minutes}m ago`;
 		const hours = Math.floor(minutes / 60);
 		return `${hours}h ago`;
+	}
+
+	async function handleExecute(e: MouseEvent) {
+		e.stopPropagation();
+		
+		if (isExecuting) return;
+		
+		isExecuting = true;
+		executionStatus = 'preparing';
+		
+		try {
+			// Step 1: Prepare execution
+			const prepareResult = await apiClient.prepareExecution(signal.id);
+			
+			if (!prepareResult.is_valid) {
+				toastStore.error(
+					'Execution Rejected',
+					prepareResult.validation_errors.join(', ')
+				);
+				executionStatus = 'idle';
+				isExecuting = false;
+				return;
+			}
+			
+			executionStatus = 'confirming';
+			
+			// Step 2: Confirm execution
+			const confirmResult = await apiClient.confirmExecution(prepareResult.instruction_id);
+			
+			if (confirmResult.success) {
+				toastStore.success(
+					'Trade Executed',
+					`Profit: ${formatCurrency(confirmResult.actual_profit ?? 0)} in ${confirmResult.execution_time_ms}ms`
+				);
+				executionStatus = 'done';
+				
+				// Notify parent
+				onExecute?.(signal);
+			} else {
+				toastStore.error(
+					'Execution Failed',
+					confirmResult.message
+				);
+				executionStatus = 'idle';
+			}
+		} catch (error) {
+			toastStore.error(
+				'Execution Error',
+				error instanceof Error ? error.message : 'Unknown error occurred'
+			);
+			executionStatus = 'idle';
+		} finally {
+			isExecuting = false;
+		}
 	}
 </script>
 
@@ -119,11 +179,23 @@
 				</div>
 			</div>
 			<div class="action-row">
-				<Button variant="filled" size="small" onclick={(e) => { e.stopPropagation(); onExecute?.(signal); }}>
-					<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-						<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"/>
-					</svg>
-					{t('signalCard.execute')}
+				<Button 
+					variant="filled" 
+					size="small" 
+					onclick={handleExecute}
+					disabled={isExecuting}
+				>
+					{#if isExecuting}
+						<svg class="btn-icon spinning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+							<path d="M12 2v4m0 12v4m-8-10H4m16 0h-4m-2.5-6.5L17 4m-10 10l-2.5 2.5M17 17l2.5 2.5M7 7L4.5 4.5" stroke-linecap="round" stroke-linejoin="round"/>
+						</svg>
+						{executionStatus === 'preparing' ? t('signalCard.preparing') : t('signalCard.executing')}
+					{:else}
+						<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+							<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round"/>
+						</svg>
+						{t('signalCard.execute')}
+					{/if}
 				</Button>
 				<Button variant="tonal" size="small" onclick={(e) => { e.stopPropagation(); onSelect?.(signal); }}>
 					<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -161,6 +233,8 @@
 	.signal-card:focus {
 		outline: none;
 		box-shadow: 0 0 0 2px var(--md-sys-color-primary);
+		z-index: 10;
+		position: relative;
 	}
 
 	.signal-profitable {
@@ -305,5 +379,18 @@
 	.btn-icon {
 		width: 16px;
 		height: 16px;
+	}
+
+	.btn-icon.spinning {
+		animation: spin 1s linear infinite;
+	}
+
+	@keyframes spin {
+		from {
+			transform: rotate(0deg);
+		}
+		to {
+			transform: rotate(360deg);
+		}
 	}
 </style>

@@ -60,7 +60,6 @@
 		onkeydown={handleKeydown}
 		role="button"
 		tabindex="0"
-		aria-pressed="false"
 	>
 		{@render children()}
 	</div>
